@@ -18,7 +18,7 @@ LABEL org.opencontainers.image.title="oog-gitea-init" \
 
 COPY --chmod=755 images/gitea-init/init-admin.sh /usr/local/bin/oog-gitea-init
 COPY --chmod=755 images/gitea-init/create-workspace-repo.sh /usr/local/bin/oog-gitea-workspace
-# First commit of the workspace repository: notebooks/ (the example notebooks in local/ and azure/; the .dockerignore lets only the
+# First commit of the workspace repository: notebooks/ (the example notebooks in local/, quack/ and azure/; the .dockerignore lets only the
 # shipped files through) and the files of the repository root (workspace/: README, .gitignore). The workbench image carries the same seed.
 COPY notebooks/ /opt/oog/workspace-seed/notebooks/
 COPY workspace/ /opt/oog/workspace-seed/

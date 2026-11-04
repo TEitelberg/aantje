@@ -5,7 +5,7 @@
         {
             "id": "workbench",
             "name": "Workbench",
-            "description": "VS Code in the browser with Jupyter, DuckDB and DuckLake. Open the medallion notebooks (notebooks/local, and notebooks/azure for an Azure DuckLake) in the oog-workspace repository and pick the kernel Oog.",
+            "description": "VS Code in the browser with Jupyter, DuckDB and DuckLake. Open the medallion notebooks (notebooks/local, notebooks/quack for the Quack server, and notebooks/azure for an Azure DuckLake) in the oog-workspace repository and pick the kernel Oog.",
             "url": "http://localhost:8443/",
             "icon": "workbench",
             "logo": "icons/workbench.svg"
