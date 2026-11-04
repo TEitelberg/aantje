@@ -534,19 +534,19 @@
           "group": "navigation@1"
         },
         {
-          "command": "aantje.createAzureLake",
+          "command": "aantje.search",
           "when": "view == aantje.catalogs",
           "group": "navigation@2"
         },
         {
-          "command": "aantje.search",
+          "command": "aantje.refresh",
           "when": "view == aantje.catalogs",
           "group": "navigation@3"
         },
         {
-          "command": "aantje.refresh",
+          "command": "aantje.createAzureLake",
           "when": "view == aantje.catalogs",
-          "group": "navigation@4"
+          "group": "1_azure@1"
         }
       ],
       "view/item/context": [

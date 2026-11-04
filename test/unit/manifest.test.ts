@@ -359,6 +359,15 @@ describe('commands and menus', () => {
     expect(bare).toEqual([]);
   });
 
+  it('keeps Create Azure DuckLake in the "..." menu of the explorer title, not as an icon', () => {
+    // VS Code puts every view/title entry outside the group "navigation" into the "..." menu.
+    const azure = commandEntries.filter(
+      ({ menu, command }) => menu === 'view/title' && command === 'aantje.createAzureLake',
+    );
+    expect(azure).toHaveLength(1);
+    expect(azure[0]?.group).not.toMatch(/^navigation\b/);
+  });
+
   it('keeps every command that is hidden from the Command Palette reachable from another menu', () => {
     const elsewhere = new Set(
       commandEntries.filter(({ menu }) => menu !== 'commandPalette').map(({ command }) => command),
