@@ -190,21 +190,40 @@ describe('which action the extension carries out', () => {
 describe('the choices that a hidden page keeps', () => {
   it('come back for the same report, with the selected object found again by its name', () => {
     const selected = events.nodes.findIndex((node) => node.name === 'big_events');
-    const saved = saveChoices(events, { direction: 'dependsOn', depth: 2, text: 'ev', selected });
-    expect(saved).toMatchObject({
-      target: `table:${HISTORY_ID.events}`,
-      selected: `view:${HISTORY_ID.bigEventsView}`,
-    });
-    expect(restoreDependenciesChoices(saved, events)).toEqual({
+    const saved = saveChoices(events, {
+      show: 'graph',
+      reach: 'all',
       direction: 'dependsOn',
       depth: 2,
       text: 'ev',
       selected,
     });
+    expect(saved).toMatchObject({
+      target: `table:${HISTORY_ID.events}`,
+      selected: `view:${HISTORY_ID.bigEventsView}`,
+    });
+    expect(restoreDependenciesChoices(saved, events)).toEqual({
+      show: 'graph',
+      reach: 'all',
+      direction: 'dependsOn',
+      depth: 2,
+      text: 'ev',
+      selected,
+    });
+    // The state of a version without the graph shows the list.
+    const { show: _show, reach: _reach, ...older } = saved;
+    expect(restoreDependenciesChoices(older, events)).toMatchObject({ show: 'list', reach: 'connected' });
   });
 
   it('are dropped for another connection or another object, or when nothing valid was saved', () => {
-    const saved = saveChoices(events, { direction: 'usedBy', depth: 5, text: '', selected: 1 });
+    const saved = saveChoices(events, {
+      show: 'list',
+      reach: 'connected',
+      direction: 'usedBy',
+      depth: 5,
+      text: '',
+      selected: 1,
+    });
     expect(restoreDependenciesChoices(saved, { ...events, connection: 'Other' })).toBeUndefined();
     expect(restoreDependenciesChoices(saved, lake)).toBeUndefined();
     expect(restoreDependenciesChoices(undefined, events)).toBeUndefined();
@@ -213,7 +232,14 @@ describe('the choices that a hidden page keeps', () => {
 
   it('keep the report and drop only the selection when the selected object is gone', () => {
     const selected = events.nodes.findIndex((node) => node.name === 'big_events');
-    const saved = saveChoices(events, { direction: 'dependsOn', depth: 4, text: 'x', selected });
+    const saved = saveChoices(events, {
+      show: 'list',
+      reach: 'connected',
+      direction: 'dependsOn',
+      depth: 4,
+      text: 'x',
+      selected,
+    });
     const target = events.nodes[events.target ?? -1];
     expect(target?.name).toBe('events');
     const alone = {
@@ -225,6 +251,8 @@ describe('the choices that a hidden page keeps', () => {
       unresolved: [],
     };
     expect(restoreDependenciesChoices(saved, alone)).toStrictEqual({
+      show: 'list',
+      reach: 'connected',
       direction: 'dependsOn',
       depth: 4,
       text: 'x',

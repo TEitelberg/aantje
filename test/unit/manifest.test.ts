@@ -359,6 +359,46 @@ describe('commands and menus', () => {
     expect(bare).toEqual([]);
   });
 
+  it('keeps Create Azure DuckLake in the "..." menu of the explorer title, not as an icon', () => {
+    // VS Code puts every view/title entry outside the group "navigation" into the "..." menu.
+    const azure = commandEntries.filter(
+      ({ menu, command }) => menu === 'view/title' && command === 'aantje.createAzureLake',
+    );
+    expect(azure).toHaveLength(1);
+    expect(azure[0]?.group).not.toMatch(/^navigation\b/);
+  });
+
+  it('offers the same entries on the tables and views of an Azure DuckLake, except Create Notebook', () => {
+    // Whether the viewItem condition of a rule holds for a context value; the other conditions are left aside.
+    const offers = (when: string | undefined, item: string): boolean => {
+      const pattern = /viewItem =~ \/(.+?)\/(?=\s|$)/.exec(when ?? '')?.[1];
+      if (pattern !== undefined) return new RegExp(pattern).test(item);
+      return /viewItem == ([\w.]+)/.exec(when ?? '')?.[1] === item;
+    };
+    const differing = menuEntries
+      .filter(({ when }) => /viewItem (=~|==)/.test(when ?? ''))
+      .flatMap(({ menu, when, command, submenu }) =>
+        ['table', 'view']
+          .filter((item) => offers(when, item) !== offers(when, `${item}.azure`))
+          .map((item) => `${menu} ${command ?? submenu} ${item}`),
+      );
+    expect(differing).toEqual([
+      'view/item/context aantje.createNotebook table',
+      'view/item/context aantje.createNotebook view',
+    ]);
+  });
+
+  it('keeps Allow My IP, Copy Azure Config and Delete Azure DuckLake in one section of the connection menu', () => {
+    const groups = ['aantje.allowMyIp', 'aantje.copyAzureConfig', 'aantje.deleteAzureLake'].map(
+      (id) =>
+        commandEntries
+          .find(({ menu, command }) => menu === 'view/item/context' && command === id)
+          ?.group?.split('@')[0],
+    );
+    expect(groups[0]).toBeDefined();
+    expect(new Set(groups).size).toBe(1);
+  });
+
   it('keeps every command that is hidden from the Command Palette reachable from another menu', () => {
     const elsewhere = new Set(
       commandEntries.filter(({ menu }) => menu !== 'commandPalette').map(({ command }) => command),

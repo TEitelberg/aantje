@@ -343,7 +343,7 @@ describe('the SQL editor', function () {
       );
       assert.deepEqual(entry, {
         command: 'aantje.newQuery',
-        when: 'view == aantje.catalogs && viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table|view)$/',
+        when: 'view == aantje.catalogs && viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table(\\.azure)?|view(\\.azure)?)$/',
         group: '2_query@1',
       });
     });

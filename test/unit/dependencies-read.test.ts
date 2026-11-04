@@ -169,25 +169,18 @@ describe('the data of the report', () => {
     ...addMacro(105, SHOP, 'over_gross', 'scalar', '(shop.gross(x) * 2)'),
   ];
 
-  it('holds for one object, a macro and the lake what belongs to them, its own problems, and nothing else', async () => {
+  it('holds for one object every object with dependencies but only the problems it reaches, and for the lake what belongs to it', async () => {
     const graph = await readGraph(await catalogs.open(historyFixture.sqlite, ...edits), parser, 56);
     const data = objectData(graph, 'History', 56, { kind: 'view', id: 100 });
     if (!data) {
       throw new Error('The view is there.');
     }
-    expect(data.nodes.map((node) => `${node.schema}.${node.name}`)).toEqual([
-      'shop.big_events',
-      'shop.events',
-      'shop.v_over_big',
-      'shop.v_top',
-    ]);
-    expect(data.target).toBe(2);
-    expect(edgeList(data)).toEqual([
-      'shop.big_events reads shop.events',
-      'shop.v_over_big reads shop.big_events',
-      'shop.v_top reads shop.v_over_big',
-    ]);
-    // The issues of the other objects stay out of this report.
+    const lake = lakeData(graph, 'History', 56);
+    // The graph shows them all on Show all.
+    expect(data.nodes).toEqual(lake.nodes);
+    expect(data.edges).toEqual(lake.edges);
+    expect(nameOf(data, data.target ?? -1)).toBe('shop.v_over_big');
+    // The issues of the objects it does not reach stay out of this report.
     expect([data.broken, data.unresolved]).toEqual([[], []]);
     expect([data.connection, data.snapshot, data.isolated]).toEqual(['History', 56, 0]);
 
@@ -199,14 +192,12 @@ describe('the data of the report', () => {
     expect(spark?.unresolved.map(({ reason, detail }) => [reason, detail])).toEqual([['dialect', 'spark']]);
 
     const macro = objectData(graph, 'History', 56, { kind: 'scalarMacro', id: HISTORY_ID.grossMacro });
-    expect(macro?.nodes.map((node) => node.name)).toEqual(['gross', 'over_gross']);
     expect(macro && nameOf(macro, macro.target ?? -1)).toBe('shop.gross');
 
     const plain = await readGraph(await catalogs.open(historyFixture.sqlite), parser, 56);
     expect(objectData(plain, 'History', 56, { kind: 'view', id: HISTORY_ID.tmpView })).toBeUndefined();
     expect(objectData(plain, 'History', 56, { kind: 'table', id: HISTORY_ID.bigEventsView })).toBeUndefined();
 
-    const lake = lakeData(graph, 'History', 56);
     expect(lake.nodes.map((node) => `${node.schema}.${node.name}`)).toEqual([
       'shop.big_events',
       'shop.events',

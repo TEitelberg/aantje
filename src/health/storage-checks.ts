@@ -17,9 +17,22 @@ export interface ListedFile {
 // A younger file may be an upload a writer has not committed yet.
 const RECENT_MS = 60 * 60_000;
 
-/** Turns Windows backslashes into slashes and drops `./`; `caseInsensitive` ignores case. */
+// DuckLake writes an ADLS path as `abfss://<container>@<account host>/<key>`, but DuckDB lists it as
+// `abfss://<account host>/<container>/<key>`: the listed form is turned into the written one.
+const LISTED_AZURE = /^(abfss?):\/\/([^/@]+\.dfs\.core\.[^/]+)\/([^/]+)\//i;
+
+/**
+ * Turns Windows backslashes into slashes, drops `./` and writes an ADLS path the way DuckLake does;
+ * `caseInsensitive` ignores case.
+ */
 export function comparable(path: string, caseInsensitive: boolean): string {
-  const normal = path.replaceAll('\\', '/').replace(/^\.\//, '');
+  const normal = path
+    .replaceAll('\\', '/')
+    .replace(/^\.\//, '')
+    .replace(
+      LISTED_AZURE,
+      (_, scheme: string, host: string, container: string) => `${scheme}://${container}@${host}/`,
+    );
   return caseInsensitive ? normal.toLowerCase() : normal;
 }
 

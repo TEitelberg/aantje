@@ -15,7 +15,7 @@ import { registerCommands } from './commands.vscode';
 import { SchemaDocuments } from './compare.vscode';
 import { openWithPassword } from './connections/connect';
 import { createSecretsPort, createSettingsPort } from './connections/ports.vscode';
-import { secretLabel } from './connections/profile';
+import { isAzureLake, secretLabel } from './connections/profile';
 import type { ConnectionProfile } from './connections/profile';
 import { ConnectionStore } from './connections/store';
 import { createDataAccessFactory, readDataSettings } from './data/access.vscode';
@@ -179,7 +179,10 @@ function createSqlEditors(context: vscode.ExtensionContext, core: Core, { logger
 /** The tree view, the connection that commands without a node act on, and the watch on `aantje.connections`. */
 function createExplorer(context: vscode.ExtensionContext, core: Core, editors: QueryEditors, logger: Logger) {
   const { store, catalogTree: tree } = core;
-  const provider = new CatalogTreeProvider(tree);
+  const provider = new CatalogTreeProvider(tree, (id) => {
+    const profile = store.get(id);
+    return profile !== undefined && isAzureLake(profile);
+  });
   const view = vscode.window.createTreeView('aantje.catalogs', {
     treeDataProvider: provider,
     showCollapseAll: true,

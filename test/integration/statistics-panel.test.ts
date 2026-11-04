@@ -102,7 +102,7 @@ describe('Show Statistics', () => {
         (manifest().menus['aantje.reports'] ?? [])
           .filter(({ command }) => command === 'aantje.showStatistics')
           .map(({ when, group }) => [when, group]),
-        [['viewItem == table', '2_table@1']],
+        [['viewItem =~ /^table(\\.azure)?$/', '2_table@1']],
       );
       assert.deepEqual(entries, [
         ['view == aantje.catalogs && viewItem == folder.statistics', '3_data@3'],

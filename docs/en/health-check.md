@@ -159,7 +159,7 @@ Consistency checks are one statement each, with the count of all offending rows 
 
 ### Connection and configuration
 
-Static checks need no request. A failed request is classified from the text DuckDB gives (see [What the store says](#what-the-store-says-when-it-fails)).
+Static checks need no request. A failed request is classified from the text DuckDB gives (see [What the store says](#what-the-store-says-when-it-fails)). The `aantje.s3.*` settings belong to the machine, not to a connection, so the checks of the S3 endpoint and the S3 credentials run only for a lake whose `data_path` starts with `s3://` or `s3a://`. A lake on Azure, Google Cloud Storage or the local disk gets none of them.
 
 | Id                                 | Severity       | What it finds, and what to do                                                                                                           |
 | ---------------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
@@ -222,7 +222,7 @@ Verified with DuckDB 2.0.0, DuckLake 1.1 and `rustfs/rustfs:1.0.4`.
 
 **Where DuckLake keeps a file.** The file path is relative to the table directory, the table path to the schema directory, the schema path to the data path, each unless `path_is_relative` says it is absolute. `src/catalog/locations.ts` does this, using the newest version of the table and schema (a renamed table keeps its directory). The check takes every path from the catalog and never builds one from a name.
 
-**Comparing.** The catalog side is every data and delete file row, current and retained. The store side is the listing. Files scheduled for deletion are in no file row but are no orphans. A file outside the listed directory, or without a place, is counted in `notChecked`. If a table's directory lies outside the data path, the group is `skipped`. For a table scope only that table's directory is listed, for a schema scope the directory of the schema; files of other tables in it are known, so a dropped and re-created table does not turn its old files into orphans.
+**Comparing.** The catalog side is every data and delete file row, current and retained. The store side is the listing. DuckLake writes an Azure path as `abfss://<container>@<account>.dfs.core.windows.net/<key>`, while DuckDB lists it as `abfss://<account>.dfs.core.windows.net/<container>/<key>`; the comparison treats both as the same file. Files scheduled for deletion are in no file row but are no orphans. A file outside the listed directory, or without a place, is counted in `notChecked`. If a table's directory lies outside the data path, the group is `skipped`. For a table scope only that table's directory is listed, for a schema scope the directory of the schema; files of other tables in it are known, so a dropped and re-created table does not turn its old files into orphans.
 
 ## What the store says when it fails
 

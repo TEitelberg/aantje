@@ -19,6 +19,8 @@ import {
   traverse,
 } from './model';
 import type { DependenciesData, Direction } from './model';
+import { picture } from './picture';
+import type { GraphReach, Picture, PictureItem } from './picture';
 
 /** The choices on the page that the document repeats; the extension fits them to the data. */
 export interface DependenciesMarkdownView {
@@ -26,6 +28,8 @@ export interface DependenciesMarkdownView {
   readonly depth: number;
   /** The filter of the lake list. */
   readonly text: string;
+  /** What the graph of an object holds; connected objects without it. */
+  readonly reach?: GraphReach | undefined;
 }
 
 // The page shows more rows; a smaller depth or a filter reaches the others.
@@ -33,6 +37,60 @@ const MARKDOWN_ROWS = 200;
 const MARKDOWN_OBJECTS = 100;
 const MARKDOWN_NAMES = 50;
 const MARKDOWN_ISSUES = 100;
+// Larger graphs are unreadable as a diagram, and Mermaid refuses more than 500 edges.
+const MARKDOWN_GRAPH_ITEMS = 150;
+const MARKDOWN_GRAPH_EDGES = 400;
+
+// The opening and the closing of each shape, in Mermaid's flowchart syntax.
+const MERMAID_SHAPE: Readonly<Record<PictureItem['kind'], readonly [string, string]>> = {
+  table: ['[(', ')]'],
+  view: ['[', ']'],
+  scalarMacro: ['([', '])'],
+  tableMacro: ['[[', ']]'],
+  missing: ['{{', '}}'],
+};
+
+// Catalog text in a quoted Mermaid label: characters that Mermaid or HTML would read become entity codes.
+const mermaidText = (text: string): string =>
+  text.replace(/\s+/g, ' ').replace(/[#"<>&`]/g, (char) => `#${char.codePointAt(0)};`);
+
+/** The graph as a Mermaid flowchart along the data flow; too large a graph is only counted. */
+export function mermaidGraph(shown: Picture): string[] {
+  if (shown.items.length > MARKDOWN_GRAPH_ITEMS || shown.edges.length > MARKDOWN_GRAPH_EDGES) {
+    return [
+      `The graph has ${shown.items.length} objects and ${shown.edges.length} dependencies; a document draws it up to ${MARKDOWN_GRAPH_ITEMS} objects and ${MARKDOWN_GRAPH_EDGES} dependencies.`,
+    ];
+  }
+  const classes = (name: string, test: (item: PictureItem) => boolean): string[] => {
+    const items = shown.items.flatMap((item, index) => (test(item) ? [`n${index}`] : []));
+    return items.length === 0 ? [] : [`  class ${items.join(',')} ${name}`];
+  };
+  return [
+    '```mermaid',
+    'flowchart LR',
+    ...shown.items.map((item, index) => {
+      const [open, close] = MERMAID_SHAPE[item.kind];
+      return `  n${index}${open}"${mermaidText(item.name)}"${close}`;
+    }),
+    ...shown.edges.map(({ from, to, kind }) => `  n${from} ${kind === 'reads' ? '-->' : '-.->'} n${to}`),
+    '  classDef missing stroke:#f14c4c,stroke-dasharray:4',
+    '  classDef faint opacity:0.4',
+    ...classes('missing', ({ kind }) => kind === 'missing'),
+    ...classes('faint', ({ faint }) => faint),
+    '```',
+  ];
+}
+
+function graphSection(shown: Picture): string[] {
+  return [
+    '## Graph',
+    '',
+    'The data flows from left to right; a dashed arrow is a call of a macro or a name that no object has.',
+    '',
+    ...mermaidGraph(shown),
+    '',
+  ];
+}
 
 function issueTables(data: DependenciesData, nodes?: ReadonlySet<number>): string[] {
   const { broken, unresolved } = issuesOf(data, nodes);
@@ -118,6 +176,9 @@ function lakeMarkdown(data: DependenciesData, text: string): string {
           ...(omitted > 0 ? ['', `… ${omitted} more omitted (limit: ${MARKDOWN_OBJECTS}).`] : []),
         ]),
     '',
+    ...(data.nodes.length > 0
+      ? graphSection(picture(data, { directions: DIRECTIONS, depth: MAX_DEPTH, reach: 'all' }))
+      : []),
     ...issueTables(data),
     '',
   ].join('\n');
@@ -186,6 +247,13 @@ export function dependenciesMarkdown(data: DependenciesData, view?: Dependencies
     ),
     '',
     ...lists,
+    ...graphSection(
+      picture(data, {
+        directions: view ? [view.direction] : DIRECTIONS,
+        depth,
+        reach: view?.reach ?? 'connected',
+      }),
+    ),
     `## If you drop ${code(nameAt(data, start))}`,
     '',
     impactText(code(nameAt(data, start)), impact),

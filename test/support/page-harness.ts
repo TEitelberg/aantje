@@ -11,6 +11,7 @@ export interface DrawnChart {
   theme: Record<string, unknown>;
   option: Record<string, unknown>;
   onItemClick: ((index: number) => void) | undefined;
+  onItemDoubleClick: ((index: number) => void) | undefined;
   disposed: boolean;
   resized: number;
   updates: Record<string, unknown>[];

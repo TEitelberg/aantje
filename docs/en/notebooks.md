@@ -117,7 +117,7 @@ The first two files run in a second: the whole notebook for `sales.orders` as a 
 
 ## Limits
 
-- An Azure DuckLake (a PostgreSQL connection with a storage account) gets no notebook: the cells cannot load the `azure` extension, sign in to the storage account or to PostgreSQL with Microsoft Entra. Create Notebook refuses it and names the SQL editor; the Azure notebooks of the [Docker stack](../../docker/README.md#azure-notebooks) cover that case.
+- An Azure DuckLake (a PostgreSQL connection with a storage account) gets no notebook: the cells cannot load the `azure` extension, sign in to the storage account or to PostgreSQL with Microsoft Entra. The context menu of its tables and views does not offer Create Notebook (they carry the context value `table.azure` or `view.azure`), and a call from elsewhere is refused with a pointer to the SQL editor; the Azure notebooks of the [Docker stack](../../docker/README.md#azure-notebooks) cover that case.
 - The notebook is generated once; later changes to the tree, connection or settings do not reach an open notebook.
 - Paths and hosts in the cells are those of the extension host. A kernel on another machine does not find a local catalog file or a host reachable only from the extension host.
 - A relative `DATA_PATH` of a DuckLake resolves against the kernel's working directory, not the catalog file ([Data access](data-access.md)).

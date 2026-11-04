@@ -9,7 +9,7 @@
 - **The snapshot is the one the tree shows when the report opens.** The report and its actions use it: **Script as CREATE** and **ALTER** write the columns the table had then, and **Dependencies** of another object opens at the same snapshot. **Script as DROP** and **ALTER** act on the newest state; when the report's snapshot is older, the script says so in a comment.
 - **Progress and Cancel.** Reading and parsing run under `Reading the dependencies of "Lake"...` with a Cancel button; cancel stops before the next object. A closed connection gives `Connect to a catalog first to show its dependencies.`
 - **Parsed once per snapshot.** The graph is cached per connection for the last three snapshots asked for, so another object, a second panel and **Refresh** do not parse again. Panels that ask for a snapshot being read share the read; a failed or cancelled read is not kept. **Refresh** reads at the snapshot the tree shows now.
-- **A hidden panel keeps its choices** (direction, depth, lake filter, selected object) with `getState` and `setState`.
+- **A hidden panel keeps its choices** (list or graph, direction, depth, lake filter, Show all, selected object) with `getState` and `setState`.
 - **A removed or closed connection.** `The connection of this dependencies report was removed. Close the report.` or `The connection is closed. Connect again to use the dependencies.`
 
 ## For one schema
@@ -30,6 +30,18 @@ The header has four key figures, then the list, the drop section, the selected o
 - **Not followed.** The object, the reason and the catalog text: another SQL dialect, a text too long, a text DuckDB cannot parse or read as a SELECT, a name in another catalog, a name only the macro's schema has, a file or URL after FROM, a run-time lookup (`query_table`). A text that makes the analysis fail is listed with the message and does not stop the others. Their dependencies are unknown, so the report is incomplete for them.
 - **Unread objects.** With more than 2000 views and macros the rest is not read: `Only 2,000 of 2,500 views and macros were read.`
 
+## The graph
+
+**List** and **Graph** at the start of the toolbar switch the view; the direction, the depth, the selected object and the snapshot stay. **Visualize** in the pane of the selected object opens the graph and zooms in on that object.
+
+- **Columns along the data flow.** What uses nothing the graph shows stands on the left, every other object right of everything it reads or calls. Arrows point from the object read or called to the object that uses it. A read is a solid line, a call of a macro a dashed one.
+- **Shape and colour.** A table is a square, a view a rounded square, a scalar macro a circle and a table macro a diamond, each in its own colour; the label starts with the sign of the list. A name that no object of the lake has is a red dashed triangle with a red dashed arrow to the object that names it.
+- **What it holds.** For an object, the objects connected to it in the set direction and depth, the object drawn larger. **Show all** adds every other object of the lake that uses or is used by another, faint. For the lake or a schema, every object of the report.
+- **Mouse.** Hovering an object brings out its neighbours. A click selects it and shows its pane below; a double click also zooms in on it. The wheel zooms and dragging moves the graph. Labels that would overlap are hidden until you zoom in.
+- **The list stays the accessible view.** The graph is drawn on a canvas; a screen reader hears how many objects and dependencies it has.
+
+The report of an object holds every object of the lake with dependencies for **Show all**, but only the problems of the object and of the objects it reaches (`objectData` in `src/dependencies/read.ts`). `picture` (`src/dependencies/picture.ts`) places the boxes: the column is one more than the largest column of what an object uses (an edge back into a cycle is left out), the first column is in name order and every other one in the mean row of what its objects use. `graphOption` turns that into an ECharts graph series with fixed positions.
+
 ## What a drop would break
 
 For an object, **If you drop shop.events** names everything that uses it, directly or through other views and macros, whatever depth is set: `Dropping shop.events breaks 9 objects: 8 views, 1 table macro.` It names the first ten and counts the rest. An unused object says `Nothing in this lake uses shop.events; dropping it breaks no view or macro.` A view that already has a broken reference is listed under **Broken references**, not counted here. **Open Script as DROP** opens the script in an SQL editor of the connection; nothing runs.
@@ -40,6 +52,7 @@ Select an object; a pane shows what you can do with it. The buttons send an acti
 
 | Button                          | What happens                                                                            | Offered when                          |
 | ------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------- |
+| Visualize                       | The graph, zoomed in on the object.                                                     | the list shows                        |
 | Show in tree                    | Shows and selects the node (a macro in the folder Macros); a hint when it is not shown. | always                                |
 | Statistics                      | The statistics report of the table at the report's snapshot.                            | the object is a table                 |
 | Dependencies                    | That object's report in its own panel.                                                  | the object is not the one of the page |
@@ -49,7 +62,7 @@ The extension does not trust the page. `planDependenciesAction` checks the index
 
 ## Open as Markdown
 
-**Open as Markdown** opens an untitled document: the object, the lists for the set direction and depth (both directions, to the deepest level, when there is no view), what a drop breaks, and the broken and unresolved references of the listed objects. For the lake it is the filtered object list and the whole lake's problems. `dependenciesMarkdown` (`src/dependencies/markdown.ts`) builds it from the data and the page's view (`direction`, `depth`, `text`); the extension fits the depth to 1..5. Catalog text is code. Tables stop at 200 rows (lists), 100 objects (lake), 50 names (drop) and 100 rows (problems), each with `… n more omitted (limit: m).`
+**Open as Markdown** opens an untitled document: the object, the lists for the set direction and depth (both directions, to the deepest level, when there is no view), the graph, what a drop breaks, and the broken and unresolved references of the listed objects. For the lake it is the filtered object list and the whole lake's problems. `dependenciesMarkdown` (`src/dependencies/markdown.ts`) builds it from the data and the page's view (`direction`, `depth`, `text`, `reach`); the extension fits the depth to 1..5. The graph is a Mermaid flowchart (a `mermaid` code block that GitHub and Mermaid previews draw) of what the page's graph holds, Show all included; for the lake it has every object of the report. Catalog text in its labels becomes Mermaid entity codes. A graph of more than 150 objects or 400 dependencies is only counted. Catalog text is code. Tables stop at 200 rows (lists), 100 objects (lake), 50 names (drop) and 100 rows (problems), each with `… n more omitted (limit: m).`
 
 ## How the references are found
 
@@ -98,11 +111,13 @@ The page uses the policy of the other reports (`default-src 'none'`, nonce for s
 | `src/dependencies/graph.ts`                 | `buildGraph`: nodes, edges, broken and unresolved references, name resolution, limits. Pure.   |
 | `src/dependencies/read.ts`                  | `readGraph` (cache per snapshot and connection), `objectData`, `lakeData`.                     |
 | `src/dependencies/model.ts`                 | `DependenciesData`, `traverse`, `dropImpact`, `issuesOf`, `lakeRows`, key figures. Pure.       |
+| `src/dependencies/picture.ts`               | `picture`: the boxes and arrows of the graph in columns along the data flow. Pure.             |
+| `src/dependencies/graph-option.ts`          | `graphOption`: the ECharts series of the graph. Pure.                                          |
 | `src/dependencies/actions.ts`, `execute.ts` | `planDependenciesAction` and its execution through a port.                                     |
 | `src/dependencies/protocol.ts`, `state.ts`  | Message, action and view guards; the choices a hidden page keeps.                              |
-| `src/dependencies/markdown.ts`              | `dependenciesMarkdown`.                                                                        |
+| `src/dependencies/markdown.ts`              | `dependenciesMarkdown`, `mermaidGraph`.                                                        |
 | `src/dependencies/kind.ts`, `style.ts`      | The `ReportKind` and stylesheet.                                                               |
-| `src/dependencies/page.ts`, `render.ts`     | The browser side.                                                                              |
+| `src/dependencies/page.ts`, `render.ts`     | The browser side; `graph-pane.ts` draws the graph.                                             |
 | `src/dependencies/commands.vscode.ts`       | `registerDependenciesCommand`: command, progress, panels, action port.                         |
 
 ## Tests

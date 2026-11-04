@@ -200,7 +200,7 @@ describe('the Dependencies page of an object', () => {
     view.button('Open as Markdown')?.fire('click');
     expect(posted.at(-1)).toEqual({
       type: 'markdown',
-      view: { direction: 'dependsOn', depth: 3, text: '' },
+      view: { direction: 'dependsOn', depth: 3, text: '', reach: 'connected' },
     });
   });
 });
@@ -233,7 +233,7 @@ describe('the Dependencies page of the lake', () => {
     view.button('Open as Markdown')?.fire('click');
     expect(posted.at(-1)).toEqual({
       type: 'markdown',
-      view: { direction: 'usedBy', depth: 5, text: 'gross' },
+      view: { direction: 'usedBy', depth: 5, text: 'gross', reach: 'connected' },
     });
 
     const restored = start(
@@ -265,6 +265,60 @@ describe('the Dependencies page of the lake', () => {
     expect(buttonsOf('shop.gross')).not.toContain('Statistics');
     expect(buttonsOf('shop.big_events')).not.toContain('Statistics');
     expect(buttonsOf('shop.events')).toContain('Statistics');
+  });
+});
+
+describe('the graph of the Dependencies page', () => {
+  type Series = { data: { text: string }[]; center?: number[] };
+  const graphOf = (page: ReturnType<typeof start>) => {
+    const chart = () => page.drawn.filter((drawn) => !drawn.disposed).at(-1);
+    const series = (option?: Record<string, unknown>) => (option?.['series'] as Series[] | undefined)?.[0];
+    const texts = () => series(chart()?.option)?.data.map(({ text }) => text) ?? [];
+    return { chart, series, texts, at: (name: string) => texts().findIndex((text) => text.endsWith(name)) };
+  };
+
+  it('draws what is connected to the table, adds the rest on Show all, and selects and zooms in on a clicked object', () => {
+    const page = start();
+    const { send, view } = page;
+    const graph = graphOf(page);
+    send(message(events));
+    expect(graph.chart()).toBeUndefined();
+
+    view.mode('Graph')?.fire('click');
+    expect(view.pressed('Graph')).toBe('true');
+    expect(page.app().find((node) => node.hasClass('objects'))[0]?.hidden).toBe(true);
+    // The table, the five objects that use it, and the name that one of them names in vain.
+    expect(graph.texts()).toHaveLength(view.items().length + 2);
+    expect(graph.at('shop.events')).toBeGreaterThanOrEqual(0);
+    expect(graph.at('shop.uses_gross')).toBe(-1);
+
+    view.mode('Show all')?.fire('click');
+    expect(graph.at('shop.uses_gross')).toBeGreaterThanOrEqual(0);
+
+    graph.chart()?.onItemClick?.(graph.at('shop.big_events'));
+    expect(view.detail()?.byTag('h2')[0]?.textContent).toContain('shop.big_events');
+    expect(view.button('Visualize', view.detail())).toBeUndefined();
+    expect(graph.series(graph.chart()?.updates.at(-1))?.center).toBeUndefined();
+    graph.chart()?.onItemDoubleClick?.(graph.at('shop.big_events'));
+    expect(graph.series(graph.chart()?.updates.at(-1))?.center).toHaveLength(2);
+
+    // The graph comes back with a hidden panel.
+    const restored = start(page.saved());
+    restored.send(message(events));
+    expect(graphOf(restored).texts()).toHaveLength(graph.texts().length);
+  });
+
+  it('opens from Visualize in the list on the object picked there', () => {
+    const page = start();
+    const { send, view } = page;
+    send(message(lake));
+    view.type('big_events');
+    view.items()[0]?.fire('click');
+    view.button('Visualize', view.detail())?.fire('click');
+    expect(view.pressed('Graph')).toBe('true');
+    const graph = graphOf(page);
+    expect(graph.texts()).toHaveLength(lake.nodes.length + lake.broken.length);
+    expect(graph.series(graph.chart()?.option)?.center).toHaveLength(2);
   });
 });
 

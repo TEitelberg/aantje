@@ -464,6 +464,31 @@ describe('the explorer view with two connections', () => {
       );
     });
 
+    it('marks the tables and views of an Azure DuckLake, so that the menus can leave Create Notebook out', async () => {
+      const provider = new CatalogTreeProvider(tree, (id) => id === a.ref.connectionId);
+      onTeardown(() => provider.dispose());
+      await connect(a);
+      const contextAt = async (...path: string[]) =>
+        provider.getTreeItem(await nodeAt(tree, 'Lake A', ...path)).contextValue;
+
+      assert.deepEqual(
+        [
+          await contextAt('sales', 'Tables', 'orders'),
+          await contextAt('sales', 'Views', 'big_orders'),
+          await contextAt('sales'),
+          await contextAt('sales', 'Tables', 'orders', 'Columns', 'customer'),
+        ],
+        ['table.azure', 'view.azure', 'schema', 'column'],
+      );
+      // A lake that is not on Azure keeps the plain values.
+      const plain = new CatalogTreeProvider(tree);
+      onTeardown(() => plain.dispose());
+      assert.equal(
+        plain.getTreeItem(await nodeAt(tree, 'Lake A', 'sales', 'Tables', 'orders')).contextValue,
+        'table',
+      );
+    });
+
     it('tells VS Code about the connected state only after it is in place, for the same item: the last change of a connect reads as connected', async () => {
       const provider = new CatalogTreeProvider(tree);
       onTeardown(() => provider.dispose());

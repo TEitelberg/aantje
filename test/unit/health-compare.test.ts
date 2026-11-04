@@ -75,6 +75,27 @@ describe('comparing the files of the catalog with the listing of the store', () 
     expect(result.notChecked).toBe(0);
   });
 
+  it('finds the files of an Azure DuckLake, which DuckDB lists with the container behind the account', () => {
+    // As an Azure DuckLake showed it: the catalog has container@account, the listing account/container.
+    const account = 'ducklakeb3d72ea1bd464.dfs.core.windows.net';
+    const written = (name: string) => `abfss://lake@${account}/data/gold/fact_sales/${name}`;
+    const result = compare({
+      files: [stored(1, written('a.parquet')), stored(2, written('b.parquet'))],
+      listing: [
+        listed(`abfss://${account}/lake/data/gold/fact_sales/a.parquet`),
+        listed(`abfss://${account}/lake/data/gold/fact_sales/b.parquet`),
+        listed(`abfss://${account}/lake/data/gold/fact_sales/c.parquet`),
+      ],
+      directory: `abfss://lake@${account}/data/gold/fact_sales/`,
+    });
+
+    // The two files of the catalog are found; only the third, which no row names, is left over.
+    expect(ids(result)).toEqual([
+      `storage.file-orphaned:abfss://${account}/lake/data/gold/fact_sales/c.parquet`,
+    ]);
+    expect(result.notChecked).toBe(0);
+  });
+
   it('says that the store holds nothing when the catalog needs files and the listing is empty', () => {
     const result = compare({ files: [stored(1, '/lake/main/t/a.parquet')], listing: [] });
 
