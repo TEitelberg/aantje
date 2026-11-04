@@ -1,0 +1,14 @@
+{
+  "storageAccount": "<storage account>",
+  "container": "lake",
+  "dataPrefix": "data",
+  "bronzePrefix": "bronze",
+  "lakeName": "azure_lake",
+  "pgHost": "<server>.postgres.database.azure.com",
+  "pgPort": 5432,
+  "pgDatabase": "ducklake_catalog",
+  "pgUser": "ducklakeadmin",
+  "auth": "device_code",
+  "pgAuth": "password",
+  "tenantId": ""
+}

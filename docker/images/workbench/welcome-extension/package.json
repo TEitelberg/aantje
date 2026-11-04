@@ -1,0 +1,40 @@
+{
+    "name": "oog-welcome",
+    "displayName": "Oog Start Page",
+    "description": "Shows the Oog start page (served on 127.0.0.1:8081 in the workbench container) as an editor tab when code-server has loaded.",
+    "version": "0.1.0",
+    "publisher": "oog",
+    "license": "UNLICENSED",
+    "private": true,
+    "engines": {
+        "vscode": "^1.90.0"
+    },
+    "extensionKind": [
+        "workspace"
+    ],
+    "categories": [
+        "Other"
+    ],
+    "activationEvents": [
+        "onStartupFinished"
+    ],
+    "main": "./extension.js",
+    "contributes": {
+        "commands": [
+            {
+                "command": "oog.openStartPage",
+                "title": "Oog: Open start page"
+            }
+        ],
+        "configuration": {
+            "title": "Oog",
+            "properties": {
+                "oog.startPage.openOnStartup": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Open the Oog start page as an editor tab when code-server has loaded."
+                }
+            }
+        }
+    }
+}

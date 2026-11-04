@@ -1,0 +1,39 @@
+# Dependencies and build output
+node_modules/
+dist/
+out/
+artifacts/
+*.vsix
+
+# Test caches and output
+.vscode-test/
+test/.cache/
+test/e2e/out/
+coverage/
+
+# Logs and local configuration
+*.log
+.env
+.env.*
+!.env.example
+
+# Local DuckDB files; the three fixture catalogs below are checked in
+*.duckdb
+*.duckdb.wal
+!test/fixtures/ducklake.duckdb
+!test/fixtures/data/data-catalog.duckdb
+!test/fixtures/history/history.duckdb
+
+# Python (fixture generators)
+__pycache__/
+*.py[cod]
+.venv/
+
+# Editors and operating systems
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

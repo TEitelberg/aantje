@@ -1,0 +1,1236 @@
+{
+  "name": "aantje",
+  "displayName": "aantje",
+  "description": "Explorer and SQL editor for DuckLake catalogs (DuckDB, SQLite, PostgreSQL, DuckDB + Quack). The explorer is read-only; the SQL editor runs any SQL.",
+  "version": "0.2.1",
+  "publisher": "teitelberg",
+  "author": {
+    "name": "Tillmann Eitelberg"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TEitelberg/aantje.git"
+  },
+  "bugs": {
+    "url": "https://github.com/TEitelberg/aantje/issues"
+  },
+  "homepage": "https://aantje.dev",
+  "engines": {
+    "vscode": "^1.140.0",
+    "node": ">=22"
+  },
+  "categories": [
+    "Data Science",
+    "Other"
+  ],
+  "keywords": [
+    "ducklake",
+    "duckdb",
+    "lakehouse",
+    "catalog",
+    "explorer",
+    "postgresql",
+    "sqlite",
+    "quack",
+    "sql"
+  ],
+  "qna": false,
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#FFFFFF",
+    "theme": "light"
+  },
+  "extensionKind": [
+    "workspace"
+  ],
+  "main": "./dist/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true,
+      "description": "aantje reads no setting from the workspace: every setting has machine scope, and nothing in the workspace is run."
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "aantje reads catalogs from local files and network connections."
+    }
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "aantje",
+          "title": "aantje",
+          "icon": "media/aantje-activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "aantje": [
+        {
+          "id": "aantje.catalogs",
+          "name": "DuckLake Catalogs"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "aantje.catalogs",
+        "contents": "No DuckLake connection yet.\nConnect to a DuckLake catalog that is stored in PostgreSQL, SQLite or DuckDB, or served by a DuckDB server over Quack.\n[Add Connection](command:aantje.addConnection)\n[Create Azure DuckLake](command:aantje.createAzureLake)"
+      }
+    ],
+    "commands": [
+      {
+        "command": "aantje.addConnection",
+        "title": "Add Connection...",
+        "category": "aantje",
+        "icon": "$(add)"
+      },
+      {
+        "command": "aantje.editConnection",
+        "title": "Edit Connection...",
+        "category": "aantje",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "aantje.removeConnection",
+        "title": "Remove Connection",
+        "category": "aantje",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "aantje.createAzureLake",
+        "title": "Create Azure DuckLake...",
+        "category": "aantje",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "aantje.finishAzureLake",
+        "title": "Finish Creating Azure DuckLake...",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.importAzureLake",
+        "title": "Import Azure DuckLake...",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.allowMyIp",
+        "title": "Allow My IP",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.copyAzureConfig",
+        "title": "Copy Azure Config",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.deleteAzureLake",
+        "title": "Delete Azure DuckLake...",
+        "category": "aantje",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "aantje.testConnection",
+        "title": "Test Connection",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.connect",
+        "title": "Connect",
+        "category": "aantje",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "aantje.disconnect",
+        "title": "Disconnect",
+        "category": "aantje",
+        "icon": "$(debug-disconnect)"
+      },
+      {
+        "command": "aantje.refresh",
+        "title": "Refresh",
+        "category": "aantje",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "aantje.copyName",
+        "title": "Copy Qualified Name",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.copyDdl",
+        "title": "Copy DDL",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.scriptCreate",
+        "title": "Script as CREATE",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.scriptSelect",
+        "title": "Script as SELECT",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.scriptInsert",
+        "title": "Script as INSERT",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.scriptAlter",
+        "title": "Script as ALTER",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.scriptDrop",
+        "title": "Script as DROP",
+        "category": "aantje",
+        "enablement": "viewItem != schema.main"
+      },
+      {
+        "command": "aantje.maintenanceCheckpoint",
+        "title": "Checkpoint",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.maintenanceMerge",
+        "title": "Merge Adjacent Files",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.maintenanceRewrite",
+        "title": "Rewrite Data Files",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.maintenanceFlush",
+        "title": "Flush Inlined Data",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.maintenanceExpire",
+        "title": "Expire Snapshots",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.maintenanceCleanup",
+        "title": "Clean Up Old Files",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.maintenanceOrphans",
+        "title": "Delete Orphaned Files",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.maintenanceOption",
+        "title": "Set Option",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.selectSnapshot",
+        "title": "Show Catalog at Snapshot...",
+        "category": "aantje",
+        "icon": "$(history)"
+      },
+      {
+        "command": "aantje.showSnapshot",
+        "title": "Show Catalog at this Snapshot",
+        "category": "aantje",
+        "icon": "$(target)"
+      },
+      {
+        "command": "aantje.showProperties",
+        "title": "Properties",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.showStorage",
+        "title": "Storage Report",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.showLatestSnapshot",
+        "title": "Show Latest Snapshot",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.search",
+        "title": "Search Catalog...",
+        "category": "aantje",
+        "icon": "$(search)"
+      },
+      {
+        "command": "aantje.previewTable",
+        "title": "Select Top 1000 Rows",
+        "category": "aantje",
+        "icon": "$(table)"
+      },
+      {
+        "command": "aantje.createNotebook",
+        "title": "Create Notebook...",
+        "category": "aantje",
+        "icon": "$(notebook)"
+      },
+      {
+        "command": "aantje.showStatistics",
+        "title": "Statistics",
+        "category": "aantje",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "aantje.queryAtSnapshot",
+        "title": "Query at Snapshot...",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.compareSchema",
+        "title": "Compare Schema...",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.compareSnapshots",
+        "title": "Compare Snapshots...",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.showChanges",
+        "title": "Show Changes...",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.showSnapshotChanges",
+        "title": "Show Rows Changed",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.showSnapshotReport",
+        "title": "Snapshot Report",
+        "category": "aantje",
+        "icon": "$(graph-scatter)"
+      },
+      {
+        "command": "aantje.showSchemaHistory",
+        "title": "Schema History",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.showActivity",
+        "title": "Activity",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.showGrowth",
+        "title": "Growth",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.showDependencies",
+        "title": "Dependencies",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.showAdvisor",
+        "title": "Maintenance Advisor",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.checkHealth",
+        "title": "Check Health",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.checkTableHealth",
+        "title": "Check Table Health",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.setS3Credentials",
+        "title": "Set S3 Credentials...",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.clearS3Credentials",
+        "title": "Clear S3 Credentials",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.revokeViewTrust",
+        "title": "Revoke Trust in Views",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.newQuery",
+        "title": "New Query",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.selectQueryConnection",
+        "title": "Select Connection for Query...",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.runQuery",
+        "title": "Run Query",
+        "category": "aantje",
+        "icon": "$(play)"
+      },
+      {
+        "command": "aantje.runStatement",
+        "title": "Run Statement at Cursor",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.cancelQuery",
+        "title": "Cancel Query",
+        "category": "aantje",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "aantje.toggleResults",
+        "title": "Toggle Results",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.hideResults",
+        "title": "Hide Results",
+        "category": "aantje",
+        "icon": "$(layout-panel)"
+      },
+      {
+        "command": "aantje.showResults",
+        "title": "Show Results",
+        "category": "aantje",
+        "icon": "$(layout-panel-off)"
+      },
+      {
+        "command": "aantje.toggleReadOnly",
+        "title": "Toggle Read-only Session",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.queryMenu",
+        "title": "Query Session...",
+        "category": "aantje"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "aantje.runQuery",
+        "key": "f5",
+        "when": "editorTextFocus && editorLangId == sql && aantje.queryEditor"
+      },
+      {
+        "command": "aantje.runStatement",
+        "key": "ctrl+enter",
+        "mac": "cmd+enter",
+        "when": "editorTextFocus && editorLangId == sql && aantje.queryEditor"
+      },
+      {
+        "command": "aantje.cancelQuery",
+        "key": "shift+f5",
+        "when": "editorTextFocus && editorLangId == sql && aantje.queryEditor && aantje.queryRunning"
+      },
+      {
+        "command": "aantje.toggleResults",
+        "key": "ctrl+alt+r",
+        "when": "editorTextFocus && editorLangId == sql && aantje.queryEditor && aantje.queryHasResults"
+      }
+    ],
+    "submenus": [
+      {
+        "id": "aantje.script",
+        "label": "Script as"
+      },
+      {
+        "id": "aantje.maintenance",
+        "label": "Maintenance"
+      },
+      {
+        "id": "aantje.timeTravel",
+        "label": "Time Travel"
+      },
+      {
+        "id": "aantje.reports",
+        "label": "Reports"
+      }
+    ],
+    "menus": {
+      "aantje.script": [
+        {
+          "command": "aantje.scriptSelect",
+          "when": "viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table|view|macro|column(\\.member)?|viewColumn|snapshot|detail\\.table|folder\\.(tables|views|macros|columns|viewColumns|partitioning|sortOrder|tags|statistics|history|snapshots))$/",
+          "group": "1_select@1"
+        },
+        {
+          "command": "aantje.scriptInsert",
+          "when": "viewItem =~ /^table$/",
+          "group": "1_select@2"
+        },
+        {
+          "command": "aantje.scriptCreate",
+          "when": "viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table|view|macro|column|folder\\.(tables|views|macros|columns|partitioning|sortOrder))$/",
+          "group": "2_define@1"
+        },
+        {
+          "command": "aantje.scriptAlter",
+          "when": "viewItem =~ /^(table|view|macro|column(\\.member)?|folder\\.(columns|partitioning|sortOrder|tags))$/",
+          "group": "2_define@2"
+        },
+        {
+          "command": "aantje.scriptDrop",
+          "when": "viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table|view|macro|column|folder\\.(tables|views|macros|columns|partitioning|sortOrder|tags))$/",
+          "group": "3_drop"
+        }
+      ],
+      "aantje.maintenance": [
+        {
+          "command": "aantje.maintenanceCheckpoint",
+          "when": "viewItem =~ /^connection\\.connected(\\.azure)?$/",
+          "group": "1_all@1"
+        },
+        {
+          "command": "aantje.maintenanceMerge",
+          "when": "viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table)$/",
+          "group": "2_files@2"
+        },
+        {
+          "command": "aantje.maintenanceRewrite",
+          "when": "viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table)$/",
+          "group": "2_files@3"
+        },
+        {
+          "command": "aantje.maintenanceFlush",
+          "when": "viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table)$/",
+          "group": "2_files@4"
+        },
+        {
+          "command": "aantje.maintenanceExpire",
+          "when": "viewItem =~ /^connection\\.connected(\\.azure)?$/",
+          "group": "3_destructive@5"
+        },
+        {
+          "command": "aantje.maintenanceCleanup",
+          "when": "viewItem =~ /^connection\\.connected(\\.azure)?$/",
+          "group": "3_destructive@6"
+        },
+        {
+          "command": "aantje.maintenanceOrphans",
+          "when": "viewItem =~ /^connection\\.connected(\\.azure)?$/",
+          "group": "3_destructive@7"
+        },
+        {
+          "command": "aantje.maintenanceOption",
+          "when": "viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table)$/",
+          "group": "4_options@8"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "aantje.addConnection",
+          "when": "view == aantje.catalogs",
+          "group": "navigation@1"
+        },
+        {
+          "command": "aantje.createAzureLake",
+          "when": "view == aantje.catalogs",
+          "group": "navigation@2"
+        },
+        {
+          "command": "aantje.search",
+          "when": "view == aantje.catalogs",
+          "group": "navigation@3"
+        },
+        {
+          "command": "aantje.refresh",
+          "when": "view == aantje.catalogs",
+          "group": "navigation@4"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "aantje.connect",
+          "when": "view == aantje.catalogs && viewItem =~ /^connection\\.(disconnected|error)(\\.azure)?$/",
+          "group": "inline@1"
+        },
+        {
+          "command": "aantje.disconnect",
+          "when": "view == aantje.catalogs && viewItem =~ /^connection\\.connected(\\.azure)?$/",
+          "group": "inline@1"
+        },
+        {
+          "command": "aantje.selectSnapshot",
+          "when": "view == aantje.catalogs && viewItem =~ /^connection\\.connected(\\.azure)?$/",
+          "group": "inline@2"
+        },
+        {
+          "command": "aantje.refresh",
+          "when": "view == aantje.catalogs && viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|folder\\.(tables|views|macros)|table|view)$/",
+          "group": "inline@3"
+        },
+        {
+          "command": "aantje.showSnapshot",
+          "when": "view == aantje.catalogs && viewItem == snapshot",
+          "group": "inline@1"
+        },
+        {
+          "command": "aantje.showSnapshot",
+          "when": "view == aantje.catalogs && viewItem == snapshot",
+          "group": "1_snapshot@1"
+        },
+        {
+          "command": "aantje.showSnapshotChanges",
+          "when": "view == aantje.catalogs && viewItem == detail.table",
+          "group": "1_changes@1"
+        },
+        {
+          "command": "aantje.testConnection",
+          "when": "view == aantje.catalogs && viewItem =~ /^connection\\./",
+          "group": "1_connection@1"
+        },
+        {
+          "command": "aantje.editConnection",
+          "when": "view == aantje.catalogs && viewItem =~ /^connection\\./",
+          "group": "1_connection@2"
+        },
+        {
+          "command": "aantje.removeConnection",
+          "when": "view == aantje.catalogs && viewItem =~ /^connection\\./",
+          "group": "1_connection@3"
+        },
+        {
+          "command": "aantje.copyName",
+          "when": "view == aantje.catalogs && viewItem =~ /^(schema(\\.main)?|table|view|column(\\.member)?|viewColumn)$/",
+          "group": "2_copy@1"
+        },
+        {
+          "command": "aantje.copyDdl",
+          "when": "view == aantje.catalogs && viewItem =~ /^(table|view)$/",
+          "group": "2_copy@2"
+        },
+        {
+          "command": "aantje.newQuery",
+          "when": "view == aantje.catalogs && viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table|view)$/",
+          "group": "2_query@1"
+        },
+        {
+          "submenu": "aantje.script",
+          "when": "view == aantje.catalogs && viewItem =~ /^(column|column\\.member|connection\\.connected(\\.azure)?|detail\\.table|macro|schema(\\.main)?|snapshot|table|view|viewColumn|folder\\.(columns|history|macros|partitioning|snapshots|sortOrder|statistics|tables|tags|viewColumns|views))$/",
+          "group": "2_script"
+        },
+        {
+          "submenu": "aantje.maintenance",
+          "when": "view == aantje.catalogs && viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table)$/",
+          "group": "2_script_maintenance"
+        },
+        {
+          "submenu": "aantje.timeTravel",
+          "when": "view == aantje.catalogs && viewItem =~ /^(table|view)$/",
+          "group": "2_travel"
+        },
+        {
+          "command": "aantje.compareSnapshots",
+          "when": "view == aantje.catalogs && viewItem =~ /^connection\\.connected(\\.azure)?$/",
+          "group": "2_travel@1"
+        },
+        {
+          "command": "aantje.selectSnapshot",
+          "when": "view == aantje.catalogs && viewItem =~ /^connection\\.connected(\\.azure)?$/",
+          "group": "2_travel@2"
+        },
+        {
+          "command": "aantje.showLatestSnapshot",
+          "when": "view == aantje.catalogs && viewItem =~ /^connection\\.connected(\\.azure)?$/",
+          "group": "2_travel@3"
+        },
+        {
+          "command": "aantje.previewTable",
+          "when": "view == aantje.catalogs && viewItem =~ /^(table|view)$/",
+          "group": "3_data@1"
+        },
+        {
+          "command": "aantje.createNotebook",
+          "when": "view == aantje.catalogs && viewItem =~ /^(table|view)$/",
+          "group": "3_data@2"
+        },
+        {
+          "submenu": "aantje.reports",
+          "when": "view == aantje.catalogs && viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table|view|macro)$/",
+          "group": "3_reports"
+        },
+        {
+          "command": "aantje.showStatistics",
+          "when": "view == aantje.catalogs && viewItem == folder.statistics",
+          "group": "3_data@3"
+        },
+        {
+          "command": "aantje.showStatistics",
+          "when": "view == aantje.catalogs && viewItem == folder.statistics",
+          "group": "inline@1"
+        },
+        {
+          "command": "aantje.allowMyIp",
+          "when": "view == aantje.catalogs && viewItem =~ /^connection\\.(connected|disconnected|error)\\.azure$/",
+          "group": "9_danger@0"
+        },
+        {
+          "command": "aantje.copyAzureConfig",
+          "when": "view == aantje.catalogs && viewItem =~ /^connection\\.(connected|disconnected|error)\\.azure$/",
+          "group": "1_connection@4"
+        },
+        {
+          "command": "aantje.deleteAzureLake",
+          "when": "view == aantje.catalogs && viewItem =~ /^connection\\.(connected|disconnected|error)\\.azure$/",
+          "group": "9_danger@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "aantje.showSnapshot",
+          "when": "false"
+        },
+        {
+          "command": "aantje.showProperties",
+          "when": "false"
+        },
+        {
+          "command": "aantje.showStorage",
+          "when": "false"
+        },
+        {
+          "command": "aantje.showLatestSnapshot",
+          "when": "false"
+        },
+        {
+          "command": "aantje.editConnection",
+          "when": "false"
+        },
+        {
+          "command": "aantje.removeConnection",
+          "when": "false"
+        },
+        {
+          "command": "aantje.testConnection",
+          "when": "false"
+        },
+        {
+          "command": "aantje.connect",
+          "when": "false"
+        },
+        {
+          "command": "aantje.disconnect",
+          "when": "false"
+        },
+        {
+          "command": "aantje.copyName",
+          "when": "false"
+        },
+        {
+          "command": "aantje.copyDdl",
+          "when": "false"
+        },
+        {
+          "command": "aantje.scriptCreate",
+          "when": "false"
+        },
+        {
+          "command": "aantje.scriptSelect",
+          "when": "false"
+        },
+        {
+          "command": "aantje.scriptInsert",
+          "when": "false"
+        },
+        {
+          "command": "aantje.scriptAlter",
+          "when": "false"
+        },
+        {
+          "command": "aantje.scriptDrop",
+          "when": "false"
+        },
+        {
+          "command": "aantje.maintenanceCheckpoint",
+          "when": "false"
+        },
+        {
+          "command": "aantje.maintenanceMerge",
+          "when": "false"
+        },
+        {
+          "command": "aantje.maintenanceRewrite",
+          "when": "false"
+        },
+        {
+          "command": "aantje.maintenanceFlush",
+          "when": "false"
+        },
+        {
+          "command": "aantje.maintenanceExpire",
+          "when": "false"
+        },
+        {
+          "command": "aantje.maintenanceCleanup",
+          "when": "false"
+        },
+        {
+          "command": "aantje.maintenanceOrphans",
+          "when": "false"
+        },
+        {
+          "command": "aantje.maintenanceOption",
+          "when": "false"
+        },
+        {
+          "command": "aantje.previewTable",
+          "when": "false"
+        },
+        {
+          "command": "aantje.createNotebook",
+          "when": "false"
+        },
+        {
+          "command": "aantje.showStatistics",
+          "when": "false"
+        },
+        {
+          "command": "aantje.queryAtSnapshot",
+          "when": "false"
+        },
+        {
+          "command": "aantje.compareSchema",
+          "when": "false"
+        },
+        {
+          "command": "aantje.compareSnapshots",
+          "when": "false"
+        },
+        {
+          "command": "aantje.showChanges",
+          "when": "false"
+        },
+        {
+          "command": "aantje.showSnapshotChanges",
+          "when": "false"
+        },
+        {
+          "command": "aantje.showSnapshotReport",
+          "when": "false"
+        },
+        {
+          "command": "aantje.showSchemaHistory",
+          "when": "false"
+        },
+        {
+          "command": "aantje.showActivity",
+          "when": "false"
+        },
+        {
+          "command": "aantje.showGrowth",
+          "when": "false"
+        },
+        {
+          "command": "aantje.showDependencies",
+          "when": "false"
+        },
+        {
+          "command": "aantje.showAdvisor",
+          "when": "false"
+        },
+        {
+          "command": "aantje.checkHealth",
+          "when": "false"
+        },
+        {
+          "command": "aantje.checkTableHealth",
+          "when": "false"
+        },
+        {
+          "command": "aantje.selectQueryConnection",
+          "when": "editorLangId == sql"
+        },
+        {
+          "command": "aantje.runQuery",
+          "when": "editorLangId == sql"
+        },
+        {
+          "command": "aantje.runStatement",
+          "when": "editorLangId == sql"
+        },
+        {
+          "command": "aantje.cancelQuery",
+          "when": "aantje.queryEditor && aantje.queryRunning"
+        },
+        {
+          "command": "aantje.toggleResults",
+          "when": "aantje.queryEditor && aantje.queryHasResults"
+        },
+        {
+          "command": "aantje.hideResults",
+          "when": "false"
+        },
+        {
+          "command": "aantje.showResults",
+          "when": "false"
+        },
+        {
+          "command": "aantje.toggleReadOnly",
+          "when": "aantje.queryEditor"
+        },
+        {
+          "command": "aantje.queryMenu",
+          "when": "aantje.queryEditor"
+        },
+        {
+          "command": "aantje.allowMyIp",
+          "when": "false"
+        },
+        {
+          "command": "aantje.copyAzureConfig",
+          "when": "false"
+        },
+        {
+          "command": "aantje.deleteAzureLake",
+          "when": "false"
+        }
+      ],
+      "aantje.timeTravel": [
+        {
+          "command": "aantje.queryAtSnapshot",
+          "group": "travel@1"
+        },
+        {
+          "command": "aantje.compareSchema",
+          "when": "viewItem == table",
+          "group": "travel@2"
+        },
+        {
+          "command": "aantje.showChanges",
+          "when": "viewItem == table",
+          "group": "travel@3"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "aantje.runQuery",
+          "when": "aantje.queryEditor && !aantje.queryRunning",
+          "group": "navigation@1"
+        },
+        {
+          "command": "aantje.cancelQuery",
+          "when": "aantje.queryEditor && aantje.queryRunning",
+          "group": "navigation@1"
+        },
+        {
+          "command": "aantje.hideResults",
+          "when": "aantje.queryEditor && aantje.queryHasResults && !aantje.queryResultsCollapsed",
+          "group": "navigation@2"
+        },
+        {
+          "command": "aantje.showResults",
+          "when": "aantje.queryEditor && aantje.queryResultsCollapsed",
+          "group": "navigation@2"
+        }
+      ],
+      "aantje.reports": [
+        {
+          "command": "aantje.showSnapshotReport",
+          "when": "viewItem =~ /^connection\\.connected(\\.azure)?$/",
+          "group": "1_lake@1"
+        },
+        {
+          "command": "aantje.showProperties",
+          "when": "viewItem =~ /^connection\\.connected(\\.azure)?$/",
+          "group": "1_lake@2"
+        },
+        {
+          "command": "aantje.showStorage",
+          "when": "viewItem =~ /^connection\\.connected(\\.azure)?$/",
+          "group": "1_lake@3"
+        },
+        {
+          "command": "aantje.showActivity",
+          "when": "viewItem =~ /^connection\\.connected(\\.azure)?$/",
+          "group": "1_lake@5"
+        },
+        {
+          "command": "aantje.showStatistics",
+          "when": "viewItem == table",
+          "group": "2_table@1"
+        },
+        {
+          "command": "aantje.showSchemaHistory",
+          "when": "viewItem == table",
+          "group": "2_table@2"
+        },
+        {
+          "command": "aantje.checkHealth",
+          "when": "viewItem =~ /^connection\\.connected(\\.azure)?$/",
+          "group": "1_lake@6"
+        },
+        {
+          "command": "aantje.checkHealth",
+          "when": "viewItem =~ /^schema(\\.main)?$/",
+          "group": "1_schema@2"
+        },
+        {
+          "command": "aantje.showAdvisor",
+          "when": "viewItem =~ /^schema(\\.main)?$/",
+          "group": "1_schema@1"
+        },
+        {
+          "command": "aantje.showStorage",
+          "when": "viewItem =~ /^schema(\\.main)?$/",
+          "group": "1_schema@3"
+        },
+        {
+          "command": "aantje.showGrowth",
+          "when": "viewItem =~ /^schema(\\.main)?$/",
+          "group": "1_schema@4"
+        },
+        {
+          "command": "aantje.showActivity",
+          "when": "viewItem =~ /^schema(\\.main)?$/",
+          "group": "1_schema@5"
+        },
+        {
+          "command": "aantje.showDependencies",
+          "when": "viewItem =~ /^schema(\\.main)?$/",
+          "group": "1_schema@6"
+        },
+        {
+          "command": "aantje.checkTableHealth",
+          "when": "viewItem == table",
+          "group": "2_table@3"
+        },
+        {
+          "command": "aantje.showAdvisor",
+          "when": "viewItem =~ /^connection\\.connected(\\.azure)?$/",
+          "group": "1_lake@4"
+        },
+        {
+          "command": "aantje.showDependencies",
+          "when": "viewItem =~ /^connection\\.connected(\\.azure)?$/",
+          "group": "1_lake@7"
+        },
+        {
+          "command": "aantje.showGrowth",
+          "when": "viewItem =~ /^connection\\.connected(\\.azure)?$/",
+          "group": "1_lake@8"
+        },
+        {
+          "command": "aantje.showGrowth",
+          "when": "viewItem == table",
+          "group": "2_table@5"
+        },
+        {
+          "command": "aantje.showDependencies",
+          "when": "viewItem == table",
+          "group": "2_table@4"
+        },
+        {
+          "command": "aantje.showDependencies",
+          "when": "viewItem == view",
+          "group": "3_view@1"
+        },
+        {
+          "command": "aantje.showDependencies",
+          "when": "viewItem == macro",
+          "group": "4_macro@1"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "aantje",
+      "properties": {
+        "aantje.connections": {
+          "type": "array",
+          "scope": "machine",
+          "default": [],
+          "markdownDescription": "DuckLake catalog connections. Passwords and tokens are never stored here; aantje keeps them in the VS Code secret storage. Use the **aantje: Add Connection** command instead of editing this by hand.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "name",
+              "kind"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Stable identifier of the connection (also the key of its stored password or token). Defaults to a slug of the name."
+              },
+              "name": {
+                "type": "string",
+                "description": "Display name in the explorer."
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "postgres",
+                  "sqlite",
+                  "duckdb",
+                  "quack"
+                ],
+                "description": "Where the DuckLake metadata is stored. quack: a DuckDB server that serves the catalog over the Quack protocol."
+              },
+              "host": {
+                "type": "string",
+                "description": "PostgreSQL host, or the host of the DuckDB server of a Quack catalog (any name but \"quack\")."
+              },
+              "port": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535,
+                "default": 5432,
+                "description": "PostgreSQL port, or the port of the Quack server. Absent: 5432 for PostgreSQL, 9494 for Quack."
+              },
+              "database": {
+                "type": "string",
+                "description": "PostgreSQL database."
+              },
+              "user": {
+                "type": "string",
+                "description": "PostgreSQL user."
+              },
+              "metadataSchema": {
+                "type": "string",
+                "description": "PostgreSQL schema that holds the ducklake_* tables (default: the connection's default schema)."
+              },
+              "azureAccount": {
+                "type": "string",
+                "description": "Azure storage account (ADLS Gen2) that holds the data files of the lake. aantje reads and writes them with the Microsoft account that VS Code is signed in with; no key is stored."
+              },
+              "azureAuth": {
+                "type": "string",
+                "enum": [
+                  "password",
+                  "entra"
+                ],
+                "default": "password",
+                "description": "How an Azure lake signs in to PostgreSQL. entra: a token of the Microsoft account that VS Code is signed in with is the password, and \"user\" is its user principal name; no password is stored. password: the stored password."
+              },
+              "azureTenant": {
+                "type": "string",
+                "description": "Microsoft Entra tenant (ID) to sign in to for the storage account of an Azure lake. Without it the sign-in uses the home tenant of the account."
+              },
+              "ssl": {
+                "type": "boolean",
+                "description": "Use TLS for the PostgreSQL or Quack connection. Absent: TLS for every host but the local machine."
+              },
+              "fingerprint": {
+                "type": "string",
+                "pattern": "^([0-9A-Fa-f]{2}:?){31}[0-9A-Fa-f]{2}$",
+                "description": "SHA-256 fingerprint of the certificate of a Quack server (64 hex digits, with or without colons), pinned instead of the system trust store; needs ssl. Add Connection reads it from the server and asks before it pins it."
+              },
+              "path": {
+                "type": "string",
+                "description": "SQLite or DuckDB database file that holds the ducklake_* tables."
+              },
+              "readOnly": {
+                "type": "boolean",
+                "description": "Open the SQL editor sessions of this connection read-only. A read-only session refuses statements that change the lake. Absent or false: writable. For a DuckDB file, a writable session locks the file exclusively, so the explorer cannot read it while the editor has it open. The explorer is read-only in either case. Not for quack: a Quack server has no file lock, and what its token may do is decided by the server."
+              }
+            }
+          }
+        },
+        "aantje.queryTimeoutSeconds": {
+          "type": "integer",
+          "scope": "machine",
+          "default": 30,
+          "minimum": 1,
+          "maximum": 86400,
+          "markdownDescription": "Maximum duration, in seconds, of one catalog query and of one reading of table data (rows or the columns of a view). The time counts from the attach of the catalog. Installing the DuckDB extensions (the first download, about 40 MB) has its own limit of 5 minutes."
+        },
+        "aantje.s3.endpoint": {
+          "type": "string",
+          "scope": "machine",
+          "default": "",
+          "markdownDescription": "S3 endpoint that holds the Parquet data of DuckLake catalogs, as `host:port` or `http(s)://host:port`. Empty means AWS. Used by **Select Top 1000 Rows**, and written into notebooks. The access key and secret are set with **aantje: Set S3 Credentials**."
+        },
+        "aantje.s3.region": {
+          "type": "string",
+          "scope": "machine",
+          "default": "us-east-1",
+          "markdownDescription": "S3 region for reading data."
+        },
+        "aantje.s3.urlStyle": {
+          "type": "string",
+          "scope": "machine",
+          "enum": [
+            "path",
+            "vhost"
+          ],
+          "default": "path",
+          "markdownDescription": "How bucket names are put into S3 URLs. Most S3-compatible servers need `path`."
+        },
+        "aantje.duckdb.extensionDirectory": {
+          "type": "string",
+          "scope": "machine",
+          "default": "",
+          "markdownDescription": "Directory with the DuckDB extensions `ducklake`, `postgres`/`sqlite`/`quack` and `httpfs` for reading data. Empty uses the DuckDB default, which downloads them on first use and needs internet access. Set it for offline use."
+        },
+        "aantje.sql.maxRows": {
+          "type": "integer",
+          "scope": "machine",
+          "default": 10000,
+          "minimum": 1,
+          "maximum": 1000000,
+          "markdownDescription": "The most rows that the SQL editor keeps of one result. A longer result is cut and marked as partial; the rest is not read."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --check .",
+    "check:docs": "node scripts/check-docs.mjs",
+    "vocabulary:ducklake": "node scripts/ducklake-vocabulary.mjs",
+    "build:azure-template": "az bicep build --file deploy/azure/main.bicep --outfile deploy/azure/azuredeploy.json",
+    "check:azure-template": "node scripts/check-azure-template.mjs",
+    "test": "vitest run",
+    "test:full": "node scripts/test-full.mjs",
+    "test:e2e": "pwsh -NoProfile -File test/e2e/run.ps1",
+    "test:watch": "vitest",
+    "test:integration": "npm run build && vscode-test",
+    "package:win32": "pwsh -NoProfile -File scripts/package.ps1 -Target win32-x64",
+    "package:linux": "pwsh -NoProfile -File scripts/package.ps1 -Target linux-x64"
+  },
+  "dependencies": {
+    "@duckdb/node-api": "2.0.0-r.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "^24.19.2",
+    "@types/pg": "^8.23.1",
+    "@types/sql.js": "^1.4.11",
+    "@types/vscode": "1.140.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "^4.1.0",
+    "echarts": "^6.1.0",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.14.0",
+    "pg": "^8.23.1",
+    "prettier": "^3.9.10",
+    "sharp": "^0.35.5",
+    "sql.js": "^1.15.2",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.72.1",
+    "vitest": "^5.0.5"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "@vscode/vsce-sign@2.1.0": true
+  },
+  "overrides": {
+    "mocha": "^12.0.3"
+  }
+}

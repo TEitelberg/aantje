@@ -1,0 +1,32 @@
+// The entry point of the bundle that the extension host runs. The order matters: the first suite needs the
+// extension to be inactive.
+import './hooks';
+import './activation.test';
+import './catalog-sqlite.test';
+import './catalog-duckdb.test';
+import './connections-wizard.test';
+import './postgres-password.test';
+import './explorer-view.test';
+import './settings-problems.test';
+import './output-channel.test';
+import './data-commands.test';
+import './data-preview.test';
+import './data-views.test';
+import './data-s3.test';
+import './script-commands.test';
+import './macros-maintenance.test';
+import './history-tree.test';
+import './time-travel-commands.test';
+import './change-commands.test';
+import './sql-editor.test';
+import './results-panel.test';
+import './statistics-panel.test';
+import './snapshot-report.test';
+import './report-shell.test';
+import './storage-report.test';
+import './schema-history.test';
+import './activity-report.test';
+import './growth-report.test';
+import './dependencies.test';
+import './health-check.test';
+import './advisor.test';

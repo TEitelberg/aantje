@@ -1,0 +1,52 @@
+# Secrets and local configuration (the template .env.example is tracked)
+.env
+.env.*
+!.env.example
+compose.override.yaml
+compose.override.yml
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-store/
+
+# Local DuckDB files and logs
+*.duckdb
+*.duckdb.wal
+*.log
+
+# Editors, IDEs, OS
+.vscode/
+.idea/
+*.code-workspace
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Claude Code: personal settings only
+.claude/settings.local.json
+
+# A locally built package for the workbench image (the build installs aantje from Open VSX otherwise)
+*.vsix

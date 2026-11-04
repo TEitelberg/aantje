@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oog – Start page</title>
+<style>
+    /* In the VS Code webview the --vscode-* variables of the active theme win; elsewhere the fallbacks
+       apply (light, or dark with prefers-color-scheme). */
+    :root {
+        color-scheme: light dark;
+        --bg: var(--vscode-editor-background, #f6f7f9);
+        --card: var(--vscode-editorWidget-background, #ffffff);
+        --text: var(--vscode-foreground, #1b1f24);
+        --muted: var(--vscode-descriptionForeground, #5a6572);
+        --border: var(--vscode-widget-border, var(--vscode-panel-border, #d8dde3));
+        --accent: var(--vscode-textLink-foreground, #0b6bcb);
+        --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+        --code-bg: var(--vscode-textCodeBlock-background, #eef1f4);
+    }
+    @media (prefers-color-scheme: dark) {
+        :root {
+            --bg: var(--vscode-editor-background, #16191d);
+            --card: var(--vscode-editorWidget-background, #1f2329);
+            --text: var(--vscode-foreground, #e6e9ed);
+            --muted: var(--vscode-descriptionForeground, #98a3b0);
+            --border: var(--vscode-widget-border, var(--vscode-panel-border, #333a43));
+            --accent: var(--vscode-textLink-foreground, #6cb2f5);
+            --code-bg: var(--vscode-textCodeBlock-background, #2a3038);
+        }
+    }
+    * { box-sizing: border-box; }
+    body {
+        margin: 0;
+        padding: 32px 20px 24px;
+        background: var(--bg);
+        color: var(--text);
+        font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    main { max-width: 960px; margin: 0 auto; }
+    h1 { margin: 0 0 4px; font-size: 28px; font-weight: 650; letter-spacing: .01em; }
+    .subtitle { margin: 0 0 28px; color: var(--muted); }
+    .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-auto-rows: 1fr;
+        gap: 16px;
+    }
+    .tile {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        padding: 18px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        color: inherit;
+        text-decoration: none;
+    }
+    a.tile:hover, a.tile:focus-visible { border-color: var(--accent); outline: none; box-shadow: 0 0 0 2px var(--accent-soft); }
+    @media (max-width: 560px) { .grid { grid-template-columns: 1fr; grid-auto-rows: auto; } }
+    .head { display: flex; align-items: center; gap: 12px; }
+    .icon {
+        flex: none;
+        display: grid;
+        place-items: center;
+        width: 40px;
+        height: 40px;
+        border-radius: 9px;
+        background: var(--accent-soft);
+        color: var(--accent);
+    }
+    .icon svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    /* Vendor logo ("logo" in tools.json): neutral light box in every theme, so dark logos stay visible; the logo keeps its colors. */
+    .icon.has-logo { background: #f3f4f6; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .08); }
+    .icon img { display: block; width: 28px; height: 28px; object-fit: contain; }
+    .name { font-size: 17px; font-weight: 600; }
+    .desc { margin: 0; color: var(--muted); }
+    .link { margin-top: auto; color: var(--accent); font-size: 13px; word-break: break-all; }
+    code { padding: 2px 6px; border-radius: 5px; background: var(--code-bg); font: 13px ui-monospace, "Cascadia Mono", Consolas, monospace; user-select: all; }
+    .hint { margin-top: auto; font-size: 13px; color: var(--muted); }
+    footer { margin-top: 32px; color: var(--muted); font-size: 13px; }
+    .error { padding: 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--card); }
+</style>
+</head>
+<body>
+<!-- Icons are defined once here and referenced by name ("icon" in tools.json); unknown names get "generic". -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-workbench" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M10 9l-3 3 3 3M14 9l3 3-3 3"/></symbol>
+    <symbol id="i-git" viewBox="0 0 24 24"><circle cx="6" cy="5" r="2"/><circle cx="6" cy="19" r="2"/><circle cx="18" cy="9" r="2"/><path d="M6 7v10M18 11c0 4-6 3-12 6"/></symbol>
+    <symbol id="i-storage" viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></symbol>
+    <symbol id="i-spark" viewBox="0 0 24 24"><path d="M13 3L5 13.5h6L10 21l8-10.5h-6z"/></symbol>
+    <symbol id="i-catalog" viewBox="0 0 24 24"><path d="M12 3l9 4.5-9 4.5-9-4.5z"/><path d="M3 12l9 4.5 9-4.5M3 16.5L12 21l9-4.5"/></symbol>
+    <symbol id="i-vault" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/><circle cx="12" cy="15.5" r="1"/></symbol>
+    <symbol id="i-report" viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6z"/><path d="M15 3v4h4M9 17v-3M12 17v-5M15 17v-2"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 4v16h16"/><path d="M8 16v-4M12 16V8M16 16v-6"/></symbol>
+    <symbol id="i-generic" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></symbol>
+</svg>
+<main>
+    <h1 id="title">Oog</h1>
+    <p class="subtitle" id="subtitle"></p>
+    <div class="grid" id="grid"></div>
+    <footer id="footer"></footer>
+    <noscript><p class="error">This page needs JavaScript to load the tiles from tools.json.</p></noscript>
+</main>
+<script>
+(function () {
+    "use strict";
+    var SVG = "http://www.w3.org/2000/svg";
+    var vscodeApi = typeof acquireVsCodeApi === "function" ? acquireVsCodeApi() : null;
+    var KNOWN_ICONS = ["workbench", "git", "storage", "spark", "catalog", "chart", "vault", "report"];
+
+    function el(tag, className, text) {
+        var node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined) node.textContent = text;
+        return node;
+    }
+
+    function symbol(name) {
+        var svg = document.createElementNS(SVG, "svg");
+        var use = document.createElementNS(SVG, "use");
+        var id = KNOWN_ICONS.indexOf(name) >= 0 ? name : "generic";
+        use.setAttribute("href", "#i-" + id);
+        svg.appendChild(use);
+        return svg;
+    }
+
+    // Accepted as logo: a relative path of letters, digits and . _ - / below the page, or (set by the VS Code
+    // extension, whose webview cannot load files from the server) an inline SVG/PNG data URI.
+    function isLogoPath(value) {
+        if (typeof value !== "string") return false;
+        if (/^data:image\/(svg\+xml|png);base64,[A-Za-z0-9+\/=]+$/.test(value)) return true;
+        return /^[\w.\/-]+$/.test(value) && value.charAt(0) !== "/" && value.indexOf("..") < 0;
+    }
+
+    // Built-in symbol named by "icon"; with a valid "logo" the vendor logo is shown instead, and the symbol
+    // takes over again if the image cannot be loaded.
+    function icon(name, logo) {
+        var wrap = el("span", "icon");
+        if (isLogoPath(logo)) {
+            var img = document.createElement("img");
+            img.alt = "";
+            img.width = 28;
+            img.height = 28;
+            img.loading = "eager";
+            img.addEventListener("error", function () {
+                wrap.classList.remove("has-logo");
+                wrap.replaceChildren(symbol(name));
+            });
+            img.src = logo;
+            wrap.classList.add("has-logo");
+            wrap.appendChild(img);
+        } else {
+            wrap.appendChild(symbol(name));
+        }
+        return wrap;
+    }
+
+    // Only http(s) links become anchors; anything else is shown as plain text.
+    function isWebUrl(value) {
+        return typeof value === "string" && /^https?:\/\//i.test(value);
+    }
+
+    function tile(tool) {
+        var linked = isWebUrl(tool.url);
+        var root = el(linked ? "a" : "div", "tile");
+        if (linked) {
+            root.href = tool.url;
+            // New browser tab. The Simple Browser of VS Code cannot show this page: its sandboxed iframe lacks
+            // allow-popups, so target=_blank is blocked there. In the webview of the oog.oog-welcome extension
+            // (acquireVsCodeApi exists) the click goes to the extension, which opens the address.
+            root.target = "_blank";
+            root.rel = "noopener";
+            if (vscodeApi) {
+                root.addEventListener("click", function (event) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    vscodeApi.postMessage({ command: "open", url: tool.url });
+                });
+            }
+        }
+        var head = el("div", "head");
+        head.appendChild(icon(tool.icon, tool.logoData || tool.logo));
+        head.appendChild(el("span", "name", tool.name || tool.id || "?"));
+        root.appendChild(head);
+        if (tool.description) root.appendChild(el("p", "desc", tool.description));
+        if (linked) {
+            root.appendChild(el("span", "link", tool.url));
+        } else if (tool.hint) {
+            var hint = el("div", "hint");
+            var code = el("code", null, tool.hint);
+            hint.appendChild(code);
+            root.appendChild(hint);
+        }
+        return root;
+    }
+
+    function load(url, fallback) {
+        return fetch(url, { cache: "no-store" })
+            .then(function (r) { if (!r.ok) throw new Error(url + ": HTTP " + r.status); return r.json(); })
+            .catch(function (e) { if (fallback !== undefined) return fallback; throw e; });
+    }
+
+    // Data: window.OOG_DATA ({tools, features}) when the VS Code extension oog.oog-welcome embeds the page in a
+    // webview; otherwise fetched with relative URLs, because the page is served at / and, through the
+    // code-server proxy, at /proxy/8081/. features.json is written by the container entrypoint
+    // ({"aantje": true} when that extension is installed).
+    var data = window.OOG_DATA
+        ? Promise.resolve([window.OOG_DATA.tools, window.OOG_DATA.features])
+        : Promise.all([load("tools.json"), load("features.json", {})]);
+    data.then(function (res) {
+        var config = res[0];
+        var features = res[1] || {};
+        document.getElementById("title").textContent = config.title || "Oog";
+        document.getElementById("subtitle").textContent = config.subtitle || "";
+        document.getElementById("footer").textContent = config.footer || "";
+        var grid = document.getElementById("grid");
+        (config.tools || []).forEach(function (tool) {
+            if (tool.requires && features[tool.requires] !== true) return;
+            grid.appendChild(tile(tool));
+        });
+    }).catch(function (e) {
+        var box = el("p", "error", "Could not load tools.json (" + e.message + "). The page must be served by a web server, not opened as a file.");
+        document.getElementById("grid").appendChild(box);
+    });
+})();
+</script>
+</body>
+</html>

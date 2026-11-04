@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling==1.33.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "oog"
+dynamic = ["version"]
+description = "Oog workbench: DuckDB + DuckLake (Postgres catalog, RustFS data), IPython extension"
+requires-python = ">=3.11"
+# Direct dependencies of the workbench live here and are pinned (verified together on Python 3.11-3.13);
+# transitive ones are frozen by the image's constraints file.
+dependencies = [
+    # DuckDB with DuckLake (extension ducklake exists for v2.0.0 on linux_amd64 and linux_arm64)
+    "duckdb==2.0.0",
+    "pandas==2.3.3",
+    "pyarrow==26.0.0",
+    "polars==2.1.0",
+    # notebooks: kernel, %sql / %%sql, headless execution
+    "ipykernel==7.4.0",
+    "ipython==9.17.1",
+    "jupysql==0.11.1",
+    "duckdb-engine==0.17.0",
+    # SQLAlchemy 2.1 breaks duckdb-engine 0.17.0 column reflection (pg_catalog.pg_collation); stay on 2.0.x
+    "sqlalchemy==2.0.55",
+    "nbclient==0.11.0",
+    "nbformat==5.11.1",
+]
+
+[project.scripts]
+oog-sql = "oog.sql_cli:main"
+
+[tool.hatch.version]
+path = "src/oog/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/oog"]

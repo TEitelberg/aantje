@@ -1,0 +1,39 @@
+{
+    "title": "Oog",
+    "subtitle": "Local DuckLake stack: object storage, catalog, Git and a VS Code workbench with aantje.",
+    "tools": [
+        {
+            "id": "workbench",
+            "name": "Workbench",
+            "description": "VS Code in the browser with Jupyter, DuckDB and DuckLake. Open the medallion notebooks (notebooks/local, and notebooks/azure for an Azure DuckLake) in the oog-workspace repository and pick the kernel Oog.",
+            "url": "http://localhost:8443/",
+            "icon": "workbench",
+            "logo": "icons/workbench.svg"
+        },
+        {
+            "id": "aantje",
+            "name": "aantje",
+            "description": "VS Code extension for browsing the DuckLake catalog and running SQL. The \"Oog Lakehouse\" connection is preconfigured (activity bar); the password is the Postgres password from .env and is asked for on the first connect.",
+            "hint": "Installed in the workbench",
+            "icon": "catalog",
+            "logo": "icons/aantje.png",
+            "requires": "aantje"
+        },
+        {
+            "id": "gitea",
+            "name": "Gitea",
+            "description": "Git server with LFS. The oog-workspace repository holds the notebooks; sign in with the Gitea admin account from .env.",
+            "url": "http://localhost:3000/",
+            "icon": "git",
+            "logo": "icons/gitea.svg"
+        },
+        {
+            "id": "rustfs",
+            "name": "RustFS console",
+            "description": "S3 object storage: bucket oog-lake holds the DuckLake data files and the raw test data, oog-gitea the Git objects.",
+            "url": "http://localhost:9001/rustfs/console/",
+            "icon": "storage",
+            "logo": "icons/rustfs.svg"
+        }
+    ]
+}
