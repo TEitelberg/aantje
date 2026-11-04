@@ -1,0 +1,381 @@
+# Oog - local lakehouse stack: RustFS (S3) + Postgres (DuckLake catalog, Gitea database) + Gitea (Git, objects
+# in RustFS) + Workbench (code-server, DuckDB/DuckLake, aantje).
+# Settings come from .env (template: .env.example); the defaults
+# written here mirror .env.example, so the stack also starts without a .env file.
+#
+# Start order: postgres (healthy) -> postgres-init (completed); rustfs (healthy) -> rustfs-init (completed);
+#   both -> gitea (healthy) -> gitea-init (completed); duckdb (healthy); all -> workbench
+#
+# Self-built images (oog/*) are built on first use and never pulled (pull_policy: never): the Docker Hub
+# namespace "oog" is not ours. After changing a Dockerfile, a build argument or a pin run
+# `docker compose build` (or `up -d --build`); `up` alone keeps an existing image.
+name: oog
+
+# OOG_* settings read by the self-built images. The scalar anchors (&...) are reused below for the
+# native variables of RustFS and Postgres, so every default is written exactly once.
+x-oog-s3-env: &oog-s3-env
+  OOG_S3_ENDPOINT: ${OOG_S3_ENDPOINT:-http://rustfs:9000}
+  OOG_S3_REGION: ${OOG_S3_REGION:-us-east-1}
+  OOG_S3_BUCKET: ${OOG_S3_BUCKET:-oog-lake}
+  OOG_S3_ACCESS_KEY: &s3-access-key ${OOG_S3_ACCESS_KEY:-oogadmin}
+  OOG_S3_SECRET_KEY: &s3-secret-key ${OOG_S3_SECRET_KEY:-change-me-oog-secret}
+
+x-oog-pg-env: &oog-pg-env
+  OOG_PG_HOST: ${OOG_PG_HOST:-postgres}
+  OOG_PG_PORT: ${OOG_PG_PORT:-5432}
+  OOG_PG_DB: &pg-db ${OOG_PG_DB:-ducklake}
+  OOG_PG_USER: &pg-user ${OOG_PG_USER:-ducklake}
+  OOG_PG_PASSWORD: &pg-password ${OOG_PG_PASSWORD:-change-me-pg}
+
+# Quack server (DuckDB) that serves a second DuckLake catalog next to the PostgreSQL one. The token authenticates
+# clients; the certificate that the server creates is mounted read-only into the workbench (OOG_QUACK_CA_FILE).
+x-oog-quack-env: &oog-quack-env
+  OOG_QUACK_HOST: ${OOG_QUACK_HOST:-duckdb}
+  OOG_QUACK_PORT: &quack-port ${OOG_QUACK_PORT:-9494}
+  OOG_QUACK_TOKEN: &quack-token ${OOG_QUACK_TOKEN:-change-me-quack}
+
+# DuckLake settings of the workbench (the catalog is the Postgres above, data files in S3).
+x-oog-ducklake-env: &oog-ducklake-env
+  OOG_DUCKLAKE_NAME: ${OOG_DUCKLAKE_NAME:-oog}
+  OOG_DUCKLAKE_DATA_PATH: ${OOG_DUCKLAKE_DATA_PATH:-s3://${OOG_S3_BUCKET:-oog-lake}/ducklake/}
+
+# Hardening of the services that run as a non-root user. Not applied to postgres and rustfs (their
+# entrypoints chown/gosu and need capabilities) nor to rustfs-perms (chown as root).
+x-hardening: &hardening
+  security_opt: ["no-new-privileges:true"]
+  cap_drop: ["ALL"]
+
+# Role and database of Gitea on the shared Postgres server (created by postgres-init).
+x-oog-gitea-db-env: &oog-gitea-db-env
+  OOG_GITEA_DB: &gitea-db ${OOG_GITEA_DB:-gitea}
+  OOG_GITEA_DB_USER: &gitea-db-user ${OOG_GITEA_DB_USER:-gitea}
+  OOG_GITEA_DB_PASSWORD: &gitea-db-password ${OOG_GITEA_DB_PASSWORD:-change-me-gitea-db}
+
+# Admin account of Gitea (created by gitea-init, used by the git credential helper of the workbench).
+x-oog-gitea-admin-env: &oog-gitea-admin-env
+  OOG_GITEA_ADMIN_USER: ${OOG_GITEA_ADMIN_USER:-oogadmin}
+  OOG_GITEA_ADMIN_PASSWORD: ${OOG_GITEA_ADMIN_PASSWORD:-change-me-gitea}
+
+# Gitea is configured by GITEA__<section>__<KEY> variables only (see the comments below); the
+# image renders an app.ini once and applies these on every start. Database part, shared with gitea-init:
+x-gitea-db-env: &gitea-db-env
+  # Without these keys Gitea silently falls back to SQLite or to the image defaults (localhost:3306, user root).
+  GITEA__database__DB_TYPE: postgres
+  GITEA__database__HOST: ${OOG_PG_HOST:-postgres}:${OOG_PG_PORT:-5432}
+  GITEA__database__NAME: *gitea-db
+  GITEA__database__USER: *gitea-db-user
+  GITEA__database__PASSWD: *gitea-db-password
+  GITEA__database__SSL_MODE: disable
+  # Without the lock the install wizard runs (and the health check stays green).
+  GITEA__security__INSTALL_LOCK: "true"
+
+# The rest, for gitea only.
+x-gitea-env: &gitea-env
+  # Mandatory: without fixed values Gitea generates new secrets whenever the container is re-created.
+  # The JWT secrets must be 32 bytes as base64url without padding (43 characters), else Gitea replaces them.
+  GITEA__security__SECRET_KEY: &gitea-secret-key ${OOG_GITEA_SECRET_KEY:-oog-demo-gitea-secret-key-change-me-0123456789abcdefghijklmnopqr}
+  GITEA__security__INTERNAL_TOKEN: &gitea-internal-token ${OOG_GITEA_INTERNAL_TOKEN:-oog-demo-gitea-internal-token-change-me}
+  GITEA__oauth2__JWT_SECRET: &gitea-jwt-secret ${OOG_GITEA_JWT_SECRET:-b29nLWRlbW8tb2F1dGgyLWp3dC1zZWNyZXQtMDAwMDE}
+  GITEA__server__LFS_JWT_SECRET: &gitea-lfs-jwt-secret ${OOG_GITEA_LFS_JWT_SECRET:-b29nLWRlbW8tbGZzLWp3dC1zZWNyZXQtMDAwMDAwMDI}
+  # LFS storage is not initialised without this.
+  GITEA__server__LFS_START_SERVER: "true"
+  GITEA__server__DOMAIN: localhost
+  GITEA__server__SSH_DOMAIN: localhost
+  GITEA__server__HTTP_PORT: "3000"
+  # The URL of the browser, hence the published host port (not the container port).
+  GITEA__server__ROOT_URL: ${OOG_GITEA_ROOT_URL:-http://localhost:${GITEA_HTTP_PORT:-3000}/}
+  # SSH_PORT is only the port shown in clone URLs; the server listens on SSH_LISTEN_PORT (else on SSH_PORT).
+  GITEA__server__SSH_PORT: ${GITEA_SSH_PORT:-2222}
+  GITEA__server__SSH_LISTEN_PORT: "2222"
+  GITEA__service__DISABLE_REGISTRATION: "true"
+  # Only /api/healthz and the login page stay anonymous.
+  GITEA__service__REQUIRE_SIGNIN_VIEW: "true"
+  GITEA__session__COOKIE_SECURE: "false"
+  # No runner in the stack; no update check.
+  GITEA__actions__ENABLED: "false"
+  GITEA__cron_0x2E_update_checker__ENABLED: "false"
+  # Empty = no router access log.
+  GITEA__log__logger_0x2E_router_0x2E_MODE: ""
+  # One global [storage] block: all Gitea storages (attachments, avatars, lfs, packages, ...) inherit it and
+  # use the prefix <name>/ in the bucket. Repositories, indexes and sessions stay on the volume.
+  # Without the type Gitea starts healthy but writes everything to the local disk.
+  GITEA__storage__STORAGE_TYPE: minio
+  # host:port without a scheme (the scheme of OOG_S3_ENDPOINT cannot be cut off here).
+  GITEA__storage__MINIO_ENDPOINT: rustfs:9000
+  GITEA__storage__MINIO_ACCESS_KEY_ID: *s3-access-key
+  GITEA__storage__MINIO_SECRET_ACCESS_KEY: *s3-secret-key
+  GITEA__storage__MINIO_BUCKET: &gitea-bucket ${OOG_GITEA_BUCKET:-oog-gitea}
+  GITEA__storage__MINIO_LOCATION: ${OOG_S3_REGION:-us-east-1}
+  GITEA__storage__MINIO_USE_SSL: "false"
+  # "dns" aborts the start (there is no <bucket>.rustfs host).
+  GITEA__storage__MINIO_BUCKET_LOOKUP_TYPE: path
+  # true would redirect downloads to http://rustfs:9000/..., which the browser cannot reach.
+  GITEA__storage__SERVE_DIRECT: "false"
+
+services:
+  # One-shot: hand the RustFS data volume to UID/GID 10001 (the user RustFS runs as). A fresh
+  # volume already inherits that ownership from the image; this covers volumes that exist
+  # already and are root-owned (created by hand, restored from a backup). Without it RustFS
+  # would still report healthy but fail every write with "File access denied".
+  rustfs-perms:
+    image: busybox:1.37
+    user: "0:0"
+    command: ["chown", "-R", "10001:10001", "/data"]
+    volumes:
+      - rustfs-data:/data
+    network_mode: none
+    restart: "no"
+
+  rustfs:
+    image: rustfs/rustfs:${RUSTFS_VERSION:-1.0.4}
+    depends_on:
+      rustfs-perms:
+        condition: service_completed_successfully
+    environment:
+      RUSTFS_ACCESS_KEY: *s3-access-key
+      RUSTFS_SECRET_KEY: *s3-secret-key
+      # Single disk (the image default as well); the upstream example uses four directories.
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
+      RUSTFS_CONSOLE_ENABLE: "true"
+      # Empty = log to stdout (docker compose logs rustfs) instead of files inside the container.
+      RUSTFS_OBS_LOG_DIRECTORY: ""
+    # Host ports: ${VAR-default} without a colon, so an empty VAR publishes on a random free port
+    # (tests, a second stack: docker compose port <service> <port>); unset keeps the default.
+    ports:
+      - "127.0.0.1:${RUSTFS_S3_PORT-9000}:9000"
+      - "127.0.0.1:${RUSTFS_CONSOLE_PORT-9001}:9001"
+    volumes:
+      - rustfs-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:9000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+      start_interval: 1s
+    networks: [oog]
+    restart: unless-stopped
+
+  # One-shot: create the buckets (idempotent). Image: images/rustfs-init.
+  rustfs-init:
+    build:
+      context: .
+      dockerfile: images/rustfs-init/Dockerfile
+    image: oog/rustfs-init:${OOG_IMAGE_TAG:-0.1.0}
+    pull_policy: never
+    <<: *hardening
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    environment:
+      <<: *oog-s3-env
+      # Created in addition to OOG_S3_BUCKET; must include OOG_GITEA_BUCKET.
+      OOG_S3_EXTRA_BUCKETS: ${OOG_S3_EXTRA_BUCKETS:-oog-gitea}
+    networks: [oog]
+    restart: "no"
+
+  postgres:
+    image: postgres:${POSTGRES_VERSION:-17-alpine}
+    environment:
+      POSTGRES_USER: *pg-user
+      POSTGRES_PASSWORD: *pg-password
+      POSTGRES_DB: *pg-db
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT-5433}:5432"
+    volumes:
+      # Postgres 17 layout; 18+ images need the volume at /var/lib/postgresql instead.
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # TCP check (-h): the temporary init server of the official entrypoint only listens on a
+      # unix socket, so the service is not reported healthy before initdb has finished.
+      test: ["CMD-SHELL", 'pg_isready -h 127.0.0.1 -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+      start_interval: 1s
+    networks: [oog]
+    restart: unless-stopped
+
+  # One-shot: create the database and login role of Gitea (idempotent). Image: images/postgres-init.
+  postgres-init:
+    build:
+      context: .
+      dockerfile: images/postgres-init/Dockerfile
+      args:
+        POSTGRES_VERSION: ${POSTGRES_VERSION:-17-alpine}
+    image: oog/postgres-init:${OOG_IMAGE_TAG:-0.1.0}
+    pull_policy: never
+    <<: *hardening
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: [*oog-pg-env, *oog-gitea-db-env]
+      OOG_BOOTSTRAP_TIMEOUT: "30"
+    # The base image declares the Postgres data directory as a VOLUME; without these mounts every run
+    # leaves an anonymous volume behind that `docker compose down` does not remove.
+    tmpfs:
+      - /var/lib/postgresql/data
+      - /var/lib/postgresql
+    networks: [oog]
+    restart: "no"
+
+  # Git hosting. Objects (attachments, LFS, packages, avatars) go to the bucket OOG_GITEA_BUCKET in RustFS,
+  # repositories stay on the volume. The image has no HEALTHCHECK of its own.
+  gitea:
+    image: docker.gitea.com/gitea:${GITEA_VERSION:-28.2.0}-rootless
+    <<: *hardening
+    depends_on:
+      postgres:
+        condition: service_healthy
+      postgres-init:
+        condition: service_completed_successfully
+      rustfs:
+        condition: service_healthy
+      rustfs-init:
+        condition: service_completed_successfully
+    environment:
+      <<: [*gitea-db-env, *gitea-env]
+    ports:
+      - "127.0.0.1:${GITEA_HTTP_PORT-3000}:3000"
+      - "127.0.0.1:${GITEA_SSH_PORT-2222}:2222"
+    volumes:
+      - gitea-data:/var/lib/gitea
+    # The image renders /etc/gitea/app.ini from the environment on start. uid/gid are required (else
+    # "/etc/gitea is not writable"); the tmpfs also prevents an anonymous volume.
+    tmpfs:
+      - /etc/gitea:uid=1000,gid=1000,mode=0700
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:3000/api/healthz"]
+      # Every call writes a log line, hence the long interval; start_interval speeds up the first check.
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+      start_interval: 2s
+    networks: [oog]
+    restart: unless-stopped
+
+  # One-shot: create the admin account of Gitea (idempotent). Image: images/gitea-init.
+  gitea-init:
+    build:
+      context: .
+      dockerfile: images/gitea-init/Dockerfile
+      args:
+        GITEA_VERSION: ${GITEA_VERSION:-28.2.0}
+    image: oog/gitea-init:${OOG_IMAGE_TAG:-0.1.0}
+    pull_policy: never
+    <<: *hardening
+    depends_on:
+      gitea:
+        condition: service_healthy
+    environment:
+      <<: [*gitea-db-env, *oog-gitea-admin-env]
+      OOG_GITEA_ADMIN_EMAIL: ${OOG_GITEA_ADMIN_EMAIL:-admin@oog.local}
+      # Creates the private workspace repository (first commit = notebooks/ with the examples) if it is missing.
+      OOG_GITEA_URL: ${OOG_GITEA_URL:-http://gitea:3000}
+      OOG_GITEA_REPO: &workspace-repo ${OOG_GITEA_REPO:-oog-workspace}
+    # The entrypoint of the image renders app.ini from the environment, which the CLI needs.
+    tmpfs:
+      - /etc/gitea:uid=1000,gid=1000,mode=0700
+      - /var/lib/gitea:uid=1000,gid=1000,mode=0700
+    networks: [oog]
+    restart: "no"
+
+  # DuckDB server (Quack) that holds the metadata of the second DuckLake catalog. The data files are written by the
+  # clients to s3://<bucket>/ducklake-quack/. Image: images/quack. Quack clients use TLS for every host but
+  # localhost, so the server runs TLS with a self-signed certificate in the volume quack-certs. The service is not
+  # called "quack": the URI of a client (ducklake:quack:<host>:<port>) is parsed wrongly when the host is named quack.
+  duckdb:
+    build:
+      context: .
+      dockerfile: images/quack/Dockerfile
+      args:
+        DUCKDB_VERSION: ${DUCKDB_VERSION:-2.0.0}
+    image: oog/quack:${OOG_IMAGE_TAG:-0.1.0}
+    pull_policy: never
+    <<: *hardening
+    environment:
+      OOG_QUACK_PORT: *quack-port
+      OOG_QUACK_TOKEN: *quack-token
+    ports:
+      - "127.0.0.1:${QUACK_PORT-9494}:9494"
+    volumes:
+      - quack-data:/data
+      - quack-certs:/certs
+    networks: [oog]
+    restart: unless-stopped
+
+  # code-server (plain HTTP on 8080). Health check: HEALTHCHECK of the image (/healthz).
+  workbench:
+    build:
+      context: .
+      dockerfile: images/workbench/Dockerfile
+      args:
+        CODE_SERVER_VERSION: ${CODE_SERVER_VERSION:-4.144.0}
+        AANTJE_VERSION: ${AANTJE_VERSION:-latest}
+    image: oog/workbench:${OOG_IMAGE_TAG:-0.1.0}
+    pull_policy: never
+    <<: *hardening
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+      rustfs-init:
+        condition: service_completed_successfully
+      # Without a consumer a finished one-shot makes `up -d --wait` exit 1 (it reports "exited (0)").
+      gitea-init:
+        condition: service_completed_successfully
+      duckdb:
+        condition: service_healthy
+    environment:
+      <<: [*oog-s3-env, *oog-pg-env, *oog-gitea-admin-env, *oog-ducklake-env, *oog-quack-env]
+      OOG_QUACK_CA_FILE: /etc/oog/quack/quack.crt
+      # The standard AWS names for the RustFS credentials: the aantje extension reads its S3 credentials from the environment
+      # (never from the settings file); its endpoint comes from OOG_S3_ENDPOINT.
+      AWS_ACCESS_KEY_ID: *s3-access-key
+      AWS_SECRET_ACCESS_KEY: *s3-secret-key
+      OOG_CODE_SERVER_PASSWORD: &code-server-password ${OOG_CODE_SERVER_PASSWORD:-change-me}
+      OOG_DUCKDB_EXTENSION_DIR: ${OOG_DUCKDB_EXTENSION_DIR:-/opt/duckdb-extensions}
+      OOG_GITEA_URL: ${OOG_GITEA_URL:-http://gitea:3000}
+      OOG_GITEA_BUCKET: *gitea-bucket
+      # Cloned into /home/coder/workspace/<name> on the first start and opened; user.name/email for git.
+      OOG_GITEA_REPO: *workspace-repo
+      OOG_GITEA_ADMIN_EMAIL: ${OOG_GITEA_ADMIN_EMAIL:-admin@oog.local}
+    ports:
+      - "127.0.0.1:${WORKBENCH_PORT-8443}:8080"
+    volumes:
+      # The workspace repository (notebooks/) lives in <workspace>/<name>, a clone of the Gitea repository OOG_GITEA_REPO.
+      - workbench-workspace:/home/coder/workspace
+      # code-server user data (settings, secret storage, history); survives re-creation of the container.
+      - workbench-userdata:/home/coder/.local/share/code-server
+      # The certificate of the quack server (read-only): the workbench trusts exactly this certificate.
+      - quack-certs:/etc/oog/quack:ro
+    networks: [oog]
+    restart: unless-stopped
+
+# Resource names carry the project name (default "oog": network oog, volumes oog-rustfs-data, ...),
+# so a second project (docker compose -p <name> ...) never shares them with the real stack.
+networks:
+  oog:
+    name: ${COMPOSE_PROJECT_NAME:-oog}
+
+volumes:
+  rustfs-data:
+    name: ${COMPOSE_PROJECT_NAME:-oog}-rustfs-data
+  postgres-data:
+    name: ${COMPOSE_PROJECT_NAME:-oog}-postgres-data
+  workbench-workspace:
+    name: ${COMPOSE_PROJECT_NAME:-oog}-workbench-workspace
+  workbench-userdata:
+    name: ${COMPOSE_PROJECT_NAME:-oog}-workbench-userdata
+  gitea-data:
+    name: ${COMPOSE_PROJECT_NAME:-oog}-gitea-data
+  quack-data:
+    name: ${COMPOSE_PROJECT_NAME:-oog}-quack-data
+  quack-certs:
+    name: ${COMPOSE_PROJECT_NAME:-oog}-quack-certs

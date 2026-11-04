@@ -1,0 +1,27 @@
+# Allow-list: everything is excluded, then the runtime files are added back (vsce lets a "!" rule win over
+# every exclusion). Keep it in step with the file check in scripts/package.ps1 (Assert-VsixContents) and with
+# docs/en/packaging.md.
+# The screenshots of the README (media/workbench-*.png) are left out on purpose: vsce rewrites the relative image
+# and link paths of README.md and CHANGELOG.md to the GitHub URLs of package.json "repository".
+# README.md is not listed: scripts/package.ps1 passes a README derived from it with --readme-path, and vsce
+# adds that file as extension/readme.md itself.
+**
+!dist/extension.js
+!dist/sql-wasm.wasm
+!dist/grid-client.js
+!dist/report-client.js
+!media/icon.png
+!media/logo.png
+!media/aantje-activity.svg
+!package.json
+!CHANGELOG.md
+!LICENSE
+!THIRD-PARTY-NOTICES.md
+!docs/en/**
+# The native DuckDB bindings are the only runtime dependency that is not bundled. npm installs only the
+# binding of the platform it runs on, so each platform-specific VSIX gets exactly one.
+!node_modules/@duckdb/node-bindings*/**
+# Output of the extension-host tests (npm run test:integration). "**" leaves both out already; this says so.
+.vscode-test/**
+out/**
+test/.cache/**

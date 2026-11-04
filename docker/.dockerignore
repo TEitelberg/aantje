@@ -1,0 +1,52 @@
+# Build context = repository root for every self-built image (images/workbench, images/rustfs-init,
+# images/postgres-init, images/gitea-init). The Dockerfiles COPY from images/, notebooks/ and workspace/.
+# Patterns without a leading **/ only match at the root, so Markdown files below images/ stay.
+
+# Secrets and local configuration (never bake them into an image layer)
+**/.env*
+
+# VCS and editor/tool state
+.git
+.gitignore
+.gitattributes
+.dockerignore
+.vscode
+.idea
+.claude
+
+# Not needed by any image
+compose*.yaml
+compose*.yml
+*.md
+extensions
+
+# Python / Node / Jupyter artefacts
+**/__pycache__
+**/*.py[cod]
+**/.venv
+**/venv
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/*.egg-info
+**/.ipynb_checkpoints
+**/node_modules
+
+# Logs and OS noise
+**/*.log
+**/.DS_Store
+**/Thumbs.db
+
+# Notebooks: only the shipped examples (notebooks/local/NN-*.ipynb, notebooks/azure/NN-*.ipynb and the configuration
+# and helper of the Azure notebooks). Together with workspace/ (README and .gitignore of the repository root) they are
+# the seed of the workbench image (/opt/oog/workspace-seed) and of the gitea-init image (first commit of the Gitea
+# workspace repository). Other notebooks, outputs and data files must never be baked in.
+notebooks/*
+!notebooks/local
+notebooks/local/*
+!notebooks/local/[0-9][0-9]-*.ipynb
+!notebooks/azure
+notebooks/azure/*
+!notebooks/azure/[0-9][0-9]-*.ipynb
+!notebooks/azure/azure.config.json
+!notebooks/azure/azure_lake.py

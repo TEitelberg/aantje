@@ -1,0 +1,10 @@
+[
+    {
+        "name": "Oog Lakehouse",
+        "kind": "postgres",
+        "host": "postgres",
+        "database": "ducklake",
+        "user": "ducklake",
+        "ssl": false
+    }
+]

@@ -1,0 +1,26 @@
+# LF everywhere (repository and working tree): shell scripts and Dockerfiles break with CRLF.
+* text=auto eol=lf
+
+*.sh text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+Dockerfile text eol=lf
+Dockerfile.* text eol=lf
+*.dockerfile text eol=lf
+
+# PowerShell scripts too (5.1 and 7 run LF files; keep them ASCII-only, a BOM-less file is read as ANSI by 5.1).
+*.ps1 text eol=lf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.woff binary
+*.woff2 binary
+*.parquet binary
+*.duckdb binary

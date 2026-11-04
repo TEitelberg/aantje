@@ -1,0 +1,33 @@
+{
+  // Default user settings of the code-server container of the end-to-end harness. The supervisor copies this
+  // file to ~/.local/share/code-server/User/settings.json when it seeds the user data.
+  // Workspace Trust is switched off by a flag of the supervisor (it wins over any setting).
+
+  // Quiet start: no telemetry, no update or experiment calls, no welcome tab.
+  "telemetry.telemetryLevel": "off",
+  "update.mode": "none",
+  "update.showReleaseNotes": false,
+  "extensions.autoUpdate": "off",
+  "extensions.autoCheckUpdates": false,
+  "extensions.ignoreRecommendations": true,
+  "extensions.showRecommendationsOnlyOnDemand": true,
+  "workbench.enableExperiments": false,
+  "workbench.startupEditor": "none",
+  "workbench.tips.enabled": false,
+  "workbench.welcomePage.walkthroughs.openOnInstall": false,
+  "chat.disableAIFeatures": true,
+  // No schema downloads (schemastore.org) and no npm registry lookups when editing JSON files.
+  "json.schemaDownload.enable": false,
+  "npm.fetchOnlinePackageInfo": false,
+
+  // Python: no language server, no environment prompts.
+  "python.languageServer": "None",
+  "python.terminal.activateEnvironment": false,
+  "python.createEnvironment.trigger": "off",
+  "python.experiments.enabled": false,
+
+  // Jupyter: no confirmation dialogs.
+  "jupyter.askForKernelRestart": false,
+  "jupyter.askForLargeDataFrames": false,
+  "jupyter.experiments.enabled": false
+}

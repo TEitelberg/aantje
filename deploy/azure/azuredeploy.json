@@ -1,0 +1,286 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.47.16.16243",
+      "templateHash": "15875165860971480973"
+    }
+  },
+  "parameters": {
+    "namePrefix": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 11,
+      "metadata": {
+        "description": "Short prefix of the resource names: 3 to 11 lowercase letters, digits or hyphens, starting with a letter and not ending with a hyphen."
+      }
+    },
+    "size": {
+      "type": "string",
+      "defaultValue": "small",
+      "allowedValues": [
+        "small",
+        "medium"
+      ],
+      "metadata": {
+        "description": "Small: Burstable server, 32 GiB, locally redundant storage. Medium: General Purpose server, 128 GiB, zone-redundant storage."
+      }
+    },
+    "principalId": {
+      "type": "string",
+      "metadata": {
+        "description": "Object ID of the user (or service principal) that reads and writes the data files. It gets Storage Blob Data Contributor on the storage account."
+      }
+    },
+    "principalType": {
+      "type": "string",
+      "defaultValue": "User",
+      "allowedValues": [
+        "User",
+        "ServicePrincipal",
+        "Group"
+      ],
+      "metadata": {
+        "description": "Type of the principal."
+      }
+    },
+    "clientIp": {
+      "type": "string",
+      "metadata": {
+        "description": "Public IPv4 address that may connect to the PostgreSQL server. No other address is allowed."
+      }
+    },
+    "authentication": {
+      "type": "string",
+      "defaultValue": "password",
+      "allowedValues": [
+        "password",
+        "entra"
+      ],
+      "metadata": {
+        "description": "password: the local administrator login only. entra: Microsoft Entra authentication too, with the principal below as Entra administrator; the local login stays enabled as break-glass access."
+      }
+    },
+    "principalName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "User principal name (or display name) of the principal; the Entra administrator is registered under it. Needed for authentication entra, ignored otherwise."
+      }
+    },
+    "administratorLoginPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Password of the PostgreSQL administrator. It is never part of the outputs."
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Location of all resources. Leave it empty to use the location of the resource group."
+      }
+    },
+    "postgresVersion": {
+      "type": "string",
+      "defaultValue": "17",
+      "metadata": {
+        "description": "Major version of PostgreSQL. aantje passes the newest one that the region offers."
+      }
+    },
+    "uniqueSuffix": {
+      "type": "string",
+      "defaultValue": "[take(replace(newGuid(), '-', ''), 13)]",
+      "minLength": 8,
+      "metadata": {
+        "description": "Makes the resource names unique: by default the first 13 hex digits of a new GUID, so every deployment creates a new lake. Leave the default unless a caller needs to know the names in advance."
+      }
+    }
+  },
+  "variables": {
+    "sizes": {
+      "small": {
+        "serverSku": "Standard_B1ms",
+        "serverTier": "Burstable",
+        "storageSizeGB": 32,
+        "storageSku": "Standard_LRS"
+      },
+      "medium": {
+        "serverSku": "Standard_D2ds_v5",
+        "serverTier": "GeneralPurpose",
+        "storageSizeGB": 128,
+        "storageSku": "Standard_ZRS"
+      }
+    },
+    "preset": "[variables('sizes')[parameters('size')]]",
+    "entra": "[equals(parameters('authentication'), 'entra')]",
+    "administratorLogin": "ducklakeadmin",
+    "catalogUser": "[if(variables('entra'), parameters('principalName'), variables('administratorLogin'))]",
+    "databaseName": "ducklake_catalog",
+    "containerName": "lake",
+    "serverName": "[format('{0}-{1}-pg', parameters('namePrefix'), take(parameters('uniqueSuffix'), 13))]",
+    "storageAccountName": "[take(format('{0}{1}', replace(parameters('namePrefix'), '-', ''), parameters('uniqueSuffix')), 24)]",
+    "resourceLocation": "[if(empty(parameters('location')), resourceGroup().location, parameters('location'))]",
+    "storageBlobDataContributor": "ba92f5b4-2d11-453d-a403-e96b0029c9fe",
+    "postgresScope": "[format('https://ossrdbms-aad{0}/.default', environment().suffixes.sqlServerHostname)]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers",
+      "apiVersion": "2024-08-01",
+      "name": "[variables('serverName')]",
+      "location": "[variables('resourceLocation')]",
+      "sku": {
+        "name": "[variables('preset').serverSku]",
+        "tier": "[variables('preset').serverTier]"
+      },
+      "properties": {
+        "version": "[parameters('postgresVersion')]",
+        "administratorLogin": "[variables('administratorLogin')]",
+        "administratorLoginPassword": "[parameters('administratorLoginPassword')]",
+        "storage": {
+          "storageSizeGB": "[variables('preset').storageSizeGB]"
+        },
+        "backup": {
+          "backupRetentionDays": 7,
+          "geoRedundantBackup": "Disabled"
+        },
+        "highAvailability": {
+          "mode": "Disabled"
+        },
+        "authConfig": {
+          "activeDirectoryAuth": "[if(variables('entra'), 'Enabled', 'Disabled')]",
+          "passwordAuth": "Enabled",
+          "tenantId": "[if(variables('entra'), subscription().tenantId, null())]"
+        },
+        "network": {
+          "publicNetworkAccess": "Enabled"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers/databases",
+      "apiVersion": "2024-08-01",
+      "name": "[format('{0}/{1}', variables('serverName'), variables('databaseName'))]",
+      "properties": {
+        "charset": "UTF8",
+        "collation": "en_US.utf8"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('serverName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers/firewallRules",
+      "apiVersion": "2024-08-01",
+      "name": "[format('{0}/{1}', variables('serverName'), 'client-ip')]",
+      "properties": {
+        "startIpAddress": "[parameters('clientIp')]",
+        "endIpAddress": "[parameters('clientIp')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers/databases', variables('serverName'), variables('databaseName'))]",
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('serverName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers/configurations",
+      "apiVersion": "2024-08-01",
+      "name": "[format('{0}/{1}', variables('serverName'), 'require_secure_transport')]",
+      "properties": {
+        "value": "on",
+        "source": "user-override"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers/firewallRules', variables('serverName'), 'client-ip')]",
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('serverName'))]"
+      ]
+    },
+    {
+      "condition": "[variables('entra')]",
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers/administrators",
+      "apiVersion": "2024-08-01",
+      "name": "[format('{0}/{1}', variables('serverName'), parameters('principalId'))]",
+      "properties": {
+        "principalType": "[parameters('principalType')]",
+        "principalName": "[parameters('principalName')]",
+        "tenantId": "[subscription().tenantId]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers/configurations', variables('serverName'), 'require_secure_transport')]",
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('serverName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2023-05-01",
+      "name": "[variables('storageAccountName')]",
+      "location": "[variables('resourceLocation')]",
+      "kind": "StorageV2",
+      "sku": {
+        "name": "[variables('preset').storageSku]"
+      },
+      "properties": {
+        "isHnsEnabled": true,
+        "allowSharedKeyAccess": false,
+        "allowBlobPublicAccess": false,
+        "minimumTlsVersion": "TLS1_2",
+        "supportsHttpsTrafficOnly": true,
+        "defaultToOAuthAuthentication": true
+      }
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/blobServices",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}', variables('storageAccountName'), 'default')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/{1}/{2}', variables('storageAccountName'), 'default', variables('containerName'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices', variables('storageAccountName'), 'default')]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]",
+      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName')), parameters('principalId'), variables('storageBlobDataContributor'))]",
+      "properties": {
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataContributor'))]",
+        "principalId": "[parameters('principalId')]",
+        "principalType": "[parameters('principalType')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageAccountName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "ducklake": {
+      "type": "string",
+      "metadata": {
+        "description": "Everything aantje needs to connect, as JSON. It never contains the password. With authentication entra it says that an access token is the password."
+      },
+      "value": "[string(union(createObject('authentication', parameters('authentication'), 'attach', format('ATTACH ''ducklake:postgres:dbname={0} host={1} sslmode=verify-full sslrootcert=system user={2}'' AS lake (DATA_PATH ''abfss://{3}@{4}.dfs.{5}/data/'');', variables('databaseName'), reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('serverName')), '2024-08-01').fullyQualifiedDomainName, variables('catalogUser'), variables('containerName'), variables('storageAccountName'), environment().suffixes.storage), 'azureSecret', createObject('provider', 'access_token', 'accountName', variables('storageAccountName')), 'postgres', createObject('host', reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('serverName')), '2024-08-01').fullyQualifiedDomainName, 'database', variables('databaseName'), 'user', variables('catalogUser'), 'port', 5432)), if(variables('entra'), createObject('entraToken', createObject('scope', variables('postgresScope'), 'use', 'Pass an access token for this scope as the PostgreSQL password; it expires after about an hour.')), createObject())))]"
+    },
+    "postgresHost": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('serverName')), '2024-08-01').fullyQualifiedDomainName]"
+    },
+    "postgresServerName": {
+      "type": "string",
+      "value": "[variables('serverName')]"
+    },
+    "storageAccountName": {
+      "type": "string",
+      "value": "[variables('storageAccountName')]"
+    }
+  }
+}

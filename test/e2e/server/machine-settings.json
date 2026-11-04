@@ -1,0 +1,11 @@
+{
+  // Machine-scoped settings of the code-server container of the end-to-end harness. The supervisor copies this
+  // file to ~/.local/share/code-server/Machine/settings.json when it seeds the user data.
+
+  // S3 access of aantje. Without an endpoint every request goes to AWS. The specs that need a store set their own.
+  "aantje.s3.endpoint": "http://rustfs:9000",
+  "aantje.s3.urlStyle": "path",
+  "aantje.s3.region": "us-east-1",
+
+  "jupyter.experiments.enabled": false
+}

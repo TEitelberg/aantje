@@ -1,0 +1,31 @@
+{
+    // Machine-scoped settings that describe this image. The entrypoint copies the file to
+    // ~/.local/share/code-server/Machine/settings.json on every start, so these values belong to
+    // the image and are not meant to be edited at runtime. With the aantje extension installed,
+    // write-machine-settings.py appends the aantje connection setting (the profile "Oog Lakehouse") and
+    // keeps the connections users add later; it must not be added here, the image without aantje has none.
+
+    // S3 access of the aantje extension (RustFS). Without an endpoint every request goes to AWS and fails with NoSuchBucket/404.
+    // No credentials here: they come from AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY in the container environment.
+    // The settings are machine-scoped, so they belong in this file; they do nothing in an image without the extension.
+    "aantje.s3.endpoint": "http://rustfs:9000",
+    "aantje.s3.urlStyle": "path",
+    "aantje.s3.region": "us-east-1",
+
+    "python.defaultInterpreterPath": "/opt/oog-venv/bin/python",
+    "python.createEnvironment.trigger": "off",
+    "jupyter.experiments.enabled": false,
+
+    // The kernel "Oog" (kernelspec /usr/local/share/jupyter/kernels/oog, runs /opt/oog-venv) must be
+    // the only kernel the Jupyter extension offers: VS Code selects a notebook's kernel on its own
+    // only when exactly one kernel exists (no prompt, also for notebooks without kernelspec metadata).
+    // So the Python environments of the image are hidden from the kernel picker. Environments
+    // created later (e.g. a .venv in the workspace) still show up and are selected manually.
+    "jupyter.kernels.excludePythonEnvironments": [
+        "/opt/oog-venv/bin/python",
+        "/usr/bin/python3",
+        "/usr/bin/python3.13",
+        "/bin/python3",
+        "/bin/python3.13"
+    ]
+}

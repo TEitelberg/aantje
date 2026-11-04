@@ -1,0 +1,39 @@
+# VS Code extensions of the workbench image (Open VSX, https://open-vsx.org).
+# Installed at build time by install-extensions.sh into /opt/oog/extensions, outside of the
+# workspace volume (and not on a volume at all: extensions installed later in the UI are lost when
+# the container is re-created, permanent = this list plus a rebuild). Format: one
+# "publisher.name@version" per line. All versions are pinned and verified to be compatible with the
+# VS Code engine of the code-server version (1.144 for 4.144.0).
+# A line "-publisher.name" removes an extension that was pulled in as a pack member.
+#
+# Only the versions are pinned. code-server 4.144.0 turns VS Code's signature verification off
+# (downloadExtension forces verifySignature=false) and the VSIX downloads from Open VSX are not
+# checked against a digest, so the build trusts Open VSX and TLS.
+#
+# Check for newer versions with: curl -s https://open-vsx.org/api/<publisher>/<name> | jq .version
+
+# --- Python (Pylance is Microsoft-proprietary and not on Open VSX: the bundled Jedi language
+# server is used instead, see "python.languageServer" in settings.json).
+ms-python.python@2026.4.0
+ms-python.debugpy@2026.6.0
+# Pack member of ms-python.python. Inactive unless python.useEnvironmentsExtension is enabled, and
+# it needs a native binary that the Open VSX builds do not ship, so it is not installed.
+-ms-python.vscode-python-envs
+
+# --- Jupyter notebooks (the extension pack, listed explicitly so that every member is pinned)
+ms-toolsai.jupyter@2025.9.1
+ms-toolsai.jupyter-keymap@1.1.2
+ms-toolsai.jupyter-renderers@1.3.0
+ms-toolsai.vscode-jupyter-cell-tags@0.1.9
+ms-toolsai.vscode-jupyter-slideshow@0.1.6
+
+# --- CSV files (Parquet: look into a file in a notebook with con.sql("select * from 'file.parquet'"))
+mechatroner.rainbow-csv@3.24.1
+
+# --- Not installed on purpose: SQLTools + DuckDB driver (both exist on Open VSX and install fine).
+# The driver downloads its own DuckDB (@duckdb/node-api, DuckDB 1.5.x) with `npm` on the first
+# connection. The image has no node/npm in PATH, so no connection can be made, and it would be a
+# second, differently versioned DuckDB next to the DuckDB 2.0 of the notebooks (DuckLake catalogs
+# are version-sensitive). SQL runs in notebooks (%%sql) instead.
+# mtxr.sqltools@0.28.6
+# MaksimPeterburgskiy.duckdb-for-sqltools@2.0.2

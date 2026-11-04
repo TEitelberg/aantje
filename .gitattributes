@@ -1,0 +1,11 @@
+# Text files use LF in the working tree on every platform (the documentation test rejects CR).
+* text=auto eol=lf
+*.duckdb binary
+*.sqlite binary
+*.png binary
+*.jpg binary
+*.wasm binary
+*.parquet binary
+*.vsix binary
+*.af binary
+*.sh text eol=lf
