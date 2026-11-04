@@ -133,7 +133,7 @@ describe('Time Travel: Query at Snapshot, Compare Schema and Compare Snapshots',
         [
           {
             submenu: 'aantje.timeTravel',
-            when: 'view == aantje.catalogs && viewItem =~ /^(table|view)$/',
+            when: 'view == aantje.catalogs && viewItem =~ /^(table(\\.azure)?|view(\\.azure)?)$/',
             group: '2_travel',
           },
         ],
@@ -142,8 +142,8 @@ describe('Time Travel: Query at Snapshot, Compare Schema and Compare Snapshots',
         (menus['aantje.timeTravel'] ?? []).map(({ command, when }) => [command, when]),
         [
           ['aantje.queryAtSnapshot', undefined],
-          ['aantje.compareSchema', 'viewItem == table'],
-          ['aantje.showChanges', 'viewItem == table'],
+          ['aantje.compareSchema', 'viewItem =~ /^table(\\.azure)?$/'],
+          ['aantje.showChanges', 'viewItem =~ /^table(\\.azure)?$/'],
         ],
       );
       assert.deepEqual(

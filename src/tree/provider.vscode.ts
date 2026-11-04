@@ -2,6 +2,10 @@ import * as vscode from 'vscode';
 import type { CatalogTree } from './model';
 import type { TreeNode } from './refs';
 
+// Create Notebook cannot sign in to an Azure DuckLake: its tables and views get `.azure` on their context value, so
+// the menus offer everything else there and leave Create Notebook out.
+const MARKED_ON_AZURE = new Set(['table', 'view']);
+
 /** Maps the tree model to VS Code tree items; the model makes all decisions. */
 export class CatalogTreeProvider implements vscode.TreeDataProvider<TreeNode>, vscode.Disposable {
   private readonly changed = new vscode.EventEmitter<TreeNode | undefined>();
@@ -9,7 +13,10 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
 
   readonly onDidChangeTreeData = this.changed.event;
 
-  constructor(private readonly tree: CatalogTree) {
+  constructor(
+    private readonly tree: CatalogTree,
+    private readonly onAzureLake: (connectionId: string) => boolean = () => false,
+  ) {
     this.subscription = tree.onDidChange((node) => this.changed.fire(node));
   }
 
@@ -25,7 +32,10 @@ export class CatalogTreeProvider implements vscode.TreeDataProvider<TreeNode>, v
       node.icon,
       node.iconColor === undefined ? undefined : new vscode.ThemeColor(node.iconColor),
     );
-    item.contextValue = node.contextValue;
+    item.contextValue =
+      MARKED_ON_AZURE.has(node.contextValue) && this.onAzureLake(node.ref.connectionId)
+        ? `${node.contextValue}.azure`
+        : node.contextValue;
     if (node.command) {
       item.command = { command: node.command.id, title: node.command.title, arguments: [node] };
     }

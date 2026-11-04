@@ -116,7 +116,7 @@ describe('Show Changes and Show Rows Changed', function () {
       assert.ok(hidden.includes('aantje.showChanges') && hidden.includes('aantje.showSnapshotChanges'));
       assert.deepEqual(
         (menus['aantje.timeTravel'] ?? []).filter(({ command }) => command === 'aantje.showChanges'),
-        [{ command: 'aantje.showChanges', when: 'viewItem == table', group: 'travel@3' }],
+        [{ command: 'aantje.showChanges', when: 'viewItem =~ /^table(\\.azure)?$/', group: 'travel@3' }],
       );
       assert.deepEqual(
         (menus['view/item/context'] ?? []).filter(({ command }) => command === 'aantje.showSnapshotChanges'),

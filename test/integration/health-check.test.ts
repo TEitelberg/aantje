@@ -178,7 +178,7 @@ describe('the Health check', function () {
         [
           'aantje.checkHealth viewItem =~ /^connection\\.connected(\\.azure)?$/',
           'aantje.checkHealth viewItem =~ /^schema(\\.main)?$/',
-          'aantje.checkTableHealth viewItem == table',
+          'aantje.checkTableHealth viewItem =~ /^table(\\.azure)?$/',
         ],
       );
     });

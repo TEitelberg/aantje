@@ -461,27 +461,27 @@
       "aantje.script": [
         {
           "command": "aantje.scriptSelect",
-          "when": "viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table|view|macro|column(\\.member)?|viewColumn|snapshot|detail\\.table|folder\\.(tables|views|macros|columns|viewColumns|partitioning|sortOrder|tags|statistics|history|snapshots))$/",
+          "when": "viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table(\\.azure)?|view(\\.azure)?|macro|column(\\.member)?|viewColumn|snapshot|detail\\.table|folder\\.(tables|views|macros|columns|viewColumns|partitioning|sortOrder|tags|statistics|history|snapshots))$/",
           "group": "1_select@1"
         },
         {
           "command": "aantje.scriptInsert",
-          "when": "viewItem =~ /^table$/",
+          "when": "viewItem =~ /^table(\\.azure)?$/",
           "group": "1_select@2"
         },
         {
           "command": "aantje.scriptCreate",
-          "when": "viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table|view|macro|column|folder\\.(tables|views|macros|columns|partitioning|sortOrder))$/",
+          "when": "viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table(\\.azure)?|view(\\.azure)?|macro|column|folder\\.(tables|views|macros|columns|partitioning|sortOrder))$/",
           "group": "2_define@1"
         },
         {
           "command": "aantje.scriptAlter",
-          "when": "viewItem =~ /^(table|view|macro|column(\\.member)?|folder\\.(columns|partitioning|sortOrder|tags))$/",
+          "when": "viewItem =~ /^(table(\\.azure)?|view(\\.azure)?|macro|column(\\.member)?|folder\\.(columns|partitioning|sortOrder|tags))$/",
           "group": "2_define@2"
         },
         {
           "command": "aantje.scriptDrop",
-          "when": "viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table|view|macro|column|folder\\.(tables|views|macros|columns|partitioning|sortOrder|tags))$/",
+          "when": "viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table(\\.azure)?|view(\\.azure)?|macro|column|folder\\.(tables|views|macros|columns|partitioning|sortOrder|tags))$/",
           "group": "3_drop"
         }
       ],
@@ -493,17 +493,17 @@
         },
         {
           "command": "aantje.maintenanceMerge",
-          "when": "viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table)$/",
+          "when": "viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table(\\.azure)?)$/",
           "group": "2_files@2"
         },
         {
           "command": "aantje.maintenanceRewrite",
-          "when": "viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table)$/",
+          "when": "viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table(\\.azure)?)$/",
           "group": "2_files@3"
         },
         {
           "command": "aantje.maintenanceFlush",
-          "when": "viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table)$/",
+          "when": "viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table(\\.azure)?)$/",
           "group": "2_files@4"
         },
         {
@@ -523,7 +523,7 @@
         },
         {
           "command": "aantje.maintenanceOption",
-          "when": "viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table)$/",
+          "when": "viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table(\\.azure)?)$/",
           "group": "4_options@8"
         }
       ],
@@ -567,7 +567,7 @@
         },
         {
           "command": "aantje.refresh",
-          "when": "view == aantje.catalogs && viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|folder\\.(tables|views|macros)|table|view)$/",
+          "when": "view == aantje.catalogs && viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|folder\\.(tables|views|macros)|table(\\.azure)?|view(\\.azure)?)$/",
           "group": "inline@3"
         },
         {
@@ -602,32 +602,32 @@
         },
         {
           "command": "aantje.copyName",
-          "when": "view == aantje.catalogs && viewItem =~ /^(schema(\\.main)?|table|view|column(\\.member)?|viewColumn)$/",
+          "when": "view == aantje.catalogs && viewItem =~ /^(schema(\\.main)?|table(\\.azure)?|view(\\.azure)?|column(\\.member)?|viewColumn)$/",
           "group": "2_copy@1"
         },
         {
           "command": "aantje.copyDdl",
-          "when": "view == aantje.catalogs && viewItem =~ /^(table|view)$/",
+          "when": "view == aantje.catalogs && viewItem =~ /^(table(\\.azure)?|view(\\.azure)?)$/",
           "group": "2_copy@2"
         },
         {
           "command": "aantje.newQuery",
-          "when": "view == aantje.catalogs && viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table|view)$/",
+          "when": "view == aantje.catalogs && viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table(\\.azure)?|view(\\.azure)?)$/",
           "group": "2_query@1"
         },
         {
           "submenu": "aantje.script",
-          "when": "view == aantje.catalogs && viewItem =~ /^(column|column\\.member|connection\\.connected(\\.azure)?|detail\\.table|macro|schema(\\.main)?|snapshot|table|view|viewColumn|folder\\.(columns|history|macros|partitioning|snapshots|sortOrder|statistics|tables|tags|viewColumns|views))$/",
+          "when": "view == aantje.catalogs && viewItem =~ /^(column|column\\.member|connection\\.connected(\\.azure)?|detail\\.table|macro|schema(\\.main)?|snapshot|table(\\.azure)?|view(\\.azure)?|viewColumn|folder\\.(columns|history|macros|partitioning|snapshots|sortOrder|statistics|tables|tags|viewColumns|views))$/",
           "group": "2_script"
         },
         {
           "submenu": "aantje.maintenance",
-          "when": "view == aantje.catalogs && viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table)$/",
+          "when": "view == aantje.catalogs && viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table(\\.azure)?)$/",
           "group": "2_script_maintenance"
         },
         {
           "submenu": "aantje.timeTravel",
-          "when": "view == aantje.catalogs && viewItem =~ /^(table|view)$/",
+          "when": "view == aantje.catalogs && viewItem =~ /^(table(\\.azure)?|view(\\.azure)?)$/",
           "group": "2_travel"
         },
         {
@@ -647,7 +647,7 @@
         },
         {
           "command": "aantje.previewTable",
-          "when": "view == aantje.catalogs && viewItem =~ /^(table|view)$/",
+          "when": "view == aantje.catalogs && viewItem =~ /^(table(\\.azure)?|view(\\.azure)?)$/",
           "group": "3_data@1"
         },
         {
@@ -657,7 +657,7 @@
         },
         {
           "submenu": "aantje.reports",
-          "when": "view == aantje.catalogs && viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table|view|macro)$/",
+          "when": "view == aantje.catalogs && viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table(\\.azure)?|view(\\.azure)?|macro)$/",
           "group": "3_reports"
         },
         {
@@ -673,17 +673,17 @@
         {
           "command": "aantje.allowMyIp",
           "when": "view == aantje.catalogs && viewItem =~ /^connection\\.(connected|disconnected|error)\\.azure$/",
-          "group": "9_danger@0"
+          "group": "9_azure@0"
         },
         {
           "command": "aantje.copyAzureConfig",
           "when": "view == aantje.catalogs && viewItem =~ /^connection\\.(connected|disconnected|error)\\.azure$/",
-          "group": "1_connection@4"
+          "group": "9_azure@1"
         },
         {
           "command": "aantje.deleteAzureLake",
           "when": "view == aantje.catalogs && viewItem =~ /^connection\\.(connected|disconnected|error)\\.azure$/",
-          "group": "9_danger@1"
+          "group": "9_azure@2"
         }
       ],
       "commandPalette": [
@@ -903,12 +903,12 @@
         },
         {
           "command": "aantje.compareSchema",
-          "when": "viewItem == table",
+          "when": "viewItem =~ /^table(\\.azure)?$/",
           "group": "travel@2"
         },
         {
           "command": "aantje.showChanges",
-          "when": "viewItem == table",
+          "when": "viewItem =~ /^table(\\.azure)?$/",
           "group": "travel@3"
         }
       ],
@@ -957,12 +957,12 @@
         },
         {
           "command": "aantje.showStatistics",
-          "when": "viewItem == table",
+          "when": "viewItem =~ /^table(\\.azure)?$/",
           "group": "2_table@1"
         },
         {
           "command": "aantje.showSchemaHistory",
-          "when": "viewItem == table",
+          "when": "viewItem =~ /^table(\\.azure)?$/",
           "group": "2_table@2"
         },
         {
@@ -1002,7 +1002,7 @@
         },
         {
           "command": "aantje.checkTableHealth",
-          "when": "viewItem == table",
+          "when": "viewItem =~ /^table(\\.azure)?$/",
           "group": "2_table@3"
         },
         {
@@ -1022,17 +1022,17 @@
         },
         {
           "command": "aantje.showGrowth",
-          "when": "viewItem == table",
+          "when": "viewItem =~ /^table(\\.azure)?$/",
           "group": "2_table@5"
         },
         {
           "command": "aantje.showDependencies",
-          "when": "viewItem == table",
+          "when": "viewItem =~ /^table(\\.azure)?$/",
           "group": "2_table@4"
         },
         {
           "command": "aantje.showDependencies",
-          "when": "viewItem == view",
+          "when": "viewItem =~ /^view(\\.azure)?$/",
           "group": "3_view@1"
         },
         {

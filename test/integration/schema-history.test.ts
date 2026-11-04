@@ -140,7 +140,7 @@ describe('Show Schema History', () => {
       );
       assert.deepEqual(menus, [
         ['commandPalette', 'false', undefined],
-        ['aantje.reports', 'viewItem == table', '2_table@2'],
+        ['aantje.reports', 'viewItem =~ /^table(\\.azure)?$/', '2_table@2'],
       ]);
     });
   });
