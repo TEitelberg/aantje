@@ -141,15 +141,34 @@ aantje_installed() {
 }
 
 # Machine/settings.json is rewritten from the image on every start. With aantje it also gets the profile
-# "Oog Lakehouse" (no password: aantje asks on the first connect and keeps it in the secret storage of
-# the user data dir). Connections that users add in aantje land in this file as well, so the script
-# carries the existing "aantje.connections" array over instead of replacing it.
+# "Oog Lakehouse" and, when the Quack server has created its certificate, "Oog Quack" (no password or token:
+# aantje asks on the first connect and keeps it in the secret storage of the user data dir). Connections that
+# users add in aantje land in this file as well, so the script carries the existing "aantje.connections" array
+# over and adds the profiles that are missing, instead of replacing it.
+#
+# The Quack connection pins the certificate of the server (self-signed, in the read-only volume that is mounted
+# next to OOG_QUACK_CA_FILE): the fingerprint is computed on every start.
+write_quack_profile() {
+    [ -n "${OOG_QUACK_CA_FILE:-}" ] && [ -r "$OOG_QUACK_CA_FILE" ] || return 1
+    fp="$(openssl x509 -in "$OOG_QUACK_CA_FILE" -noout -fingerprint -sha256 2>/dev/null | sed 's/^.*=//')"
+    [ -n "$fp" ] || return 1
+    printf '[{"name": "Oog Quack", "kind": "quack", "host": "%s", "port": %s, "ssl": true, "fingerprint": "%s"}]\n' \
+        "${OOG_QUACK_HOST:-duckdb}" "${OOG_QUACK_PORT:-9494}" "$fp" > "$1"
+}
+
 write_machine_settings() {
     if aantje_installed; then
+        quack_profile="$USER_DATA_DIR/Machine/.quack-profile.json"
+        if ! write_quack_profile "$quack_profile"; then
+            rm -f "$quack_profile"
+            log "note: no certificate of the Quack server found, the connection \"Oog Quack\" is not preconfigured"
+        fi
         python "$DEFAULTS_DIR/write-machine-settings.py" "$DEFAULTS_DIR/machine-settings.json" \
             "$USER_DATA_DIR/Machine/settings.json" "$DEFAULTS_DIR/aantje-connections.json" \
+            $([ -f "$quack_profile" ] && echo "$quack_profile") \
             || { log "warning: could not write the aantje connection profile, using the plain machine settings"
                  cp --no-preserve=mode "$DEFAULTS_DIR/machine-settings.json" "$USER_DATA_DIR/Machine/settings.json"; }
+        rm -f "$quack_profile"
     else
         cp --no-preserve=mode "$DEFAULTS_DIR/machine-settings.json" "$USER_DATA_DIR/Machine/settings.json"
     fi

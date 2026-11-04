@@ -41,7 +41,8 @@ password before the stack is reachable by anyone else. All ports are published o
 ## Try it
 
 1. In the activity bar open **aantje** and connect to **Oog Lakehouse** (Postgres password from `.env`,
-   default `change-me-pg`). The catalog is empty until you load data.
+   default `change-me-pg`). The catalog is empty until you load data. **Oog Quack** is the connection to the Quack
+   server (token `OOG_QUACK_TOKEN`, default `change-me-quack`, asked for on the first connect).
 2. Open `notebooks/local/01-medallion-generator.ipynb`, pick the kernel **Oog** and run all cells: it writes raw Parquet
    extracts of an online shop (10 tables, September 2026, one extract per day) to `s3://oog-lake/bronze/`.
    Set `SCALE` in the first cell (for example `0.01`) for a quick run; `1.0` is up to a million order items per day.
@@ -141,9 +142,11 @@ After changing a Dockerfile or a build argument run `docker compose build`. The 
 The workbench image installs aantje from Open VSX as `teitelberg.aantje`, in the version of `AANTJE_VERSION` (`.env`, default `latest`). Docker keeps the layer of that step, so to update the image set the number of the new version, for example `AANTJE_VERSION=0.1.9`, and run `docker compose up -d --build`. The Extensions view of the workbench also shows when a newer version exists; **Update** installs it until the container is re-created (the extension folder belongs to the image). A volume that already has a `settings.json` keeps its old value of `extensions.autoCheckUpdates`; set it to `true` there to see the notice. To try a package you built yourself, put its VSIX
 into `images/workbench/aantje/` (`aantje-linux-x64*.vsix` or `aantje-linux-arm64*.vsix`); the build then installs that file
 instead, and `*.vsix` is not tracked by Git. The connection
-profile "Oog Lakehouse" and the S3 settings for RustFS are preconfigured (`images/workbench/code-server/`); S3
-credentials come from the `AWS_*` variables of the container. The Postgres password is asked for on the first connect and kept in
-the code-server secret storage.
+profiles "Oog Lakehouse" and "Oog Quack" and the S3 settings for RustFS are preconfigured (`images/workbench/code-server/`);
+S3 credentials come from the `AWS_*` variables of the container. The Postgres password and the Quack token are asked for
+on the first connect and kept in the code-server secret storage. "Oog Quack" pins the certificate of the Quack server
+(its SHA-256 fingerprint is computed on every start); an existing installation gets the profile added and keeps its own
+connections.
 
 ## Layout
 
