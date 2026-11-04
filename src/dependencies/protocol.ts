@@ -1,10 +1,11 @@
-import { isArrayOf, isCount, isObject, isOneOf, isShape, isString, own } from '../guards';
+import { isArrayOf, isCount, isObject, isOneOf, isOptional, isShape, isString, own } from '../guards';
 import { isReportScope } from '../shell/scope';
 import { actionGuard } from '../shell/protocol';
 import type { ActionMessage } from '../shell/protocol';
 import { NODE_KINDS, UNRESOLVED_REASONS } from './graph';
 import type { DependenciesMarkdownView } from './markdown';
 import { DEPTHS, DIRECTIONS } from './model';
+import { GRAPH_REACHES } from './picture';
 import type { DependenciesData } from './model';
 
 type DependenciesMessage = { readonly type: 'dependencies'; readonly data: DependenciesData };
@@ -76,9 +77,10 @@ export const isDependenciesAction: (value: unknown) => value is DependenciesActi
   scriptDrop: { node: isCount },
 }) as unknown as (value: unknown) => value is DependenciesAction;
 
-/** The choices that Open as Markdown may name: direction, depth and the lake filter. */
+/** The choices that Open as Markdown may name: direction, depth, the lake filter and what the graph holds. */
 export const isDependenciesView: (value: unknown) => value is DependenciesMarkdownView = isShape({
   direction: isOneOf(...DIRECTIONS),
   depth: isOneOf(...DEPTHS),
   text: isString,
+  reach: isOptional(isOneOf(...GRAPH_REACHES)),
 }) as (value: unknown) => value is DependenciesMarkdownView;

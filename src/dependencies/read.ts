@@ -114,14 +114,19 @@ function restrict(graph: DependencyGraph, keep: readonly number[]): DependencyGr
   };
 }
 
-/** The report of the whole lake: the objects that use or are used by another, or that have a problem. */
-export function lakeData(graph: DependencyGraph, connection: string, snapshot: SnapshotId): DependenciesData {
-  const involved = new Set([
+// The objects that use or are used by another, or that have a problem, in node order.
+function involvedNodes(graph: DependencyGraph): number[] {
+  const nodes = new Set([
     ...graph.edges.flatMap(({ from, to }) => [from, to]),
     ...graph.broken.map(({ from }) => from),
     ...graph.unresolved.map(({ node }) => node),
   ]);
-  const keep = [...involved].sort((a, b) => a - b);
+  return [...nodes].sort((a, b) => a - b);
+}
+
+/** The report of the whole lake: the objects that use or are used by another, or that have a problem. */
+export function lakeData(graph: DependencyGraph, connection: string, snapshot: SnapshotId): DependenciesData {
+  const keep = involvedNodes(graph);
   return {
     ...restrict(graph, keep),
     connection,
@@ -162,7 +167,11 @@ export function schemaData(
   };
 }
 
-/** One object with everything it uses and everything that uses it; undefined if the graph lacks it. */
+/**
+ * One object with everything it uses and everything that uses it, and the other objects of the lake that have
+ * dependencies, which the graph shows on Show all. The problems are only those of the object and of the objects it
+ * reaches. Undefined if the graph lacks the object.
+ */
 export function objectData(
   graph: DependencyGraph,
   connection: string,
@@ -173,15 +182,19 @@ export function objectData(
   if (start < 0) {
     return undefined;
   }
-  const keep = [
-    ...new Set([
+  const keep = [...new Set([start, ...involvedNodes(graph)])].sort((a, b) => a - b);
+  const data = restrict(graph, keep);
+  const reached = new Set(
+    [
       start,
       ...traverse(graph, start, 'usedBy', 1).reached,
       ...traverse(graph, start, 'dependsOn', 1).reached,
-    ]),
-  ].sort((a, b) => a - b);
+    ].map((old) => keep.indexOf(old)),
+  );
   return {
-    ...restrict(graph, keep),
+    ...data,
+    broken: data.broken.filter(({ from }) => reached.has(from)),
+    unresolved: data.unresolved.filter(({ node }) => reached.has(node)),
     connection,
     scope: LAKE_SCOPE,
     snapshot,

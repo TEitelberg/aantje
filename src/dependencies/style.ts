@@ -2,6 +2,7 @@ import { SHELL_CSS } from '../shell/style';
 
 /** The Dependencies stylesheet: the shell sheet plus the rules of the indented list and the detail pane. */
 export const DEPENDENCIES_CSS = `${SHELL_CSS}
+[hidden] { display: none !important; }
 .direction { display: inline-flex; gap: 4px; }
 .keylist.objects button { font-family: var(--vscode-editor-font-family); }
 .keylist .sign { display: inline-block; min-width: 2.2em; color: var(--vscode-descriptionForeground); }

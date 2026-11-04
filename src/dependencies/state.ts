@@ -1,9 +1,17 @@
 import { isNullOr, isOneOf, isOptional, isShape, isString } from '../guards';
 import { DEPTHS, DIRECTIONS, nodeKey } from './model';
 import type { DependenciesData, Direction } from './model';
+import { GRAPH_REACHES } from './picture';
+import type { GraphReach } from './picture';
+
+/** How the page shows the objects. */
+export type DependenciesShow = 'list' | 'graph';
+export const SHOWS: readonly DependenciesShow[] = ['list', 'graph'];
 
 // Kept while the panel is hidden or the data is read again.
 interface Choices {
+  readonly show: DependenciesShow;
+  readonly reach: GraphReach;
   readonly direction: Direction;
   readonly depth: number;
   readonly text: string;
@@ -16,6 +24,9 @@ interface SavedState {
   readonly connection: string;
   // `kind:id` of the object of the report; null for the lake.
   readonly target: string | null;
+  // Missing in the state of an older version.
+  readonly show?: DependenciesShow | undefined;
+  readonly reach?: GraphReach | undefined;
   readonly direction: Direction;
   readonly depth: number;
   readonly text: string;
@@ -25,6 +36,8 @@ interface SavedState {
 const isSavedState = isShape({
   connection: isString,
   target: isNullOr(isString),
+  show: isOptional(isOneOf(...SHOWS)),
+  reach: isOptional(isOneOf(...GRAPH_REACHES)),
   direction: isOneOf(...DIRECTIONS),
   depth: isOneOf(...DEPTHS),
   text: isString,
@@ -41,6 +54,8 @@ export function saveChoices(data: DependenciesData, choices: Choices): SavedStat
   return {
     connection: data.connection,
     target: targetKey(data),
+    show: choices.show,
+    reach: choices.reach,
     direction: choices.direction,
     depth: choices.depth,
     text: choices.text,
@@ -59,6 +74,8 @@ export function restoreDependenciesChoices(saved: unknown, data: DependenciesDat
   }
   const selected = data.nodes.findIndex((node) => nodeKey(node) === state.selected);
   return {
+    show: state.show ?? 'list',
+    reach: state.reach ?? 'connected',
     direction: state.direction,
     depth: state.depth,
     text: state.text,

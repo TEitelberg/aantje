@@ -150,7 +150,7 @@ The files that each folder has:
 ```text
 activity/            actions chart-options commands.vscode execute kind markdown model page protocol read render state style
 advisor/             actions commands.vscode kind markdown measure model page protocol read recommend script style
-dependencies/        actions commands.vscode execute graph kind markdown model page parser protocol read references render state style
+dependencies/        actions commands.vscode execute graph graph-option graph-pane kind markdown model page parser picture protocol read references render state style
 growth/              actions chart-options commands.vscode kind markdown model page protocol read render state style
 health-report/       actions batcher commands.vscode controller error-action.vscode kind markdown model offer page perform.vscode protocol render style
 properties-report/   commands.vscode kind model page protocol

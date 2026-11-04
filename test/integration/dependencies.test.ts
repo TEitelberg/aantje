@@ -112,7 +112,8 @@ describe('Show Dependencies', () => {
 
     it('opens the report of a view and of a macro, each in a panel of its own, and shows the same panel again for the same object', async () => {
       const view = await open(bigEvents());
-      assert.deepEqual(names(dataOf(view)), ['shop.big_events', 'shop.events']);
+      // Every object of the lake with dependencies, for Show all in the graph.
+      assert.deepEqual(names(dataOf(view)), ['shop.big_events', 'shop.events', 'shop.recent_events']);
 
       await open(recentEvents());
       assert.equal(webviews.length, 2);

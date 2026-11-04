@@ -38,7 +38,8 @@ if (!events) {
 
 describe('the Markdown document of the report of an object', () => {
   it('shows who uses the table level by level, what a drop breaks and that nothing is broken, with the names as code', () => {
-    expect(dependenciesMarkdown(events)).toBe(
+    // The graph has a test of its own.
+    expect(dependenciesMarkdown(events).replace(/## Graph\n[\s\S]*?\n```\n\n/, '')).toBe(
       [
         '# Dependencies of shop\\.events',
         '',
@@ -88,7 +89,7 @@ describe('the Markdown document of the report of an object', () => {
     expect(text).toContain('| Direction | Used by |');
     expect(text).toContain('| Depth | 1 |');
     expect(text).not.toContain('| 2 |');
-    expect(text.match(/^## /gm)).toHaveLength(4);
+    expect(text.match(/^## /gm)).toHaveLength(5);
     expect(text).not.toContain('## Depends on');
     // The drop still counts everything behind the depth, the second level included.
     expect(text).toContain('breaks 3 objects');

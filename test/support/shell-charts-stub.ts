@@ -6,6 +6,7 @@ declare const drawn: {
   option: Record<string, unknown>;
   onPlotClick: ((x: number, extend: boolean) => void) | undefined;
   onItemClick: ((index: number) => void) | undefined;
+  onItemDoubleClick: ((index: number) => void) | undefined;
   disposed: boolean;
   resized: number;
   updates: Record<string, unknown>[];
@@ -23,6 +24,7 @@ export function drawChart(
   option: Record<string, unknown>,
   onPlotClick?: (x: number, extend: boolean) => void,
   onItemClick?: (index: number) => void,
+  onItemDoubleClick?: (index: number) => void,
 ): Chart {
   const entry: (typeof drawn)[number] = {
     element,
@@ -30,6 +32,7 @@ export function drawChart(
     option,
     onPlotClick,
     onItemClick,
+    onItemDoubleClick,
     disposed: false,
     resized: 0,
     updates: [],

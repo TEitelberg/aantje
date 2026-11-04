@@ -1,10 +1,21 @@
 /// <reference lib="dom" />
 // DOM builders of the Dependencies page. They take the state they show and report user input through callbacks.
-import { actionButton, dataTable, empty, keyList, note, tableRow, truncation } from '../shell/blocks';
+import {
+  actionButton,
+  dataTable,
+  empty,
+  keyList,
+  note,
+  searchBox,
+  tableRow,
+  truncation,
+} from '../shell/blocks';
 import { el } from '../shell/dom';
 import {
   BROKEN_KIND,
   DEPENDENCIES_KIND_LABEL,
+  DEPTHS,
+  DIRECTIONS,
   DIRECTION_LABEL,
   KIND_SIGN,
   MAX_ISSUES,
@@ -20,17 +31,28 @@ import {
   traverse,
 } from './model';
 import type { DependenciesData, Direction } from './model';
+import type { GraphReach } from './picture';
 import type { DependenciesActionId } from './protocol';
+import type { DependenciesShow } from './state';
 
 const DETAIL_NAMES = 30;
 
 type Ask = (action: DependenciesActionId, node: number) => void;
 
-function actionsFor(current: DependenciesData, node: number, ask: Ask): HTMLElement {
+// `visualize` is given while the list shows: the graph is then one click away.
+function actionsFor(
+  current: DependenciesData,
+  node: number,
+  ask: Ask,
+  visualize: ((node: number) => void) | undefined,
+): HTMLElement {
   const found = current.nodes[node];
   const name = nameAt(current, node);
   const actions = el('div', 'actions');
   actions.append(
+    ...(visualize
+      ? [actionButton('Visualize', () => visualize(node), `Show ${name} in the graph of the dependencies`)]
+      : []),
     actionButton('Show in tree', () => ask('showInTree', node), `Show ${name} in the tree`),
     ...(found?.kind === 'table'
       ? [actionButton('Statistics', () => ask('showStatistics', node), `Show the statistics of ${name}`)]
@@ -85,10 +107,11 @@ export function detailChildren(
   data: DependenciesData | undefined,
   selected: number | undefined,
   ask: Ask,
+  visualize?: (node: number) => void,
 ): HTMLElement[] {
   const node = selected === undefined ? undefined : data?.nodes[selected];
   if (!data || selected === undefined || !node) {
-    return [note('Select an object in the list to see what you can do with it.')];
+    return [note('Select an object in the list or the graph to see what you can do with it.')];
   }
   return [
     el(
@@ -96,7 +119,7 @@ export function detailChildren(
       undefined,
       `${KIND_SIGN[node.kind]} ${nameAt(data, selected)} · ${DEPENDENCIES_KIND_LABEL[node.kind]}`,
     ),
-    actionsFor(data, selected, ask),
+    actionsFor(data, selected, ask, visualize),
     ...(data.target === null
       ? [...neighbours(data, selected, 'usedBy'), ...neighbours(data, selected, 'dependsOn')]
       : []),
@@ -289,6 +312,71 @@ export function choice<T extends string | number>(
     group.append(button);
   }
   return group;
+}
+
+export interface ToolbarChoices {
+  readonly show: DependenciesShow;
+  readonly reach: GraphReach;
+  readonly direction: Direction;
+  readonly depth: number;
+  readonly text: string;
+}
+
+/**
+ * The controls: List or Graph, then the filter of the lake, or the direction, the depth and what the graph of an object
+ * holds. `listOnly` and `graphOnly` are hidden in the other view.
+ */
+export function toolbarChildren(
+  current: DependenciesData,
+  choices: ToolbarChoices,
+  onChange: (change: Partial<ToolbarChoices>) => void,
+): {
+  readonly children: HTMLElement[];
+  readonly listOnly: HTMLElement[];
+  readonly graphOnly: HTMLElement[];
+} {
+  const shows = choice(
+    'Show as',
+    [
+      { value: 'list' as const, text: 'List' },
+      { value: 'graph' as const, text: 'Graph' },
+    ],
+    choices.show,
+    (show) => onChange({ show }),
+  );
+  if (current.target === null) {
+    const search = searchBox('Object', choices.text, (text) => onChange({ text }));
+    return { children: [shows, search], listOnly: [search], graphOnly: [] };
+  }
+  const reaches = choice(
+    'Objects in the graph',
+    [
+      { value: 'connected' as const, text: 'Connected' },
+      { value: 'all' as const, text: 'Show all' },
+    ],
+    choices.reach,
+    (reach) => onChange({ reach }),
+  );
+  return {
+    children: [
+      shows,
+      choice(
+        'Direction',
+        DIRECTIONS.map((value) => ({ value, text: DIRECTION_LABEL[value] })),
+        choices.direction,
+        (direction) => onChange({ direction }),
+      ),
+      choice(
+        'Depth',
+        DEPTHS.map((value) => ({ value, text: `Depth ${value}` })),
+        choices.depth,
+        (depth) => onChange({ depth }),
+      ),
+      reaches,
+    ],
+    listOnly: [],
+    graphOnly: [reaches],
+  };
 }
 
 export function impactSection(current: DependenciesData, target: number, ask: Ask): HTMLElement {
