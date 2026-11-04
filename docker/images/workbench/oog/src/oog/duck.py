@@ -27,7 +27,7 @@ def extension_dir() -> str | None:
     return os.environ.get(EXTENSION_DIR_VAR, "").strip() or None
 
 
-def connect(settings: Settings | None = None, *, attach: bool = True) -> duckdb.DuckDBPyConnection:
+def connect(settings: Settings | None = None, *, attach: bool = True, lake: str = "postgres") -> duckdb.DuckDBPyConnection:
     """Open an in-memory DuckDB connection wired to the Oog stack.
 
     Loads httpfs/postgres/ducklake from the pre-installed extension directory (connect() itself
@@ -36,6 +36,10 @@ def connect(settings: Settings | None = None, *, attach: bool = True) -> duckdb.
     as ``settings.ducklake_name`` and makes it the default catalog. With ``settings.quack_token`` the DuckLake that a DuckDB
     server serves over Quack is attached as ``settings.quack_name`` as well (a failure only warns). Spill files go to a private
     directory under the system temp dir, not into the working directory.
+
+    ``lake="quack"`` attaches only the Quack-served DuckLake (``settings.quack_name``) and makes it the default catalog:
+    no Postgres secret, no Postgres catalog, and a failure to attach it is an error, not a warning (it needs
+    ``settings.quack_token``).
 
     Small inserts are not inlined into the Postgres catalog, so every insert writes Parquet files
     that other engines and tools can read: ``DATA_INLINING_ROW_LIMIT 0`` in the ATTACH, plus (once per catalog)
@@ -49,7 +53,11 @@ def connect(settings: Settings | None = None, *, attach: bool = True) -> duckdb.
     """
     import duckdb
 
+    if lake not in ("postgres", "quack"):
+        raise ValueError(f"lake must be 'postgres' or 'quack', not {lake!r}")
     s = settings or Settings.from_env()
+    if attach and lake == "quack" and not s.quack_token:
+        raise RuntimeError("lake='quack' needs the Quack token: OOG_QUACK_TOKEN is not set")
     ext_dir = extension_dir()
     # DuckDB spills to a relative ".tmp" by default, i.e. into the notebook folder (a bind mount under Compose)
     spill = os.path.join(tempfile.gettempdir(), "oog-duckdb")
@@ -62,7 +70,10 @@ def connect(settings: Settings | None = None, *, attach: bool = True) -> duckdb.
         for name in EXTENSIONS:
             _load(con, name, ext_dir)
         _run(con, lambda: _s3_secret_sql(s), "creating the S3 secret", s)
-        if attach:
+        if attach and lake == "quack":
+            _attach_quack(con, s, strict=True)
+            con.execute(f"USE {quote_ident(s.quack_name)}")
+        elif attach:
             _run(con, lambda: _pg_secret_sql(s), "creating the Postgres secret", s)
             _run(con, lambda: _attach_sql(s), f"attaching DuckLake {s.ducklake_name!r}", s)
             _disable_inlining(con, s.ducklake_name)
@@ -95,8 +106,8 @@ def _run(con: duckdb.DuckDBPyConnection, build: Callable[[], str], what: str, s:
         raise RuntimeError(f"{what} failed: {redact(str(exc), s)}") from None
 
 
-def _attach_quack(con: duckdb.DuckDBPyConnection, s: Settings) -> None:
-    """Attach the Quack-served DuckLake as ``s.quack_name`` (only with a token). A failure is a warning: the kernel stays usable."""
+def _attach_quack(con: duckdb.DuckDBPyConnection, s: Settings, *, strict: bool = False) -> None:
+    """Attach the Quack-served DuckLake as ``s.quack_name`` (only with a token). A failure is a warning (the kernel stays usable), with ``strict`` an error."""
     if not s.quack_token:
         return
     try:
@@ -114,6 +125,8 @@ def _attach_quack(con: duckdb.DuckDBPyConnection, s: Settings) -> None:
         )
         _disable_inlining(con, s.quack_name)
     except RuntimeError as exc:
+        if strict:
+            raise
         warnings.warn(f"oog: {exc}", RuntimeWarning, stacklevel=3)
 
 

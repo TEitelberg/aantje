@@ -9,6 +9,7 @@ notebooks/local/   the medallion demo on the local DuckLake (DuckDB):
                    01-medallion-generator  creates raw test data (Parquet) for an online shop
                    02-medallion-pipeline   loads Bronze, Silver and Gold, one load date at a time
                    03-medallion-cleanup    undoes it again (dry run by default)
+notebooks/quack/   the same three notebooks for the DuckLake that the Quack server serves (catalog oog_quack)
 notebooks/azure/   the same three notebooks for an Azure DuckLake; the connection data is in
                    azure.config.json (read through azure_lake.py), see the README of the stack
 ```
@@ -43,4 +44,5 @@ cp -R /opt/oog/workspace-seed/notebooks/. ~/workspace/<repository name>/notebook
 ```
 
 The notebooks used to be directly in `notebooks/`. A repository from an earlier version keeps them there: after the
-copy remove the old `notebooks/0?-*.ipynb` files (`git rm`) so that only `local/` and `azure/` are left.
+copy remove the old `notebooks/0?-*.ipynb` files (`git rm`) so that only `local/`, `quack/` and `azure/` are left. The notebooks 02 and 03 in `local/` lost the `LAKE` switch:
+they work in the DuckLake on PostgreSQL only; use `quack/` for the Quack server.

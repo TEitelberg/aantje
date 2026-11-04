@@ -37,14 +37,17 @@ extensions
 **/.DS_Store
 **/Thumbs.db
 
-# Notebooks: only the shipped examples (notebooks/local/NN-*.ipynb, notebooks/azure/NN-*.ipynb and the configuration
-# and helper of the Azure notebooks). Together with workspace/ (README and .gitignore of the repository root) they are
+# Notebooks: only the shipped examples (notebooks/local/NN-*.ipynb, notebooks/quack/NN-*.ipynb, notebooks/azure/NN-*.ipynb and the
+# configuration and helper of the Azure notebooks). Together with workspace/ (README and .gitignore of the repository root) they are
 # the seed of the workbench image (/opt/oog/workspace-seed) and of the gitea-init image (first commit of the Gitea
 # workspace repository). Other notebooks, outputs and data files must never be baked in.
 notebooks/*
 !notebooks/local
 notebooks/local/*
 !notebooks/local/[0-9][0-9]-*.ipynb
+!notebooks/quack
+notebooks/quack/*
+!notebooks/quack/[0-9][0-9]-*.ipynb
 !notebooks/azure
 notebooks/azure/*
 !notebooks/azure/[0-9][0-9]-*.ipynb

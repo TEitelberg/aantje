@@ -50,12 +50,14 @@ password before the stack is reachable by anyone else. All ports are published o
    `LOAD_WHOLE_MONTH = True` loads every day in a loop. The notebook proves that repeating a day changes nothing.
 4. Refresh the catalog in aantje: schemas `bronze`, `silver`, `gold`, `ops`, snapshots and table changes.
 5. `03-medallion-cleanup.ipynb` undoes it (every step has a switch; the default is a dry run).
-6. To build the same lake on the Quack server, set `LAKE = "oog_quack"` in the first cell of notebooks 02 and 03. The
-   catalogs `oog` (PostgreSQL) and `oog_quack` then hold the same schemas, tables, views and macros; their snapshot
-   histories are separate.
+6. To build the same lake on the Quack server, use the notebooks in `notebooks/quack/`: the same three, but the lake is
+   the catalog `oog_quack` that the DuckDB server serves over Quack (no PostgreSQL catalog). The catalogs `oog`
+   (PostgreSQL) and `oog_quack` then hold the same schemas, tables, views and macros; their snapshot histories are
+   separate.
 
-The notebooks of this tour are in `notebooks/local/`. `notebooks/azure/` has the same three notebooks for an Azure
-DuckLake ([below](#azure-notebooks)).
+The notebooks of this tour are in `notebooks/local/` (DuckLake on PostgreSQL) and `notebooks/quack/` (DuckLake on the
+Quack server). `notebooks/azure/` has the same three notebooks for an Azure DuckLake ([below](#azure-notebooks)).
+The Quack server and its token are described in [The Quack server](#the-quack-server).
 
 ## Azure notebooks
 
@@ -151,6 +153,7 @@ the code-server secret storage.
 compose.yaml            the stack
 .env.example            settings (demo defaults)
 notebooks/local/        the three medallion notebooks for the local stack (seed of the Gitea repository and of the workbench)
+notebooks/quack/        the same three for the DuckLake on the Quack server (catalog oog_quack)
 notebooks/azure/        the same three for an Azure DuckLake, with azure.config.json and azure_lake.py
 workspace/              README and .gitignore of the Gitea repository
 images/workbench/       code-server, Python venv with the oog helper package, start page, aantje
@@ -168,6 +171,6 @@ The images `oog/*` are built locally and never pulled; the Docker Hub namespace 
 - **Port already in use:** set the host port in `.env` (for example `WORKBENCH_PORT=18443`); an empty value picks a free port.
 - **`oog_quack` is not attached:** the kernel and `python -m oog.smoke` print a warning with the reason. Check
   `docker compose logs duckdb`, that `OOG_QUACK_TOKEN` is the same for both services and that the volume `oog-quack-certs` holds the certificate the server uses (after removing it, remove `oog-quack-data` and restart both services).
-- **The notebooks are still directly in `notebooks/` or `local/` and `azure/` are missing:** the workspace repository is filled once, on the first start. See "Restoring the examples" in `workspace/README.md` (copy the new folders and remove the old files), or start from scratch.
+- **The notebooks are still directly in `notebooks/`, or `local/`, `quack/` and `azure/` are missing:** the workspace repository is filled once, on the first start. See "Restoring the examples" in `workspace/README.md` (copy the new folders and remove the old files), or start from scratch.
 - **aantje asks for a password:** the Postgres password (`OOG_PG_PASSWORD`), default `change-me-pg`.
 - **Start from scratch:** `docker compose down -v`, then `docker compose up -d --build --wait`.
