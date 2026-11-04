@@ -127,9 +127,10 @@ function credentialFindings({ dataPath, credentials }: ConnectionFacts): HealthF
   ];
 }
 
-function endpointFindings({ s3, credentials }: ConnectionFacts): HealthFinding[] {
+// aantje.s3.* are settings of the machine, not of the connection: they concern only a lake whose data is on S3.
+function endpointFindings({ dataPath, s3, credentials }: ConnectionFacts): HealthFinding[] {
   const endpoint = s3.endpoint ?? '';
-  if (endpoint === '') return [];
+  if (endpoint === '' || dataPath === null || !isS3(dataPath)) return [];
   const { host, path } = hostOf(endpoint);
   const findings: HealthFinding[] = [];
   if (

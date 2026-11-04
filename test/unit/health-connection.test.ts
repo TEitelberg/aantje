@@ -130,9 +130,8 @@ describe('the setup problems that show without asking the store', () => {
 
   it('warns about the virtual-host style on an IP address or localhost, and about a path in the endpoint, with the setting to change', () => {
     const s3 = (endpoint: string, urlStyle?: 'vhost' | 'path') =>
-      configFindings(
-        facts({ s3: { endpoint, urlStyle }, credentials: undefined, dataPath: null }),
-        undefined,
+      configFindings(facts({ s3: { endpoint, urlStyle }, credentials: undefined }), undefined).filter(
+        (item) => item.id !== 'connection.credentials-missing',
       );
 
     for (const endpoint of ['127.0.0.1:9000', 'http://10.0.0.5:9000', 'localhost:9000']) {
@@ -150,7 +149,9 @@ describe('the setup problems that show without asking the store', () => {
 
   it('warns when stored or environment credentials go to an endpoint in cleartext, not to a local one, TLS or a bare host, and not without credentials', () => {
     const cleartext = (endpoint: string, credentials: ConnectionFacts['credentials']): string[] =>
-      idsOf(configFindings(facts({ s3: { endpoint }, credentials, dataPath: null }), undefined));
+      idsOf(configFindings(facts({ s3: { endpoint }, credentials }), undefined)).filter(
+        (id) => id !== 'connection.credentials-missing',
+      );
 
     for (const endpoint of ['http://minio.local:9000', 'HTTP://10.0.0.5:9000', 'http://store.example.com']) {
       expect(cleartext(endpoint, 'stored'), endpoint).toEqual(['connection.endpoint-cleartext']);
@@ -169,6 +170,28 @@ describe('the setup problems that show without asking the store', () => {
     const [stored] = configFindings(facts({ s3: { endpoint: 'http://minio.local:9000' } }), undefined);
     expect(stored).toMatchObject({ severity: 'warning', settingKey: 's3.endpoint' });
     expect(stored?.detail).toContain('"http://minio.local:9000"');
+  });
+
+  it('leaves the S3 settings alone for a lake whose data is not on S3, as an Azure DuckLake next to a local RustFS', () => {
+    // The settings belong to the machine: an endpoint in cleartext, the virtual-host style on an IP, a path.
+    const s3 = { endpoint: 'http://10.0.0.5:9000/bucket', urlStyle: 'vhost' } as const;
+    for (const dataPath of [
+      'abfss://lake@account.dfs.core.windows.net/data/',
+      'az://lake/data/',
+      'gs://lake/data/',
+      '/data/lake/',
+      null,
+    ]) {
+      expect(
+        configFindings(facts({ dataPath, s3, credentials: 'environment' }), true),
+        String(dataPath),
+      ).toEqual([]);
+    }
+    expect(idsOf(configFindings(facts({ s3, credentials: 'environment' }), undefined)).toSorted()).toEqual([
+      'connection.endpoint-cleartext',
+      'connection.endpoint-with-path',
+      'connection.url-style-vhost-ip',
+    ]);
   });
 });
 

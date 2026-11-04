@@ -159,7 +159,7 @@ Consistency checks are one statement each, with the count of all offending rows 
 
 ### Connection and configuration
 
-Static checks need no request. A failed request is classified from the text DuckDB gives (see [What the store says](#what-the-store-says-when-it-fails)).
+Static checks need no request. A failed request is classified from the text DuckDB gives (see [What the store says](#what-the-store-says-when-it-fails)). The `aantje.s3.*` settings belong to the machine, not to a connection, so the checks of the S3 endpoint and the S3 credentials run only for a lake whose `data_path` starts with `s3://` or `s3a://`. A lake on Azure, Google Cloud Storage or the local disk gets none of them.
 
 | Id                                 | Severity       | What it finds, and what to do                                                                                                           |
 | ---------------------------------- | -------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
