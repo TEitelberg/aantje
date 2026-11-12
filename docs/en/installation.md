@@ -1,6 +1,6 @@
 # Installation
 
-The extension id is `teitelberg.aantje`. Install it by id (`code --install-extension teitelberg.aantje`) or from a VSIX package. There is one VSIX per platform, because it contains the native DuckDB engine of that platform. Download it from the [releases page](https://github.com/TEitelberg/aantje/releases), or build it yourself ([Packaging](packaging.md)).
+The extension id is `teitelberg.aantje`. It is published on the [Open VSX Registry](https://open-vsx.org/extension/teitelberg/aantje), so editors that use Open VSX (VSCodium, code-server) install it by id. Desktop VS Code installs from the Visual Studio Marketplace, where aantje is not published; there you install a VSIX package. There is one VSIX per platform, because it contains the native DuckDB engine of that platform. Download it from the [releases page](https://github.com/TEitelberg/aantje/releases), or build it yourself ([Packaging](packaging.md)).
 
 ## Platforms
 
@@ -15,10 +15,16 @@ Install the package of the platform that runs the **extension host**. In code-se
 
 ## Install
 
-Desktop VS Code, by id or from a VSIX:
+Editors that use Open VSX, by id:
 
 ```bash
-code --install-extension teitelberg.aantje
+codium --install-extension teitelberg.aantje
+code-server --install-extension teitelberg.aantje
+```
+
+Desktop VS Code, from the VSIX of your platform:
+
+```bash
 code --install-extension aantje-win32-x64-0.1.0.vsix
 ```
 

@@ -8,6 +8,8 @@ Explorer, time travel and SQL editor for [DuckLake](https://ducklake.select) cat
 
 Project site: [aantje.dev](https://aantje.dev). Source and issues: [github.com/TEitelberg/aantje](https://github.com/TEitelberg/aantje).
 
+**Install from [Open VSX](https://open-vsx.org/extension/teitelberg/aantje)** (VSCodium, code-server and other editors that use the Open VSX Registry), or from the [releases page](https://github.com/TEitelberg/aantje/releases) as a VSIX package.
+
 aantje adds an explorer to the Activity Bar and a SQL editor. It runs in desktop VS Code and in code-server.
 
 - Browse schemas, tables, views, macros and columns.
@@ -50,11 +52,14 @@ The complete list of features and their limits is in [Features](docs/en/features
 
 ## Installation
 
-Search for `aantje` in the Extensions view, or install it from the command line:
+aantje is published on the [Open VSX Registry](https://open-vsx.org/extension/teitelberg/aantje). Search for `aantje` in the Extensions view of an editor that uses Open VSX (VSCodium, code-server), or install it from the command line:
 
 ```sh
-code --install-extension teitelberg.aantje
+codium --install-extension teitelberg.aantje
+code-server --install-extension teitelberg.aantje
 ```
+
+For VS Code, which uses the Visual Studio Marketplace, install the VSIX package (see below).
 
 Or install the VSIX package of your platform from the [releases page](https://github.com/TEitelberg/aantje/releases) (or [build it yourself](docs/en/packaging.md)) with **Extensions: Install from VSIX...** or `code --install-extension aantje-win32-x64-0.1.0.vsix`.
 
