@@ -1,6 +1,6 @@
 # Installation
 
-The extension id is `teitelberg.aantje`. It is published on the [Open VSX Registry](https://open-vsx.org/extension/teitelberg/aantje), so editors that use Open VSX (VSCodium, code-server) install it by id. Desktop VS Code installs from the Visual Studio Marketplace, where aantje is not published; there you install a VSIX package. There is one VSIX per platform, because it contains the native DuckDB engine of that platform. Download it from the [releases page](https://github.com/TEitelberg/aantje/releases), or build it yourself ([Packaging](packaging.md)).
+The extension id is `teitelberg.aantje`. It is published on the [Open VSX Registry](https://open-vsx.org/extension/teitelberg/aantje), so editors that use Open VSX (VSCodium, code-server) install it by id. Desktop VS Code installs from the Visual Studio Marketplace, where aantje is not published; there you install a VSIX package. There is one VSIX per platform, because it contains the native DuckDB engine of that platform. Download it from the [releases page](https://github.com/TEitelberg/aantje/releases).
 
 ## Platforms
 
@@ -38,7 +38,7 @@ code-server --install-extension aantje-linux-x64-0.1.0.vsix
 
 Add `--extensions-dir <dir>` for a non-default extensions directory. Run the command as the user that runs code-server. Reload the browser tab afterwards. In a container the extension is gone when the container is re-created, so install it while you build the image.
 
-VS Code does not compare the platform of a VSIX with the platform of the host. A package of the wrong platform installs without a message; the first DuckDB connection then reports "The native DuckDB engine could not be loaded on this platform". Remove the extension and install the right package ([Packaging](packaging.md#a-package-for-the-wrong-platform)). To build the packages yourself, see [Packaging](packaging.md).
+VS Code does not compare the platform of a VSIX with the platform of the host. A package of the wrong platform installs without a message; the first DuckDB connection then reports "The native DuckDB engine could not be loaded on this platform". Remove the extension and install the right package.
 
 ## Settings are machine scope
 

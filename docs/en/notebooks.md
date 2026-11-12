@@ -98,23 +98,6 @@ The cells never contain a password or a key. `NotebookSpec` has no field for the
 
 A notebook created while the tree is pinned to a snapshot gets `SNAPSHOT = <id>` and attaches with `SNAPSHOT_VERSION <id>`. One created while the tree follows the latest snapshot gets `SNAPSHOT = None` and reads the newest state on every run. Change the variable and run from the configuration cell on to travel in time. **Query at Snapshot...** with **Create Notebook** ([Time travel](time-travel.md)) creates a notebook pinned to any snapshot at which the table exists.
 
-## Design decisions
-
-- **One literal helper.** Every value from a profile, setting or table name goes through `pyString`. It escapes the backslash, quote, line breaks, tabs, control characters, line and paragraph separators, lone surrogates and invisible format characters (including bidirectional overrides: a name must not make code look different from what runs). Umlauts, CJK and emoji stay readable. The triple-quoted query is escaped the same way.
-- **Quoted identifiers** use `qualifiedName` from `src/catalog/ddl.ts`. Names in Markdown cells are inline code (`inlineCode`, `src/tree/format.ts`).
-- **Tables and views.** The notebook is offered for both. A view holds arbitrary SQL of the catalog author, and the session has external access, so a view could read local files. The command therefore asks once per connection target before it uses a view and writes the cells only after the confirmation ([Views and trust](data-access.md#views-and-trust)). A table only reads its Parquet files.
-- **Read-only.** The catalog is attached `READ_ONLY`, except a Quack catalog: DuckDB 2.0.0 accepts `READ_ONLY` on a Quack attach without enforcing it, and newer quack builds refuse it (`READ_ONLY is not currently supported for Quack databases`), so aantje attaches a Quack catalog without it, with `CREATE_IF_NOT_EXISTS false` instead. The last cell says that the server decides what the token may change.
-- **Pure core, thin adapter.** All decisions are in `build.ts` and `python.ts`.
-
-## Testing
-
-```bash
-npx vitest run test/unit/notebook-python.test.ts test/unit/notebook-build.test.ts
-AANTJE_NOTEBOOK=1 npx vitest run test/unit/notebook-run.test.ts
-```
-
-The first two files run in a second: the whole notebook for `sales.orders` as a golden text, the connection cell for each catalog kind, pinned snapshots, S3 settings, hostile names, the deletion of secrets and the absence of secrets in the cells. `notebook-run.test.ts` is opt-in (`AANTJE_NOTEBOOK=1` or `npm run test:full`; it needs Docker and network): it runs the cells in a `python:3.12-slim` container against the data fixtures for SQLite and DuckDB catalogs, checks the returned rows including time travel and on a lake without the schema `main`, that a write is refused, that the executed statements equal `setupStatements` plus `USE lake` (13 fixed and 60 random hostile scenarios), and that every code cell is valid Python.
-
 ## Limits
 
 - An Azure DuckLake (a PostgreSQL connection with a storage account) gets no notebook: the cells cannot load the `azure` extension, sign in to the storage account or to PostgreSQL with Microsoft Entra. The context menu of its tables and views does not offer Create Notebook (they carry the context value `table.azure` or `view.azure`), and a call from elsewhere is refused with a pointer to the SQL editor; the Azure notebooks of the [Docker stack](../../docker/README.md#azure-notebooks) cover that case.

@@ -101,29 +101,3 @@ The approach reads text, so it has the limits of text.
 ## Security
 
 The page uses the policy of the other reports (`default-src 'none'`, nonce for style and script, `localResourceRoots` `dist`), and data arrives by `postMessage` after `ready`. Catalog text is put in with `textContent`. The page asks for an action by id and one index (`isDependenciesAction` accepts exactly the six ids with one number; the extension checks the number against the data it sent). The page validates what it receives (`isDependenciesMessage`). The parser runs in its own in-memory DuckDB with external access off and no extensions, never executes the text, and its answer is only read as JSON.
-
-## Modules
-
-| File                                        | Job                                                                                            |
-| ------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `src/dependencies/parser.ts`                | `openSqlParser`: the isolated DuckDB with `json_serialize_sql` and the built-in function list. |
-| `src/dependencies/references.ts`            | `extract`: tables, views and functions in a parsed document, with CTE scopes. Pure.            |
-| `src/dependencies/graph.ts`                 | `buildGraph`: nodes, edges, broken and unresolved references, name resolution, limits. Pure.   |
-| `src/dependencies/read.ts`                  | `readGraph` (cache per snapshot and connection), `objectData`, `lakeData`.                     |
-| `src/dependencies/model.ts`                 | `DependenciesData`, `traverse`, `dropImpact`, `issuesOf`, `lakeRows`, key figures. Pure.       |
-| `src/dependencies/picture.ts`               | `picture`: the boxes and arrows of the graph in columns along the data flow. Pure.             |
-| `src/dependencies/graph-option.ts`          | `graphOption`: the ECharts series of the graph. Pure.                                          |
-| `src/dependencies/actions.ts`, `execute.ts` | `planDependenciesAction` and its execution through a port.                                     |
-| `src/dependencies/protocol.ts`, `state.ts`  | Message, action and view guards; the choices a hidden page keeps.                              |
-| `src/dependencies/markdown.ts`              | `dependenciesMarkdown`, `mermaidGraph`.                                                        |
-| `src/dependencies/kind.ts`, `style.ts`      | The `ReportKind` and stylesheet.                                                               |
-| `src/dependencies/page.ts`, `render.ts`     | The browser side; `graph-pane.ts` draws the graph.                                             |
-| `src/dependencies/commands.vscode.ts`       | `registerDependenciesCommand`: command, progress, panels, action port.                         |
-
-## Tests
-
-```text
-npx vitest run test/unit/dependencies-
-```
-
-Unit tests run the real parser on joins, subqueries, set operations, CTEs, lambdas and hostile names; check the exact edges of the history fixture and edited copies (cycles, diamonds, dropped objects, deeply nested views); and compare name resolution with what a real DuckLake returns (SQLite, PostgreSQL with `AANTJE_POSTGRES=1`). Others cover the cache, the model, the guards, the Markdown, the actions and the page bundle against a DOM stand-in. The integration test runs in a real VS Code.

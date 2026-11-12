@@ -61,7 +61,7 @@ code-server --install-extension teitelberg.aantje
 
 For VS Code, which uses the Visual Studio Marketplace, install the VSIX package (see below).
 
-Or install the VSIX package of your platform from the [releases page](https://github.com/TEitelberg/aantje/releases) (or [build it yourself](docs/en/packaging.md)) with **Extensions: Install from VSIX...** or `code --install-extension aantje-win32-x64-0.1.0.vsix`.
+Or install the VSIX package of your platform from the [releases page](https://github.com/TEitelberg/aantje/releases) with **Extensions: Install from VSIX...** or `code --install-extension aantje-win32-x64-0.1.0.vsix`.
 
 [Installation](docs/en/installation.md) describes the platforms and how to preconfigure connections for a whole machine.
 
@@ -148,7 +148,7 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md) and report it [private
 
 ## Documentation
 
-[Documentation index](docs/en/index.md): [Features](docs/en/features.md) and their limits, architecture, development and testing. [CONTRIBUTING.md](CONTRIBUTING.md) explains how to propose a change. [CHANGELOG.md](CHANGELOG.md) lists the changes of each release.
+[Documentation index](docs/en/index.md): [Features](docs/en/features.md) and their limits, and how to use aantje. [CHANGELOG.md](CHANGELOG.md) lists the changes of each release.
 
 ## Author
 

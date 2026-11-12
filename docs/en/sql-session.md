@@ -2,53 +2,6 @@
 
 `src/sql` holds a long-lived DuckDB session that runs any SQL against the DuckLake, for the [SQL editor](sql-editor.md). It is free of the VS Code API and is tested against the real engine. The explorer stays read-only: tree, tooltips, snapshot selection and search read through the read-only drivers, so a mistake in a session cannot damage the tree, and the tree works with a database user who may only read.
 
-## Public API
-
-```ts
-// src/sql/session.ts
-export type SessionMode = 'read-write' | 'read-only';
-export type TransactionState = 'none' | 'open' | 'aborted';
-
-export interface SqlSessionOptions {
-  readonly access: DataAccess; // the same description of a connection as for the data preview
-  readonly mode: SessionMode;
-  readonly maxRows?: number; // default 10 000
-  readonly signal?: AbortSignal; // cancels the opening
-}
-
-export function openSqlSession(options: SqlSessionOptions): Promise<SqlSession>;
-
-export interface SqlSession {
-  readonly mode: SessionMode;
-  readonly inTransaction: TransactionState;
-  run(
-    script: string,
-    options?: { signal?: AbortSignal; maxRows?: number; maxCells?: number },
-  ): AsyncIterable<SqlEvent>;
-  cancel(): void;
-  close(): Promise<void>;
-}
-
-export type SqlEvent =
-  | { kind: 'start'; index: number; statementType: string; sql: string; offset: number }
-  | {
-      kind: 'resultSet';
-      index: number;
-      columns: GridColumn[];
-      rows: GridValue[][];
-      truncated: boolean;
-      elapsedMs: number;
-    }
-  | { kind: 'message'; index: number; text: string; rowsAffected?: number; elapsedMs: number }
-  | { kind: 'error'; index: number; message: string; position?: { offset: number; length: number } };
-```
-
-- A session belongs to one editor, so transactions stay apart. The editor opens it on first use and closes it with the editor.
-- `mode: 'read-write'` attaches the lake without `READ_ONLY`, `'read-only'` with it. This switch is the only guard of aantje: everything else the credentials allow runs. A session never sets a `DATA_PATH`; the catalog decides where the data lives. The editor opens a Quack catalog always `read-write` ([What read-only means](#what-read-only-means)).
-- A result set holds what the grid preview shows for the same table: type names, `kind`, values (big integers and `DECIMAL` as text, nested values as compact JSON).
-- Positions (`offset`, `length`) are UTF-16 offsets into the script passed to `run`. DuckDB reports UTF-8 byte offsets and display columns; the session converts them.
-- Error translation is `translateSqlError` in `src/sql/errors.ts`; the setup statements come from `setupStatements` in `src/data/attach.ts`, shared with the data preview.
-
 ## Lifecycle
 
 `openSqlSession`:
@@ -98,7 +51,7 @@ The session has no `diagnose`. The marks while typing come from the language ser
 
 ## Errors
 
-Every message goes through `maskSecrets` (`src/secrets.ts`) with the PostgreSQL password or Quack token and the S3 keys of the access, also for statements the user typed. Then `translateSqlError` (a table of patterns, in order) turns the engine's text into advice. On a Quack catalog it tries the table of `quackProblem` in `src/data/errors.ts` first ([Quack driver](driver-quack.md#errors)): token refused or missing, refused by the server's authorization function, server unreachable, TLS. The session does not attach again after a server restart; `Invalid connection id` says to close the session (status bar menu) and run the statement again. The other rules:
+Every message goes through `maskSecrets` (`src/secrets.ts`) with the PostgreSQL password or Quack token and the S3 keys of the access, also for statements the user typed. Then `translateSqlError` (a table of patterns, in order) turns the engine's text into advice. On a Quack catalog it tries the table of `quackProblem` in `src/data/errors.ts` first: token refused or missing, refused by the server's authorization function, server unreachable, TLS. The session does not attach again after a server restart; `Invalid connection id` says to close the session (status bar menu) and run the statement again. The other rules:
 
 - Read-only session: a write is refused with a message that names the switch (also for `merge_adjacent_files`, `flush_inlined_data` and `CHECKPOINT`).
 - `Current transaction is aborted`: run ROLLBACK. `Transaction conflict`: another writer changed the same table first, run the statement again.
@@ -145,12 +98,3 @@ The session runs everything the credentials allow, with external access on (a no
 - Not changeable at run time: `allow_unsigned_extensions`, `access_mode`. `SET enable_external_access = false` works and cannot be undone.
 - Autoinstall and autoload are off, so a function from an extension that is not loaded fails instead of downloading; an explicit `INSTALL` and `LOAD` works.
 - The `sql` of a `start` event is the user's text; results are data. Neither is scrubbed.
-
-## Testing
-
-```bash
-npx vitest run test/unit/sql-script.test.ts test/unit/sql-errors.test.ts test/unit/sql-attach.test.ts test/unit/sql-session.test.ts
-AANTJE_POSTGRES=1 npx vitest run test/unit/sql-postgres.test.ts
-```
-
-The tests use the real engine on private copies of the SQLite and DuckDB fixtures: tokenizer and positions (ASCII, CJK, emoji), the engine texts the error table relies on, the setup statements (no `DATA_PATH`, the password only in the secret), DDL and DML seen through the real reader, transactions across runs, read-only mode and its known gaps, cancel, hostile scripts, large results, file locks. The PostgreSQL test needs Docker.

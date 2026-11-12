@@ -77,45 +77,6 @@ Extension to page: `results-begin`, `results-event`, `results-end` and `results-
 - A hidden panel loses its page (no retained context). When shown again it loads, says `ready` and gets the whole run again.
 - **The cap is 2,000,000 cells** (`MAX_RESULT_CELLS`, rows times columns over all result sets of a run). The editor passes it to the session as `maxCells` ([SQL session](sql-session.md)): a result that fits stays whole, one that does not is cut to whole rows and marked truncated, and later result sets get what is left. A new run replaces the last one. Only the first line of the script is kept.
 
-## Modules
-
-| File                          | Job                                                                                                   |
-| ----------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `src/grid/model.ts`           | Pure functions: cell text, sort, filter, CSV/TSV, status text, saved view, row window.                |
-| `src/grid/protocol.ts`        | Messages between page and extension, `isWebviewMessage`, `rowKindsOf`, the transfer limits.           |
-| `src/grid/html.ts`            | `gridHtml`: the page with its policy.                                                                 |
-| `src/grid/style.ts`           | The stylesheet, inlined into the page.                                                                |
-| `src/grid/client.ts`          | The browser entry: the state of the page (rows in view, focused cell, selected tab) and its DOM.      |
-| `src/grid/render.ts`          | DOM builders for headers, rows, toolbar and table.                                                    |
-| `src/grid/grid.vscode.ts`     | `GridPanels` and `createGridDeps` (clipboard, save dialog): the VS Code side.                         |
-| `src/grid/results-model.ts`   | State and reducer of a run, tab labels, selection rule, end-of-run texts.                             |
-| `src/grid/results.ts`         | `ResultsRun`: the last run of one editor and what is posted when.                                     |
-| `src/grid/results-place.ts`   | In which editor group the results of a document open.                                                 |
-| `src/grid/results-binding.ts` | When the results close, follow their editor into another group or come forward with it.               |
-| `src/grid/results.vscode.ts`  | `ResultsPanels`: one panel per editor document, bound to its editor, and its handshake with the page. |
-
-`GridData`, `GridColumn`, `GridValue` and `TableRef` belong to the data package (`src/data/types.ts`). A column has a `kind` (`number`, `boolean`, `text`, `nested`) derived from its DuckDB type.
-
-`GridPanels.show(key, title, data)` keeps one panel per key. The same key again reveals the panel and replaces its rows (sort and filter start over); a new key opens a panel in the active editor column. The title is `<schema.table> (top <limit>) · <connection> @<snapshot>`, for example `sales.orders (top 1000) · Fixture @13`, so grids of one table at two snapshots can be told apart. Panels are not kept alive while hidden: a retained panel holds all its rows. When a hidden tab is shown again the page posts `ready` and the extension sends the rows again. The page saves sort order and filters with `setState` and restores them for the same result; scroll position and selected cell are not restored.
-
-## The message protocol
-
-Page and extension talk only through `postMessage` (`src/grid/protocol.ts`):
-
-```ts
-// webview -> extension
-type WebviewMessage =
-  | { type: 'ready' }
-  | { type: 'copy'; text: string; what: 'cell' | 'row' | 'all' }
-  | { type: 'export'; csv: string; suggestedName: string }
-  | { type: 'reveal'; index: number }; // results mode
-// extension -> webview: { type: 'data'; data: GridData } and the results-* messages
-```
-
-The page loads and posts `ready`; the extension answers with `data`. A webview has no reliable clipboard access, so `copy` carries the text and the extension host writes it and shows `Copied cell`, `Copied row` or `Copied all rows` in the status bar for two seconds. `export` carries the whole CSV and a suggested name.
-
-The extension does not trust the page. It passes a message on only when `isWebviewMessage` accepts it, and drops everything else. `safeCsvFileName` reduces the suggested name to a plain file name: no path separators, no characters Windows rejects, no trailing dots or spaces, device names such as `aux` get a leading `_`, at most 80 characters, always `.csv`. A copy or save larger than `MAX_TRANSFER_CHARS` (128 MiB of characters) or a file name over 256 characters is dropped and logged once per panel. A failed clipboard or file write shows an error message.
-
 ## The page, the policy and why there is no inline data
 
 `gridHtml` returns a page with this policy:
@@ -138,11 +99,7 @@ default-src 'none'; style-src 'nonce-<nonce>'; script-src 'nonce-<nonce>'; base-
 
 ## Build and packaging
 
-`esbuild.mjs` bundles `src/grid/client.ts` to `dist/grid-client.js` (browser, `iife`, `es2022`, minified in production, no source map; about 16 kB). It contains only code of this repository. The file is on the allow-list of `.vscodeignore` and in the required files of `scripts/package.ps1` ([Packaging](packaging.md)); without it the panel stays empty.
-
-## Tests
-
-`test/unit/grid-*.test.ts` cover the model (sort, filter, CSV and formula guard, file names), the page and its policy, the protocol guards, and the real client bundle against a DOM stand-in (render, keyboard, copy, export, window of rows, change and results modes). The results tests run the real SQL session on a DuckLake. The end-to-end spec `test/e2e/specs/data-features.mjs` drives the page in a browser; `test/integration/` checks the panels in a real VS Code. Run the unit tests with `npx vitest run test/unit/grid-`.
+`esbuild.mjs` bundles `src/grid/client.ts` to `dist/grid-client.js` (browser, `iife`, `es2022`, minified in production, no source map; about 16 kB). It contains only code of this repository. Without it the panel stays empty.
 
 ## Limits
 

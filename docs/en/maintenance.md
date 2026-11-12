@@ -119,14 +119,6 @@ The table template has every option that can be set for a table (all but the thr
 
 The [Storage report](storage-report.md) opens **Merge Adjacent Files** and **Rewrite Data Files** for the selected table and **Clean Up Old Files** and **Expire Snapshots** from its header. The [Maintenance Advisor](advisor.md) and the [Health check](health-check.md) open the script that fits a recommendation or finding; the Health check can also write [one script for all findings](health-check.md#the-maintenance-script-for-all-findings), and the Advisor [one for all recommendations](advisor.md#the-maintenance-script-for-all-recommendations). All are built by `maintenanceOf`, start destructive ones with a dry run and run nothing when the document opens. The Advisor also runs the dry runs itself in a read-only session.
 
-## Testing
-
-```bash
-npx vitest run test/unit/maintenance
-```
-
-One test checks the script texts and which node gets which entry. `maintenance-lake.test.ts` runs every generated statement against a real DuckLake (SQLite metadata, PostgreSQL with `AANTJE_POSTGRES=1`) and checks the effect, including tables whose names contain quotes, a semicolon and a line break. `maintenance-table-options-lake.test.ts` runs the `SET` and `RESET` statements of Script as ALTER and the `WITH` clause of Script as CREATE on a real lake, and reads the option values of the header from a real catalog. `maintenance-schema-lake.test.ts` runs the scripts of a schema on a lake with two schemas and checks that the other one is untouched. `maintenance-options-lake.test.ts` runs every `set_option` call of the lake and table templates and reads the values back with `options()`, and compares the option and function names in all scripts with the installed DuckLake (`options()`, `duckdb_functions()`): a name the engine does not know fails, and the documented options and functions that the scripts do not offer are printed to the console. The DuckLake of the test is the extension in `test/.cache`.
-
 ## Limits
 
 - The scripts are text. aantje asks no confirmation and shows no summary; dry-run results appear in the SQL editor's results panel.

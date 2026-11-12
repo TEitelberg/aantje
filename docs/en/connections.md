@@ -22,7 +22,7 @@ A profile says where the DuckLake metadata tables (`ducklake_*`) are stored. The
 | `sqlite`, `duckdb` | `path` of the database file                                                                                                                                                                                  |
 | `quack`            | `host` (not `quack`), `port` (default 9494), `ssl` (default as for `postgres`), optional `fingerprint`                                                                                                       |
 
-A `quack` profile is a DuckDB server that serves the catalog over Quack ([Quack driver](driver-quack.md)). It reuses the `ssl` property of `postgres`, with the same meaning and the same default rule (`defaultSsl`), instead of a new `tls` property: one TLS property, one wizard question. `fingerprint` is the SHA-256 fingerprint of the server certificate, 64 hex digits with or without colons, stored as `AB:CD:...` (`normalizeFingerprint`). It pins that certificate instead of the system trust store and needs `ssl: true`. The host name `quack` is refused (`validateQuackHost`), because the quack client then parses `quack:quack:<port>` wrongly.
+A `quack` profile is a DuckDB server that serves the catalog over Quack. It reuses the `ssl` property of `postgres`, with the same meaning and the same default rule (`defaultSsl`), instead of a new `tls` property: one TLS property, one wizard question. `fingerprint` is the SHA-256 fingerprint of the server certificate, 64 hex digits with or without colons, stored as `AB:CD:...` (`normalizeFingerprint`). It pins that certificate instead of the system trust store and needs `ssl: true`. The host name `quack` is refused (`validateQuackHost`), because the quack client then parses `quack:quack:<port>` wrongly.
 
 A `postgres` profile with `azureAccount` is an Azure lake: its data files are on that ADLS Gen2 storage account and are read with a Microsoft Entra token, which `azureTenant` (optional) names the tenant of. No key or token is in the profile ([Azure DuckLake](azure-lake.md)). `azureAuth` is `"password"` (the default when absent) or `"entra"`: with `entra` a token of your Microsoft account is the password, `user` is your user principal name and no password is stored. The connection then ignores any stored password and does not ask for one. **Create Azure DuckLake...**, **Finish Creating Azure DuckLake...** and **Import Azure DuckLake...** write these fields; Add Connection and Edit Connection ask for them ([below](#signing-in-with-microsoft-entra-id)).
 
@@ -170,10 +170,6 @@ An administrator can ship connections without passwords by putting `aantje.conne
 4. From then on the user is asked again only if the server refuses the password or the connection is pointed at another server.
 
 A provisioned `quack` entry works the same way, with the token as the secret; without `fingerprint` its certificate is checked against the system trust store. A `password` property in an entry is ignored. In code-server passwords are kept in the browser by default ([Security](security.md)), so a provisioned profile leads to one password question per user and browser.
-
-## Testing
-
-`npx vitest run connect` runs the unit tests: parser and validators, the store against in-memory ports (comparing the whole serialised setting, so a password in it or a lost hand-edited entry fails), the wizard with a scripted `WizardUi`, and `openWithPassword` against a fake PostgreSQL server that accepts one password. `connections-fingerprint.test.ts` reads the fingerprint of a local TLS server with a self-signed certificate, and fails with `CONNECTION_FAILED` for a server without TLS, one that does not answer and a closed port. With `AANTJE_POSTGRES=1` (needs Docker) the connect tests also run against the PostgreSQL fixture server with the real driver.
 
 ## Known limits
 

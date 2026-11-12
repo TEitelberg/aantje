@@ -76,25 +76,10 @@ Catalog text goes through `code()` of `src/markdown.ts`, the connection name thr
 
 `readStorage(reader, connection, snapshot, now, signal, scope?)` in `src/storage-report/read.ts` reads in parallel `storage(snapshot)`, the tables of all schemas (four schemas at a time; one for a schema scope), `smallFiles(snapshot)` and `lakeGrowth(snapshot, 500)`. It sums the rows of all tables, keeps the 1000 largest and counts the others (`tableCount`), and stamps `readAt`, to which the age of the scheduled files is counted. The page checks the data with `isStorageMessage` before showing it.
 
-Two [catalog reader](catalog-reader.md) methods serve it:
+Two catalog reader methods serve it:
 
 - `lakeGrowth(snapshot, limit?, signal?, scope?)` returns `{ growth, growthMerged? }`: the growth of the whole lake, or of the tables in `scope`, aggregated by one statement over all data and delete files, at most `limit` points.
 - `smallFiles(snapshot, signal?)` returns tables with data files below 16 MiB at the snapshot, with their files and small files, most small files first.
-
-## Modules
-
-| Module                                                                    | Job                                                                                |
-| ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `src/storage-report/model.ts`                                             | `StorageData`, cards, scheduled files, the small file rule, sorting, filter, bars. |
-| `src/storage-report/read.ts`                                              | `readStorage`.                                                                     |
-| `src/storage-report/markdown.ts`                                          | `storageMarkdown`.                                                                 |
-| `src/storage-report/protocol.ts`, `actions.ts`                            | `isStorageMessage`, `isStorageAction`, `isStorageView`; `planStorageAction`.       |
-| `src/storage-report/kind.ts`                                              | The `ReportKind`.                                                                  |
-| `src/storage-report/page.ts`, `render.ts`, `chart-options.ts`, `style.ts` | The browser side.                                                                  |
-| `src/storage-report/commands.vscode.ts`                                   | `createStorageReport`: panel, read, actions.                                       |
-| `src/catalog/thresholds.ts`                                               | `SMALL_FILES`, `CLEANUP_OVERDUE_DAYS`.                                             |
-
-`createStorageReport` is created in `src/extension.ts` before the Properties report, because each offers a button for the other.
 
 ## Security
 
@@ -107,11 +92,3 @@ The page loads from `dist` under a nonce CSP (see [Reports](reports.md#the-shell
 - Rows are those of the data files; inlined rows are not included.
 - **Show in Tree** needs the table in the tree; a tree on an older snapshot may not have it.
 - The growth chart follows the history the catalog still holds; after Expire Snapshots the files of dropped tables are gone from it.
-
-## Tests
-
-```text
-npx vitest run test/unit/storage- test/contract/lake-growth.contract.test.ts
-```
-
-The contract test checks `lakeGrowth` and `smallFiles` on the history fixture (SQLite, DuckDB, PostgreSQL) and edited copies: the points equal the growth of all tables together and the storage totals, and compactions, expired snapshots and the 500 point cap behave. Unit tests cover `readStorage`, the model (7 days, small file rule, filter, sorting), the guards and action plans, the Markdown document and the page bundle against a DOM stand-in. The integration test runs in a real VS Code.

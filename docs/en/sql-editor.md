@@ -106,40 +106,6 @@ If a statement fails because the lake cannot be read (a missing data file, a ref
 | `aantje.sql.maxRows` | `10000` | The most rows kept of one result, 1 to 1000000 (machine scope). The rest is not read. |
 | `readOnly` (profile) | absent  | Open the connection's sessions read-only. Absent or `false`: writable. Not for Quack. |
 
-## Public API
-
-```ts
-// src/sql/results.ts: the port that the results panel implements
-export interface ResultsView {
-  begin(target: ResultsTarget, script: { text: string; startedAt: number }): void;
-  event(target: ResultsTarget, event: SqlEvent): void;
-  end(target: ResultsTarget, summary: RunSummary): void;
-  reveal(target: ResultsTarget): void;
-}
-
-// src/sql/editor.ts
-export class QueryEditors {
-  constructor(deps: QueryEditorDeps);
-  onDidChange(listener): { dispose(): void };
-  connectionOf(key: string): string | undefined;
-  state(key: string): QueryEditorState | undefined;
-  associate(editor: EditorRef, connectionId: string): Promise<void>;
-  run(editor: EditorRef, script: { text: string; base: number }): Promise<RunSummary | undefined>;
-  cancel(key: string): void;
-  toggleMode(key: string): Promise<void>;
-  closeSessionOf(key: string): Promise<void>;
-  documentClosed(key: string): Promise<void>;
-  profilesChanged(): Promise<void>;
-  scriptRange(key: string, offset: number, length: number): { offset: number; length: number } | undefined;
-  dispose(): Promise<void>;
-}
-// pure helpers: statementAt, scriptToRun, changesCatalog, holdsFileExclusively, queryStatusContent, queryMenuItems, catalogCache
-```
-
-- The core takes its environment through ports (`QueryEditorDeps`): the profiles, `openSession`, the `ResultsView`, an `ExplorerPort` (`status`, `disconnect`, `connect`, `refresh`), a `QueryUi` (`info`, `pickConnection`, `withProgress`) and `maxRows`. `src/sql/editor.vscode.ts` implements the UI, commands, status bar item and context keys; `src/extension.ts` wires everything.
-- `base` is where the script that ran starts in the document, so `scriptRange` maps a failing statement's range back to the document for **Go to statement**.
-- `run` never throws for a failing statement or a session that does not open; it reports them as events and returns `undefined` when nothing ran.
-
 ## Limits
 
 - DuckLake has no `OPTIMIZE` statement and `VACUUM` has no effect on a lake; the equivalents are `CHECKPOINT lake;` and the `ducklake_*` functions, run as `CALL ...` (the **Maintenance** submenu writes them, see [Maintenance scripts](maintenance.md)). The editor attaches the lake as `lake`.
@@ -151,12 +117,3 @@ export class QueryEditors {
 - Results are cut at `aantje.sql.maxRows` rows and 2,000,000 cells per run; sorting and filtering in the panel work on the loaded rows.
 - Completion needs the explorer connected for table and column names; for a writable DuckDB file session it is not.
 - The query and its results are two editor groups, not one tab: the divider between them is the one between the groups. A results tab can still be dragged elsewhere by hand; it goes back below its editor on the next move of the editor or the next run. The results of a query in a floating window open beside it, and the binding waits up to a second for the groups there before it acts.
-
-## Testing
-
-```bash
-npx vitest run test/unit/sql-editor.test.ts
-npm run test:integration
-```
-
-The unit tests run the real engine on private copies of the data fixtures with a fake results view, explorer and UI (lazy open, modes, rollback, cancel, refresh rule, DuckDB file rule, statement at cursor with hostile texts). `test/integration/sql-editor.test.ts` runs the commands, keys, context keys and session menu in a real VS Code, and `test/integration/results-panel.test.ts` the placement and the binding of the results (close, follow, come forward, lock, hide and show). `test/unit/results-binding.test.ts` holds the decisions of the binding.

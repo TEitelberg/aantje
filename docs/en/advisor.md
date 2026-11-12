@@ -113,23 +113,7 @@ The header button opens an untitled Markdown document built from the panel's dat
 
 `readAdvisor` (`src/advisor/read.ts`) reads the newest snapshot and the options, then in parallel the storage totals, the tables, `maintenanceFacts`, `deleteHeavyTables` and the three dry runs of `measureDryRuns` (`src/advisor/measure.ts`). A dry run that fails (store refuses, time limit, unreachable data path) becomes `{ state: 'skipped', reason }` and the others go on. If the engine cannot start, all three are skipped and the catalog candidates are still shown. A cancel rejects with `ABORTED`. Each statement is limited by `aantje.queryTimeoutSeconds`, else 60 seconds. The page checks the data with `isAdvisorMessage` before showing it.
 
-`deleteHeavyTables(scope, floor, threshold, limit, signal?)` of the [catalog reader](catalog-reader.md) returns tables with data files in which at least `floor` of the rows are deleted by the delete file valid at the newest state, with the files reaching `threshold`, the rows and the size. The advisor passes half, or the lake's threshold when lower, so a file the real call would rewrite is never invisible. Shares are compared as whole numbers so SQLite, DuckDB and PostgreSQL agree.
-
-## Modules
-
-| Module                                       | Job                                                                    |
-| -------------------------------------------- | ---------------------------------------------------------------------- |
-| `src/advisor/model.ts`                       | `AdvisorData`, constants, cards, policy sentences, the merge estimate. |
-| `src/advisor/recommend.ts`                   | `recommendationsOf`: the advice, its levels and ranking.               |
-| `src/advisor/measure.ts`                     | The fixed statements and `measureDryRuns`.                             |
-| `src/advisor/read.ts`                        | `readAdvisor`, `policyOf`.                                             |
-| `src/advisor/markdown.ts`                    | `advisorMarkdown`.                                                     |
-| `src/advisor/script.ts`                      | `advisorScriptOf`: the script for all recommendations.                 |
-| `src/maintenance-document.ts`                | `scriptDocument`: the document builder shared with the Health script.  |
-| `src/advisor/protocol.ts`, `actions.ts`      | Message and action guards; `planAdvisorAction`.                        |
-| `src/advisor/page.ts`, `style.ts`, `kind.ts` | The browser side and the `ReportKind`.                                 |
-| `src/advisor/commands.vscode.ts`             | The command: panel, read, actions.                                     |
-| `src/catalog/thresholds.ts`                  | `SMALL_FILES`, shared with the health check.                           |
+`deleteHeavyTables(scope, floor, threshold, limit, signal?)` of the catalog reader returns tables with data files in which at least `floor` of the rows are deleted by the delete file valid at the newest state, with the files reaching `threshold`, the rows and the size. The advisor passes half, or the lake's threshold when lower, so a file the real call would rewrite is never invisible. Shares are compared as whole numbers so SQLite, DuckDB and PostgreSQL agree.
 
 ## Security
 
@@ -143,13 +127,3 @@ The page loads from `dist` under a nonce CSP (see [Reports](reports.md#the-shell
 - The orphan dry run reads the whole data path (on an object store one request per 1000 keys).
 - At most 100 tables of each kind are named, and inlined rows are counted for at most 101 inlined tables; the page says when more may qualify.
 - A dropped table that still has inlined data is not named.
-
-## Tests
-
-Unit tests build a lake with the real engine (SQLite, and PostgreSQL with `AANTJE_POSTGRES=1`) and check the numbers, that the catalog and data directory are unchanged, and that the predictions match the real calls. Others cover the ranking, the protocol and the document, the page bundle against a DOM stand-in, and RustFS (`AANTJE_RUSTFS=1`). The integration test runs in a real VS Code.
-
-```bash
-npx vitest run test/unit/advisor-
-AANTJE_POSTGRES=1 npx vitest run test/unit/advisor-read.test.ts
-AANTJE_RUSTFS=1 npx vitest run test/unit/advisor-rustfs.test.ts
-```

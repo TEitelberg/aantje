@@ -1,6 +1,6 @@
 # aantje documentation
 
-aantje is an explorer and SQL editor for DuckLake catalogs in VS Code and code-server. The explorer is read-only; the SQL editor runs any SQL against the lake. These pages describe how it works, how it is built and tested, and how it is delivered.
+aantje is an explorer and SQL editor for DuckLake catalogs in VS Code and code-server. The explorer is read-only; the SQL editor runs any SQL against the lake. These pages describe what it does and how to use it.
 
 ## Start here
 
@@ -8,8 +8,6 @@ aantje is an explorer and SQL editor for DuckLake catalogs in VS Code and code-s
 | ------------------------------- | ------------------------------------------------------------- |
 | [Features](features.md)         | Everything aantje does, and its known limits.                 |
 | [Installation](installation.md) | Install the VSIX, platforms, connections for a whole machine. |
-| [Architecture](architecture.md) | Scope, runtime, module map, data flows, key decisions.        |
-| [Development](development.md)   | Set up, build, run, code rules, recipes, debugging.           |
 
 ## Using aantje
 
@@ -45,27 +43,9 @@ aantje is an explorer and SQL editor for DuckLake catalogs in VS Code and code-s
 | [Dependencies](dependencies.md)       | What uses and what is used, drop impact.              |
 | [Health check](health-check.md)       | Checks of catalog, connection and object store.       |
 
-## Design
+## Security
 
-| Page                                    | Covers                                                                  |
-| --------------------------------------- | ----------------------------------------------------------------------- |
-| [Catalog reader](catalog-reader.md)     | How the `ducklake_*` tables become the model.                           |
-| [SQLite driver](driver-sqlite.md)       | Reading a catalog from SQLite with `sql.js`.                            |
-| [DuckDB driver](driver-duckdb.md)       | The native binding, read-only access, locks.                            |
-| [PostgreSQL driver](driver-postgres.md) | TLS, timeouts, cancellation, errors.                                    |
-| [Quack driver](driver-quack.md)         | A catalog served over Quack: the locked instance, TLS pins, reconnects. |
-| [Security](security.md)                 | Threat model, read-only guarantee, credentials, code-server.            |
-| [Branding](branding.md)                 | Logo, icons, licence, changelog.                                        |
-
-## Engineering and delivery
-
-| Page                                         | Covers                                                |
-| -------------------------------------------- | ----------------------------------------------------- |
-| [Testing](testing.md)                        | The test layers and how to run them.                  |
-| [Extension-host tests](integration-tests.md) | aantje inside a real VS Code.                         |
-| [End-to-end tests](e2e-tests.md)             | aantje in code-server, replayed in Docker.            |
-| [Test fixtures](test-fixtures.md)            | The fixture catalogs and their generators.            |
-| [Packaging](packaging.md)                    | One VSIX per platform: build, contents, verification. |
+[Security](security.md): threat model, read-only guarantee, credentials, code-server.
 
 ## Project files
 

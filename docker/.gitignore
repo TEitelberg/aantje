@@ -45,8 +45,5 @@ yarn-error.log*
 Thumbs.db
 desktop.ini
 
-# Claude Code: personal settings only
-.claude/settings.local.json
-
 # A locally built package for the workbench image (the build installs aantje from Open VSX otherwise)
 *.vsix

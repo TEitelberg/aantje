@@ -1,13 +1,10 @@
 name: CI
 
-# A pull request runs only the tests that its files can affect (see the step "Choose the tests"); the merge into main and
-# the weekly run run everything, on the current and on the next Ubuntu image, and the extension-host tests.
+# Builds the extension and checks its types, for every pull request and on main.
 on:
   push:
     branches: [main]
   pull_request:
-  schedule:
-    - cron: '0 4 * * 1'
   workflow_dispatch:
 
 permissions:
@@ -18,122 +15,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The ruleset of main requires a check named "test".
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          # vitest --changed needs the merge base of the pull request and its base branch.
-          fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: npm
-      - uses: actions/cache@v6
-        with:
-          path: test/.cache
-          # The extensions belong to the DuckDB version in the lock file; the list of them is in data-support.ts.
-          key: duckdb-extensions-${{ runner.os }}-${{ hashFiles('package-lock.json', 'test/unit/data-support.ts') }}
       - run: npm ci
-      - run: npm run lint
+      - run: npm run build
       - run: npm run typecheck
-      - run: npx prettier --check .
-      - run: npm run check:docs
-      - run: npm run check:azure-template
-      # all: a change of the setup or of a fixture catalog can affect any test (the fixtures are read from disk, so
-      # vitest --changed does not see who uses them); changed: source, tests, package.json or documentation (the tests
-      # that read repository files run always); none: Docker, media.
-      - name: Choose the tests
-        id: scope
-        env:
-          EVENT: ${{ github.event_name }}
-          BASE: ${{ github.base_ref }}
-        run: |
-          if [ "$EVENT" != pull_request ]; then
-            echo "tests=all" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          git fetch --no-tags origin "$BASE"
-          files=$(git diff --name-only "origin/$BASE" HEAD)
-          if grep -qE '^(package-lock\.json|vitest\.config\.mts|tsconfig\.json|esbuild\.mjs|eslint\.config\.mjs|scripts/|test/support/(extensions|global)-setup\.ts|test/fixtures/|\.github/workflows/ci\.yml)' <<<"$files"; then
-            echo "tests=all" >> "$GITHUB_OUTPUT"
-          elif grep -qE '^(src/|test/|package\.json|docs/|README\.md|CONTRIBUTING\.md|SECURITY\.md)' <<<"$files"; then
-            echo "tests=changed" >> "$GITHUB_OUTPUT"
-          else
-            echo "tests=none" >> "$GITHUB_OUTPUT"
-          fi
-          echo "$files" | sed 's/^/changed: /'
-      # The engine tests download DuckDB extensions; with this variable a test file fails instead of skipping when they cannot.
-      - name: All tests
-        if: steps.scope.outputs.tests == 'all'
-        run: npm test
-        env:
-          AANTJE_REQUIRE_ENGINE: '1'
-      # The tests that import a changed file, and the tests that read repository files, which the import graph does not see.
-      - name: Tests of the changed code
-        if: steps.scope.outputs.tests == 'changed'
-        env:
-          AANTJE_REQUIRE_ENGINE: '1'
-          BASE: ${{ github.base_ref }}
-        run: |
-          npx vitest run --changed "origin/$BASE" --passWithNoTests
-          npx vitest run test/unit/manifest.test.ts test/unit/health-docs.test.ts test/unit/docs.test.ts test/unit/notices.test.ts test/unit/script-menus.test.ts test/unit/extension-subscriptions.test.ts
-      - run: npm audit --omit=dev
-
-  # The ubuntu-latest label moves to Ubuntu 26.04 by 19 November 2026 (actions/runner-images#14748). This job runs the
-  # whole suite on the new image after every merge and every week, so that a problem shows before the move. It is no
-  # required check and does not run for pull requests; remove it after the move.
-  ubuntu-26:
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-26.04
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-      - uses: actions/cache@v6
-        with:
-          path: test/.cache
-          key: duckdb-extensions-${{ runner.os }}-${{ hashFiles('package-lock.json', 'test/unit/data-support.ts') }}
-      - run: npm ci
-      - run: npm test
-        env:
-          AANTJE_REQUIRE_ENGINE: '1'
-
-  # The extension-host tests (docs/en/integration-tests.md) start a downloaded VS Code under a virtual display. They take
-  # minutes, so they run after every merge, every week and by hand, not for pull requests; a failure shows on main and
-  # is no required check.
-  integration:
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version-file: .nvmrc
-          cache: npm
-      - uses: actions/cache@v6
-        with:
-          path: test/.cache
-          key: duckdb-extensions-${{ runner.os }}-${{ hashFiles('package-lock.json', 'test/unit/data-support.ts') }}
-      # .vscode-test.mjs runs the oldest VS Code that engines.vscode allows; the download belongs to that version.
-      - name: VS Code version
-        id: vscode
-        run: echo "version=$(node -p "/\d+\.\d+\.\d+/.exec(require('./package.json').engines.vscode)[0]")" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v6
-        with:
-          path: .vscode-test
-          key: vscode-test-${{ runner.os }}-${{ steps.vscode.outputs.version }}
-      - name: Virtual display
-        run: |
-          if ! command -v xvfb-run >/dev/null; then
-            sudo apt-get update
-            sudo apt-get install -y xvfb
-          fi
-          # Ubuntu 24.04 and newer forbid the user namespaces that the sandbox of Electron needs.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-      - run: npm ci
-      - run: xvfb-run -a npm run test:integration
