@@ -13,7 +13,7 @@ Query at Snapshot, Compare Schema and Show Changes are in the submenu **Time Tra
 
 ## Which snapshots a table has
 
-A table or view exists from its `begin_snapshot` up to, but not including, its `end_snapshot`, over all versions of its row. A rename ends one version and starts the next under the same id. `CatalogReader.lifetime(kind, id)` returns that range ([Catalog reader](catalog-reader.md#snapshot-details-and-changes)). It is `undefined` for an id without a row, also for a dropped table after `expire_snapshots`; the commands then say that the object exists at no snapshot the catalog still has.
+A table or view exists from its `begin_snapshot` up to, but not including, its `end_snapshot`, over all versions of its row. A rename ends one version and starts the next under the same id. `CatalogReader.lifetime(kind, id)` returns that range. It is `undefined` for an id without a row, also for a dropped table after `expire_snapshots`; the commands then say that the object exists at no snapshot the catalog still has.
 
 `snapshotChoices` in `src/snapshot.ts` turns the snapshots into picker rows. It keeps those inside the lifetime, sorts newest first and marks the snapshot of the tree as picked. The rows look like those of **Show Catalog at Snapshot...**: `@<id>`, the time in UTC, the changes in words and the commit message.
 
@@ -125,17 +125,6 @@ A snapshot of the **Snapshots** folder lists what it changed ([Tree](tree.md#sna
 
 The [Snapshot report](snapshot-report.md) starts the same commands from its chart. [Schema History](schema-history.md) starts Compare Schema and Query at Snapshot from a matrix cell. [Activity](activity-report.md) starts Compare Snapshots and Show Rows Changed through the plans and port of the Snapshot report.
 
-## Modules
-
-| File                          | Job                                                                                                                               |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `src/time-travel.ts`          | The questions: `chooseQuery`, `chooseQueryAction`, `chooseRange`, `choosePair`, `chooseChanges`, `changesOfSnapshot`, `subjectOf` |
-| `src/compare.ts`              | `compareSchema`, `compareCatalog`, `comparisonMarkdown`, `snapshotsReport`, `describeColumnChange` (pure text)                    |
-| `src/compare.vscode.ts`       | `SchemaDocuments` and the call of `vscode.diff`                                                                                   |
-| `src/pick.vscode.ts`          | `pickOne`, `timeTravelUi`: the QuickPick implementation                                                                           |
-| `src/data/commands.vscode.ts` | `aantje.queryAtSnapshot`, `aantje.showChanges`, `aantje.showSnapshotChanges`                                                      |
-| `src/commands.vscode.ts`      | `aantje.compareSchema`, `aantje.compareSnapshots`                                                                                 |
-
 ## Known limits
 
 - The lists hold the snapshots the catalog still has. After `expire_snapshots` a dropped table may have none.
@@ -144,7 +133,3 @@ The [Snapshot report](snapshot-report.md) starts the same commands from its char
 - Compare Snapshots compares up to 200 tables.
 - The changes of a table show at most 1000 rows, without paging, sorting or filter.
 - A range that starts before the table was created, or spans a rename, works, but the grid names the table as at the end. The end must be an existing snapshot. A start whose successor expired moves to the first later snapshot that exists. Rows of a snapshot that expired inside the range are still listed under it.
-
-## Tests
-
-`test/unit/time-travel.test.ts` and `test/unit/compare.test.ts` run the questions and the comparisons against the real reader with a scripted user. `test/unit/data-changes.test.ts` reads the changes of the history fixture with the real engine. `test/integration` runs the commands in a real VS Code.

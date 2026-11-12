@@ -65,7 +65,7 @@ The other snapshot is `previous` (the next older snapshot that exists, not alway
 
 ## Data and limits
 
-`CatalogReader.snapshotActivity(limit, range, signal)` returns the newest `limit` snapshots with time, author, message and resolved changes, and whether older ones exist ([Catalog reader](catalog-reader.md#snapshot-details-and-changes)). The report asks for 500; 500 snapshots and 30 lanes are limits of the report, not of the reader.
+`CatalogReader.snapshotActivity(limit, range, signal)` returns the newest `limit` snapshots with time, author, message and resolved changes, and whether older ones exist. The report asks for 500; 500 snapshots and 30 lanes are limits of the report, not of the reader.
 
 - Only snapshots that still exist are listed. A table that only expired snapshots changed has no lane. An object whose rows expiry removed shows by id (`table #15`).
 - Catalogs of specification 1.0 have no author or message. A catalog without macro tables names a macro only as far as the change names it.
@@ -83,37 +83,6 @@ The page uses the policy of the grid and the statistics report (`default-src 'no
 - The page asks for an action by id and numbers only: `ready`, `refresh` or one of the six action ids with exactly the fields it needs (`isSnapshotReportAction`). No command id or free text can be part of it; an extra field is rejected. The extension checks the numbers against the data it sent (`planSnapshotReportAction`): the snapshot, the table and the second snapshot must have been sent, and the detail pane must offer the action. A mismatch is ignored and logged as a warning.
 - The page checks what it receives (`isSnapshotReportMessage`) as the extension checks what it sends.
 - The page makes no request. Actions that read table data are the tree's, with their own safeguards (view confirmation, S3 credentials).
-
-## Modules
-
-| File                                              | Job                                                                                                                   |
-| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `src/catalog/reader/history.ts`                   | `snapshotActivity` (statements in `src/catalog/queries/history.ts`)                                                   |
-| `src/guards.ts`                                   | Building blocks of the message guards, shared with the statistics report                                              |
-| `src/snapshot-report/model.ts`                    | Lanes, points, transactions, filters, the 30-lane limit, table choices, snapshot detail. Pure.                        |
-| `src/snapshot-report/actions.ts`                  | Action ids, compare targets, `planSnapshotReportAction`. Pure.                                                        |
-| `src/snapshot-report/protocol.ts`                 | Messages and their guards. Pure.                                                                                      |
-| `src/snapshot-report/read.ts`                     | `readSnapshotReport`. No `vscode`.                                                                                    |
-| `src/snapshot-report/state.ts`                    | The choices kept for a hidden panel or a refresh. Pure.                                                               |
-| `src/snapshot-report/chart-options.ts`            | The ECharts option of the swimlane chart and its tooltip. Pure.                                                       |
-| `src/snapshot-report/page.ts`, `render.ts`        | Browser side: state, chart and event wiring; DOM builders for list, detail pane and toolbar                           |
-| `src/snapshot-report/style.ts`                    | `SNAPSHOT_REPORT_CSS`                                                                                                 |
-| `src/snapshot-report/kind.ts`, `markdown.ts`      | `snapshotReportKind` (view type, stylesheet, guards, `toMarkdown`); `snapshotReportMarkdown`. Pure.                   |
-| `src/snapshot-report/execute.ts`                  | `performSnapshotReportAction`: carries out a plan through the `ReportPort` (`src/shell/report-port.ts`). No `vscode`. |
-| `src/snapshot-report/commands.vscode.ts`          | The command, progress, panel and the port that maps actions to tree, grid, diff editor and documents                  |
-| `src/shell/panels.ts`, `src/shell/host.vscode.ts` | `ReportPanels`: one webview panel per key and the handshake, for every report ([Reports](reports.md))                 |
-| `src/shell/charts.ts`                             | The only module that imports ECharts                                                                                  |
-| `src/shell/client.ts`                             | The browser entry of all report pages; the first message decides which page is built                                  |
-
-`dist/report-client.js` serves all report pages. A second entry would bundle ECharts again, and the webview policy allows only one nonce script, so the script cannot be split into a shared chunk.
-
-## Tests
-
-Unit tests cover the model, actions, protocol guards, chart options, Markdown, execution with a recording port, and the browser bundle against a DOM and ECharts stand-in. A contract test runs `snapshotActivity` on SQLite, DuckDB and PostgreSQL. An integration test runs the panel and the actions in VS Code. The canvas itself is checked in a real browser by the end-to-end suite.
-
-```text
-npx vitest run test/unit/snapshot-report-model.test.ts test/unit/snapshot-report-client.test.ts test/contract/history-reader.contract.test.ts
-```
 
 ## Known limits
 

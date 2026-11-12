@@ -65,7 +65,7 @@ Which action the data offers is decided by the snapshot report (`planSnapshotRep
 
 ## Data and limits
 
-`CatalogReader.snapshotActivity(500)` returns the newest 500 snapshots with time, author, message and resolved changes, and whether older ones exist ([Catalog reader](catalog-reader.md#snapshot-details-and-changes)); the report adds the newest snapshot of the catalog. It runs one statement for the snapshots and at most two per kind of object, not one per snapshot. The Snapshot report's model (`buildModel`) classifies the changes; this report counts them.
+`CatalogReader.snapshotActivity(500)` returns the newest 500 snapshots with time, author, message and resolved changes, and whether older ones exist; the report adds the newest snapshot of the catalog. It runs one statement for the snapshots and at most two per kind of object, not one per snapshot. The Snapshot report's model (`buildModel`) classifies the changes; this report counts them.
 
 - **500 snapshots.** Older ones are not read, and a note says so. Filters work on what was read. The page holds all 500 with their changes.
 - **Days are UTC days** of the commit time.
@@ -78,30 +78,6 @@ The page uses the shared policy (`default-src 'none'`, nonce for script and styl
 - Catalog text goes into the page with `textContent`; chart tooltips are HTML without `style` attributes and their text goes through `escapeHtml`.
 - A request is `ready`, `refresh`, `markdown` with a view of the right shape, or one of four action ids with exactly the snapshot, table and choice it needs; a command id or free text cannot be part of it. The extension checks the numbers against the data it sent (`planActivityAction`) and logs a warning for what does not match.
 - The page checks what it is sent (`isActivityMessage`). It makes no request; the extension reads only catalog tables, read-only.
-
-## Modules
-
-| File                                | Job                                                                                                                          |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `src/activity/model.ts`             | `ActivityData`, `summarizeActivity` (days, authors, tables, kinds for a filter), key figures, the missing-author hint. Pure. |
-| `src/activity/actions.ts`           | Action ids and `planActivityAction`, which asks the snapshot report whether the data offers the action. Pure.                |
-| `src/activity/protocol.ts`          | Messages and guards (`isActivityAction`, `isActivityView`, `isActivityMessage`). Pure.                                       |
-| `src/activity/state.ts`             | The choices the page keeps for a hidden panel or a refresh. Pure.                                                            |
-| `src/activity/chart-options.ts`     | The ECharts options of the three charts. Pure.                                                                               |
-| `src/activity/markdown.ts`          | `activityMarkdown`. Pure.                                                                                                    |
-| `src/activity/kind.ts`, `style.ts`  | `activityKind`: view type, stylesheet, messages, guards, `toMarkdown`.                                                       |
-| `src/activity/page.ts`, `render.ts` | The browser side (registered in `src/shell/kinds.ts`) and its DOM builders.                                                  |
-| `src/activity/read.ts`              | `readActivity`: the newest 500 snapshots (those of a schema) and the newest snapshot. Without `vscode`.                      |
-| `src/activity/execute.ts`           | `performActivityAction`: the snapshot report's actions plus opening the Snapshot report. Without `vscode`.                   |
-| `src/activity/commands.vscode.ts`   | `registerActivityCommand`: command, progress, panel, the action port.                                                        |
-
-## Testing
-
-```bash
-npx vitest run test/unit/activity-model.test.ts test/unit/activity-client.test.ts
-```
-
-The unit tests check days, kinds, authors and tables of the history fixture with exact values and every filter, which action the data offers, the guards field by field, the Markdown as exact text, the chart options, and the real browser bundle against a DOM stand-in. `test/integration/activity-report.test.ts` runs menus, panel, actions and closed or removed connections in a real VS Code. The canvas is checked in a browser by the end-to-end suite.
 
 ## Known limits
 

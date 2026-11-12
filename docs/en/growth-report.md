@@ -27,7 +27,7 @@ The chart uses the theme colours (`--vscode-charts-*`) with the contrast fallbac
 
 - **Live rows** are the rows in the data files minus the rows that delete files removed, plus the rows DuckLake keeps inlined in the catalog (`ducklake_inlined_data_*`). The file rule is the one of the row counts in the tree and in Statistics, applied to every snapshot: a data file counts from its `begin_snapshot` to its `end_snapshot`; a delete file takes its deleted rows off until a newer one replaces it or its data file ends. An inlined row counts from its begin to its end snapshot. DuckLake leaves the inlined rows of a dropped table without an end snapshot, so they end with the table.
 - **Data size** is the size of the data files plus the visible delete files, as in the [Storage report](storage-report.md). **Data files** is the number of data files.
-- **One statement.** The reader asks once for what every snapshot added and removed per table (`growthChanges`, one statement over the file tables and one over the inlined tables, [Catalog reader](catalog-reader.md)); the page adds the changes up in snapshot order. The state after a snapshot is the sum of the changes up to it, so switching table or value reads nothing again.
+- **One statement.** The reader asks once for what every snapshot added and removed per table (`growthChanges`, one statement over the file tables and one over the inlined tables); the page adds the changes up in snapshot order. The state after a snapshot is the sum of the changes up to it, so switching table or value reads nothing again.
 - **Values marked `~`.** A data file merged from several snapshots, a file written from inlined rows, and a delete file that collects the deletes of several snapshots hold one row count for more than one snapshot (`partial_max`). The rows are then too high or low at the snapshots before the last one it covers; the report marks them `~` in the list and key figures and with a hollow circle, with a note. Sizes and file counts are always those of the files.
 - **The change** of a snapshot is its value minus that of the snapshot before; for the oldest snapshot read it is its value minus the state before it.
 
@@ -56,7 +56,7 @@ The page asks for an action by its id and numbers; the extension checks the snap
 
 ## Data and limits
 
-`readGrowth` (`src/growth/read.ts`) reads the newest 500 snapshots with their changes (`snapshotActivity`, [Catalog reader](catalog-reader.md#snapshot-details-and-changes)), the tables of the newest snapshot and `growthChanges` from the oldest snapshot read on (the changes of earlier snapshots come as one entry per table). A lake with many tables that change in every snapshot sends correspondingly more.
+`readGrowth` (`src/growth/read.ts`) reads the newest 500 snapshots with their changes (`snapshotActivity`), the tables of the newest snapshot and `growthChanges` from the oldest snapshot read on (the changes of earlier snapshots come as one entry per table). A lake with many tables that change in every snapshot sends correspondingly more.
 
 - **500 snapshots**, **200 inlined tables**, **200 rows** in the list.
 - The tables of the choice are those of the newest snapshot and the dropped ones the snapshots name; a dropped table no snapshot names is only part of **All tables**.
@@ -69,30 +69,6 @@ The page uses the shared policy (`default-src 'none'`, nonce for script and styl
 - Catalog text (table names, authors, messages, the connection name) goes into the page with `textContent`; the chart tooltip is HTML without `style` attributes and its text goes through `escapeHtml`.
 - A request is `ready`, `refresh`, `markdown` with a view of the right shape, or one of the two action ids with exactly the snapshot and table it needs; a command id or free text cannot be part of it. The page checks what it is sent (`isGrowthMessage`) as the extension checks what comes out of it.
 - The page makes no request; the extension reads only catalog tables, read-only.
-
-## Modules
-
-| File                                                | Job                                                                                              |
-| --------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `src/growth/model.ts`                               | `GrowthData`, `seriesOf`, `summarizeGrowth`, key figures, notes, table choices. Pure.            |
-| `src/growth/actions.ts`                             | Action ids and `planGrowthAction`. Pure.                                                         |
-| `src/growth/protocol.ts`                            | Messages and guards (`isGrowthAction`, `isGrowthView`, `isGrowthMessage`). Pure.                 |
-| `src/growth/state.ts`                               | The choices the page keeps for a hidden panel or a refresh. Pure.                                |
-| `src/growth/chart-options.ts`                       | The ECharts option of the line chart. Pure.                                                      |
-| `src/growth/markdown.ts`                            | `growthMarkdown`. Pure.                                                                          |
-| `src/growth/kind.ts`, `style.ts`                    | `growthKind`: view type, stylesheet, messages, guards, `toMarkdown`.                             |
-| `src/growth/page.ts`, `render.ts`                   | The browser side: state and events; DOM builders for chart pane, list, detail pane and filters.  |
-| `src/growth/read.ts`                                | `readGrowth`. Without `vscode`.                                                                  |
-| `src/growth/commands.vscode.ts`                     | `registerGrowthCommand`: command, progress, one panel per connection and table, the action port. |
-| `src/catalog/queries/growth.ts`, `reader/growth.ts` | `growthChanges`, `inlinedGrowthChanges` and `CatalogReader.growthChanges`.                       |
-
-## Testing
-
-```bash
-npx vitest run test/unit/growth-model.test.ts test/unit/growth-client.test.ts test/contract/growth-changes.contract.test.ts
-```
-
-The contract test checks on SQLite, DuckDB and PostgreSQL that the changes add up to what the tree reads at every snapshot. `growth-lake.test.ts` writes lakes with the real DuckDB and compares the rows with `count(*) AT (VERSION => n)` at every snapshot (flush, merge, expiry, inlined rows). Further unit tests cover the model, the action plan, the guards, the Markdown, the chart options and the real browser bundle against a DOM stand-in; `test/integration/growth-report.test.ts` and the end-to-end spec `test/e2e/specs/growth.mjs` run it in a real VS Code and browser. The canvas itself is only checked in the browser.
 
 ## Known limits
 

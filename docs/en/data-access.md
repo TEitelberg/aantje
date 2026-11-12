@@ -2,23 +2,6 @@
 
 The explorer reads the metadata of a DuckLake catalog. `src/data` reads the data: the first rows of a table or of a view of a trusted connection ("Select Top 1000 Rows"), the columns of views and the row changes between two snapshots. It uses a private in-memory DuckDB that attaches the DuckLake read-only. The notebook builds the same statements in Python ([Notebooks](notebooks.md)), the grid shows the rows ([Data grid](grid.md)). The SQL editor does not use this read-only path; it has its own writable session ([SQL session](sql-session.md)) that reuses `setupStatements` with a `session` argument.
 
-## Modules
-
-| Module                       | Job                                                                                                                                 |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `types.ts`                   | `DataAccess` (profile, password, `viewsTrusted`, `snapshot`, S3 settings and keys, time limits), `GridData`, `PREVIEW_LIMIT` (1000) |
-| `engine.ts`                  | `previewTable`, `describeRelation`, `readChanges`, `checkRelation`, `withLakeSession` (used by the [health check](health-check.md)) |
-| `open-lake.ts`               | `guardedOpen`: loads the engine, runs the setup, applies time limits, abort and closing; shared with the SQL session                |
-| `instance.ts`                | DuckDB options: no persistent secrets, private `temp_directory`, `memory_limit` 2 GiB, optional extension directory                 |
-| `attach.ts`                  | `setupStatements` and the SQL text of every query (all names quoted)                                                                |
-| `guard.ts`, `guard/`         | `guardRelation`: view trust, maintenance calls in views, foreign file locations                                                     |
-| `changes.ts`                 | Change kinds, summary counts and the summary line                                                                                   |
-| `trust.ts`, `credentials.ts` | `ViewTrustStore`, `S3CredentialStore`                                                                                               |
-| `errors.ts`                  | Maps engine failures to `AantjeError` and scrubs secrets                                                                            |
-| `resolve.ts`, `relation.ts`  | Command-layer helpers: view column resolution with confirmation, grid keys and titles                                               |
-
-`previewTable`, `describeRelation` and `readChanges` take a `DataAccess` and an optional `AbortSignal`. `previewTable` returns `GridData`; `readChanges(access, table, { from, to })` returns the data and a `ChangesSummary`.
-
 ## How a read runs
 
 Every read opens a fresh DuckDB instance. Nothing survives between two reads, and the file locks of a DuckDB catalog are not touched.
@@ -97,7 +80,7 @@ DuckDB downloads `ducklake`, `postgres`, `sqlite` or `quack`, and `httpfs` from 
 | `TIMEOUT`           | `aantje.queryTimeoutSeconds` or the 5 minutes for the extensions exceeded                                                                                                                                                 |
 | `ABORTED`           | The signal fired                                                                                                                                                                                                          |
 
-Only the first line of the engine message is used. Every message and `cause` goes through `maskSecrets` (`src/secrets.ts`): PostgreSQL password, Quack token and S3 keys become `***`, also inside SQL string literals and across line breaks. On a Quack catalog the messages of the quack extension are explained by the table of `quackProblem` ([Quack driver](driver-quack.md#errors)); a refusal by the server's authorization function while attaching counts as `CONNECTION_FAILED`.
+Only the first line of the engine message is used. Every message and `cause` goes through `maskSecrets` (`src/secrets.ts`): PostgreSQL password, Quack token and S3 keys become `***`, also inside SQL string literals and across line breaks. On a Quack catalog the messages of the quack extension are explained by the table of `quackProblem`; a refusal by the server's authorization function while attaching counts as `CONNECTION_FAILED`.
 
 A failed read carries `AantjeError.table` and `connectionId`. For a missing file (HTTP 404, or a local file that is gone), a 403 or a broken connection, the message gets a button, **Check Table Health** or **Check Health**, that starts the quick [health check](health-check.md#the-button-in-error-messages).
 
@@ -132,12 +115,3 @@ The full model is in [Security](security.md). In short:
 - An explicitly relative data path (`DATA_PATH 'files/'`) is resolved against the working directory of the extension host and is found only if that is the right one.
 - `ARRAY` columns do not exist in DuckLake; a `UNION` can only come from a view and is shown as JSON text.
 - The first read downloads the extensions. On a slow network it fails with `TIMEOUT`; copy the extensions beforehand.
-
-## How to test
-
-```text
-npx vitest run test/unit/data-
-AANTJE_POSTGRES=1 npx vitest run test/unit/data-postgres
-```
-
-Unit tests cover the statements, trust, credentials, error mapping and summaries without an engine. Engine tests run against two DuckLake fixtures (SQLite and DuckDB metadata) in `test/fixtures/data` and need the extensions `ducklake`, `sqlite`, `httpfs` and `postgres`, cached in `test/.cache/duckdb-extensions` (the first run downloads them; without network the engine tests are skipped and say why). The guard tests use real lakes with hostile views and file paths. The PostgreSQL test needs the container and `AANTJE_POSTGRES=1`.

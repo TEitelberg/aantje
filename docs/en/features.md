@@ -6,7 +6,7 @@ The explorer is read-only. The tree reads the `ducklake_*` metadata tables with 
 
 ## Explorer
 
-- **Connections** to DuckLake catalogs stored in PostgreSQL, SQLite or DuckDB, or served by a DuckDB server over Quack (token in the secret storage, TLS with a pinned certificate): add, edit, remove, test, connect, disconnect ([Connections](connections.md), [Quack driver](driver-quack.md)).
+- **Connections** to DuckLake catalogs stored in PostgreSQL, SQLite or DuckDB, or served by a DuckDB server over Quack (token in the secret storage, TLS with a pinned certificate): add, edit, remove, test, connect, disconnect ([Connections](connections.md)).
 - **Azure DuckLake**: **Create Azure DuckLake...** deploys a PostgreSQL server (catalog) and an ADLS Gen2 account (data files) from a Bicep template, gives you the storage role and adds the lake as a connection, signed in once with your Microsoft account. **Finish Creating Azure DuckLake...** picks up a deployment whose wait broke off, **Import Azure DuckLake...** adds a lake from the output of a portal deployment, **Delete Azure DuckLake...** removes one that aantje created ([Azure DuckLake](azure-lake.md)).
 - **Tree** of schemas with the folders Tables, Views and Macros. A table has Columns (STRUCT, LIST and MAP expand into nested fields), Partitioning, Sort Order and Tags when present, and the leaves **Statistics** and **History** that open reports. The tree shows no counts; rows and size are in the tooltip and the statistics report ([Tree](tree.md)).
 - **Snapshots** folder: the newest snapshots with time, author, commit message and changed objects. **Show Catalog at this Snapshot** and **Show Latest Snapshot** change what the whole tree shows ([Snapshots, search and status bar](snapshot-search-status.md)).
@@ -57,7 +57,7 @@ The **Reports** submenu opens panels with one look. All have **Open as Markdown*
 - Row counts cover data files only, minus deleted rows. Inlined rows are not counted. They are exact at the latest snapshot and can be off at an older one after compaction.
 - A SQLite catalog is read from a copy taken at connect. Refresh to see newer commits. A catalog with an uncheckpointed write-ahead log is refused.
 - A DuckDB file held open for writing by another process cannot be opened, and while aantje is connected the file is locked against writers. A writable SQL session locks it exclusively, so aantje disconnects the explorer first and leaves it disconnected. PostgreSQL and a Quack server suit several clients.
-- Quack is experimental in DuckDB 2.0.0. A Quack catalog cannot be attached read-only, so the server must refuse writes; a server restart ends open SQL sessions (the explorer attaches again). See [Quack driver](driver-quack.md#limits).
+- Quack is experimental in DuckDB 2.0.0. A Quack catalog cannot be attached read-only, so the server must refuse writes; a server restart ends open SQL sessions (the explorer attaches again).
 - Schemas nested in schemas (specification 1.1) are shown flat.
 - **Copy DDL** and **Script as CREATE** write DuckDB syntax. A view stored in another dialect stays in that dialect.
 - A view that DuckDB cannot bind (a dropped table) shows the error instead of columns.

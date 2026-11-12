@@ -193,7 +193,7 @@ The leaf of a changed table has `ref.change` and the context value `detail.table
 - **Snapshot:** id, UTC time, author, changes in words, commit message.
 - **Folder tooltips:** only Partitioning and Sort Order (since which snapshot) and Snapshots (newest only). None has a number.
 
-The row count says "in data files" because DuckLake can inline small inserts in the catalog database. The reader sums visible data files minus delete files and does not count inlined rows. `ducklake_table_stats.record_count` is not used: it counts deleted rows and has no history ([Catalog reader](catalog-reader.md)).
+The row count says "in data files" because DuckLake can inline small inserts in the catalog database. The reader sums visible data files minus delete files and does not count inlined rows. `ducklake_table_stats.record_count` is not used: it counts deleted rows and has no history.
 
 **Catalog text is data.** Names, comments, authors, commit messages and view SQL come from the catalog and may contain Markdown. A name goes into a code span with white space collapsed. A comment or commit message is escaped (a backslash before ASCII punctuation, line breaks kept). Control and invisible formatting characters (bidirectional overrides, zero-width characters) are removed. SQL goes into a fence longer than any backtick run inside it. The tooltip is an untrusted `MarkdownString` (no command links, no HTML). Labels and descriptions are plain text.
 
@@ -216,15 +216,7 @@ A message node is cached like any level, so a failing catalog is not queried on 
 
 `extension.ts` creates the `CatalogTree` with `profiles: () => store.list()` and `open: openWithPassword(...)`, the provider and the tree view with `showCollapseAll`. It also passes `viewColumns` and subscribes to `trust.onDidTrust`. The tree is disposed in `deactivate()`, not through `context.subscriptions`, because VS Code does not await asynchronous dispose functions there.
 
-`CatalogTreeProvider` maps `id`, `label`, `description`, `contextValue` one to one, the tooltip to an untrusted `MarkdownString`, the icon to a `ThemeIcon` (with a `ThemeColor` for `iconColor`), `hasChildren` to `Collapsed` or `None`, and a node's `command` to the item's command. `getChildren` returns `tree.roots()` or `tree.children(node)`. `onDidChangeTreeData` forwards `tree.onDidChange`. The extension-host tests cover the adapter ([Extension-host tests](integration-tests.md)).
-
-## Testing
-
-```bash
-npx vitest run test/unit/tree-format.test.ts test/unit/tree-model.test.ts test/unit/tree-history.test.ts
-```
-
-The model tests run `CatalogTree` on the real reader and the real SQLite driver, wrapping only the driver to count opens, delay or fail. The history tests run the same tree on the history fixture for SQLite and DuckDB (and PostgreSQL with `AANTJE_POSTGRES=1`). Format tests check the texts and that catalog text cannot break out of Markdown.
+`CatalogTreeProvider` maps `id`, `label`, `description`, `contextValue` one to one, the tooltip to an untrusted `MarkdownString`, the icon to a `ThemeIcon` (with a `ThemeColor` for `iconColor`), `hasChildren` to `Collapsed` or `None`, and a node's `command` to the item's command. `getChildren` returns `tree.roots()` or `tree.children(node)`. `onDidChangeTreeData` forwards `tree.onDidChange`.
 
 ## Known limits
 

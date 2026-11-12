@@ -12,7 +12,6 @@
 .dockerignore
 .vscode
 .idea
-.claude
 
 # Not needed by any image
 compose*.yaml

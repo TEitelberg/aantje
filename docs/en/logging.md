@@ -74,43 +74,6 @@ Caused by: Error: connect ECONNREFUSED 127.0.0.1:5432
 
 The notification a user sees comes from `userMessageOf(error)`: the `userMessage` of an `AantjeError`, otherwise one generic text that points to this channel. The text of an unknown error is never shown, because it could contain a secret.
 
-## API
-
-```ts
-interface Logger {
-  info(message: string): void;
-  warn(message: string): void;
-  error(message: string, error?: unknown): void;
-}
-const silentLogger: Logger; // discards everything, the default in tests
-type LogSink = (level: 'info' | 'warn' | 'error', message: string) => void;
-class SecretRegistry {
-  add(value: string): void;
-  redact(text: string): string;
-}
-function createLogger(sink: LogSink, secrets: SecretRegistry): Logger;
-function formatError(error: unknown): string;
-// src/log.vscode.ts, the only file that imports "vscode"
-function createOutputChannelLogger(secrets: SecretRegistry): Logger & { dispose(): void };
-```
-
-Logic receives a `Logger` as a parameter and never imports the adapter. The sink receives text that is already redacted.
-
-## Key decisions
-
-- **Redaction happens in the logger, once.** Callers just log. The message and the formatted error are joined first and redacted together, so a secret cannot slip through at the seam.
-- **Registered values first, patterns second.** The registry knows the real password and masks it however it is spelled. The patterns only catch common connection-string shapes of passwords nobody registered.
-- **The editor owns the log level**, so no aantje setting can disagree with it.
-- **A stack only for unexpected errors.** An `AantjeError` already says what went wrong; another error is a bug and the stack is what the fix needs.
-
-## Testing
-
-```powershell
-npx vitest run test/unit/log.test.ts test/unit/errors.test.ts
-```
-
-Unit tests run the real registry, logger and `formatError` with a realistic secret (a password with `@`, `:`, `/`, `#`, `%` and a space) in a message, a URL, a libpq string and a cause chain, and test the adapter against a stand-in for `vscode`. An extension-host test reads the log file of the real channel and checks that a typed password is masked ([Extension-host tests](integration-tests.md)); the end-to-end spec `postgres-secrets` checks it in code-server ([End-to-end tests](e2e-tests.md)).
-
 ## Known limits
 
 - Redaction is text based. A secret in another encoding (Base64, or the escaped form `util.inspect` prints inside a thrown object) is not recognised, nor is one split over several messages.

@@ -24,7 +24,7 @@ A table without data files (new, or all rows inline) shows messages, never an em
 
 ## Definitions
 
-All figures are as of the shown snapshot. `TableStatistics` (`src/catalog/model.ts`) is the data type; `reader.tableStatistics(tableId, snapshot, signal?)` computes it ([Catalog reader](catalog-reader.md#table-statistics-for-the-statistics-report)).
+All figures are as of the shown snapshot. `TableStatistics` (`src/catalog/model.ts`) is the data type; `reader.tableStatistics(tableId, snapshot, signal?)` computes it.
 
 | Figure                | Definition                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -103,12 +103,3 @@ The page uses the grid's policy ([Data grid](grid.md#the-page-the-policy-and-why
 - **Catalog text** (column names, partition values, minimum and maximum) goes in with `textContent`. Tooltips are HTML, so their text goes through `escapeHtml` (`src/html-escape.ts`).
 - **Messages.** The extension passes on only what `isShellRequest` accepts (`ready`, or `markdown` without a view); the page uses data only when `isStatisticsMessage` accepts it.
 - **No data leaves.** The page makes no request, and the extension reads only catalog tables, read-only.
-
-## Tests
-
-```text
-npx vitest run test/unit/stats- test/unit/catalog-statistics.test.ts test/unit/shell-palette.test.ts
-npx vitest run test/contract/statistics.contract.test.ts
-```
-
-The contract test runs `tableStatistics` on the history fixture (SQLite, DuckDB, and PostgreSQL with `AANTJE_POSTGRES=1`), the 1.0 fixture and edited copies at each cap, and checks that every statement got the cancel signal. Unit tests cover the pure helpers, the palette in all four modes, the chart options and escaped tooltips, the guards and the page bundle against a DOM stand-in. The integration test runs in a real VS Code; the end-to-end spec checks the canvases and themes in a real browser.

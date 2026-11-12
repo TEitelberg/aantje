@@ -59,7 +59,7 @@ A click on a cell selects its snapshot and column; a click on a heading selects 
 
 ## Data and limits
 
-`CatalogReader.schemaHistory(tableId, limit, signal)` returns `{ versions, more }` ([Catalog reader](catalog-reader.md#snapshot-details-and-changes)). The report asks for the newest 100 versions (`VERSION_LIMIT`).
+`CatalogReader.schemaHistory(tableId, limit, signal)` returns `{ versions, more }`. The report asks for the newest 100 versions (`VERSION_LIMIT`).
 
 - `buildHistory` (`src/schema-history/model.ts`) compares consecutive versions with `diffColumns`, matching columns by id. The page computes the filters.
 - With `more`, the oldest version read is only the starting point and shows no change; a note says older versions are not read.
@@ -74,30 +74,6 @@ The page uses the policy of the other reports (`default-src 'none'`, nonce for s
 - The page asks for an action by id and numbers only: `ready`, `refresh`, `markdown` with a view of the right shape, or one of the four action ids with the snapshot and choice it needs. No command id or free text can be part of it. The extension checks the numbers against the data it sent (`planSchemaHistoryAction`) and ignores and logs a mismatch.
 - The page checks what it receives (`isSchemaHistoryMessage`) as the extension checks what it sends.
 - The page makes no request. Actions that read table data are the tree's, with their own safeguards.
-
-## Modules
-
-| File                                      | Job                                                                                       |
-| ----------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `reader/history.ts`, `queries/history.ts` | `schemaHistory` and its statements                                                        |
-| `src/schema-history/model.ts`             | `buildHistory`, cell texts and signs, filters and the 100 rows, the detail pane. Pure.    |
-| `src/schema-history/actions.ts`           | Action ids, compare targets, `planSchemaHistoryAction`. Pure.                             |
-| `src/schema-history/protocol.ts`          | Messages and their guards. Pure.                                                          |
-| `src/schema-history/state.ts`             | The choices kept for a hidden panel or refresh. Pure.                                     |
-| `src/schema-history/markdown.ts`          | `schemaHistoryMarkdown`. Pure.                                                            |
-| `src/schema-history/kind.ts`, `style.ts`  | The report kind for the shell: view type, stylesheet, guards, `toMarkdown`                |
-| `src/schema-history/page.ts`, `render.ts` | Browser side: state and events; DOM builders. Registered in `src/shell/client.ts`.        |
-| `src/schema-history/read.ts`              | `readSchemaHistory`: history and newest snapshot in one call                              |
-| `src/schema-history/execute.ts`           | `performSchemaHistoryAction`: the actions of the snapshot report, plus the ALTER template |
-| `src/schema-history/commands.vscode.ts`   | The command, progress, panel and the action port (`src/shell/report-port.vscode.ts`)      |
-
-## Tests
-
-Unit tests cover the model (cell by cell on the history fixture), actions, protocol guards, the Markdown document and the browser bundle against a DOM stand-in. A contract test runs `schemaHistory` on SQLite, DuckDB and PostgreSQL; an integration test runs the panel and its actions in VS Code.
-
-```text
-npx vitest run test/unit/schema-history-model.test.ts test/unit/schema-history-client.test.ts test/contract/schema-history.contract.test.ts
-```
 
 ## Known limits
 

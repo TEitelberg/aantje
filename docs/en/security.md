@@ -9,7 +9,7 @@ aantje is a client. It opens the databases you configure, with the credentials y
 - **Changing a catalog by mistake.** A catalog is the single source of truth of a lake. The explorer has no write path. The SQL editor does, on purpose; [The SQL editor](#the-sql-editor) says what guards it.
 - **Leaking a password.** A password can end up in a synced settings file, a log, an error message, a tooltip or a screenshot. aantje keeps passwords, Quack tokens and S3 keys in the VS Code secret storage only, and redacts everything it logs or shows in an error.
 - **A project that steers aantje.** Opening a folder must not make aantje connect to a server the folder's author chose, or hand your stored password to it. Profiles come from your machine settings only; aantje reads nothing from the workspace.
-- **Hostile content in a catalog.** Names, comments and view SQL are data written by whoever wrote to the lake. aantje shows them as text, and the metadata queries never contain them as SQL. Two things go further: Copy DDL composes SQL text from them for you to run elsewhere (see [Rules for code changes](#rules-for-code-changes)), and DuckDB runs the SQL of a view when its columns or rows are requested, but only for a connection you trusted ([Reading data](#reading-data-tables-and-views)).
+- **Hostile content in a catalog.** Names, comments and view SQL are data written by whoever wrote to the lake. aantje shows them as text, and the metadata queries never contain them as SQL. Two things go further: Copy DDL composes SQL text from them for you to run elsewhere, and DuckDB runs the SQL of a view when its columns or rows are requested, but only for a connection you trusted ([Reading data](#reading-data-tables-and-views)).
 - **A catalog that steers the data engine.** Select Top 1000 Rows and Create Notebook run a DuckDB with external access enabled against a catalog someone else may have written. [What a hostile catalog can and cannot do](#what-a-hostile-catalog-can-and-cannot-do) lists the result.
 - **A database that does not answer.** PostgreSQL, DuckDB and Quack queries have a timeout (`aantje.queryTimeoutSeconds`) and can be cancelled; a Quack query that a hung server holds is given up. The SQLite driver reads the file into memory first, so it cannot wait on a lock; it has no timeout and its memory use grows with the file.
 
@@ -29,7 +29,7 @@ This is the guarantee of the explorer: the tree, tooltips, snapshot selection, s
 
 ### PostgreSQL
 
-`openPostgres` starts the session with `default_transaction_read_only=on`, sets a statement timeout and labels the session `application_name=aantje`. The read-only default protects against mistakes in aantje, not against a user who can change session settings. The real protection is a role with only `SELECT` on the metadata tables ([Catalog reader](catalog-reader.md) lists them):
+`openPostgres` starts the session with `default_transaction_read_only=on`, sets a statement timeout and labels the session `application_name=aantje`. The read-only default protects against mistakes in aantje, not against a user who can change session settings. The real protection is a role with only `SELECT` on the metadata tables:
 
 ```sql
 -- run as the owner of the catalog database; "ducklake_meta" is the metadata schema
@@ -40,7 +40,7 @@ GRANT SELECT ON ALL TABLES IN SCHEMA ducklake_meta TO aantje;
 
 ### Quack
 
-`openQuack` attaches the served database without `READ_ONLY`: DuckDB 2.0.0 accepts the option for Quack but lets writes reach the server, and newer quack builds refuse it. On the client the guarantee rests on the fixed `SELECT` text of the reader. The instance is locked so that no statement on it can reach anything but that server: `allowed_paths` with the one `/quack` endpoint, `enable_external_access=false`, no automatic extension install or load, then `lock_configuration`. The real protection is on the server: a token that the server's `quack_authorization_function` allows to read and nothing else. aantje cannot see what a token may do ([Quack driver](driver-quack.md#read-only-access-and-the-lock)).
+`openQuack` attaches the served database without `READ_ONLY`: DuckDB 2.0.0 accepts the option for Quack but lets writes reach the server, and newer quack builds refuse it. On the client the guarantee rests on the fixed `SELECT` text of the reader. The instance is locked so that no statement on it can reach anything but that server: `allowed_paths` with the one `/quack` endpoint, `enable_external_access=false`, no automatic extension install or load, then `lock_configuration`. The real protection is on the server: a token that the server's `quack_authorization_function` allows to read and nothing else. aantje cannot see what a token may do.
 
 ## Credentials
 
@@ -227,18 +227,3 @@ The metadata reader switches external access off for a DuckDB-file catalog; the 
 - Send telemetry. The network traffic is the PostgreSQL and Quack connections you configured, the S3 endpoint you configured for data commands, the download of DuckDB extensions and, only when you use the Azure commands, Azure Resource Manager, Microsoft Entra, the storage account of an Azure lake and the IP lookup at api.ipify.org.
 - Download code at runtime, except the DuckDB extensions `ducklake`, `postgres`, `sqlite` or `quack`, `httpfs` and, for an Azure lake, `azure` from `extensions.duckdb.org` on first use. With `aantje.duckdb.extensionDirectory` set to a prepared directory nothing is downloaded. The notebook's `%pip install` runs only when the user runs that cell.
 - Store a password, Quack token or S3 key anywhere but the secret storage, or put a secret into a notebook cell, webview message, log line or error message.
-
-## Rules for code changes
-
-- Never put a password or connection string into an error message, tooltip, log line or test snapshot.
-- In the metadata reader SQL is constant text with `?` placeholders; catalog and profile values are never concatenated. The PostgreSQL metadata schema must be a plain identifier and is quoted before it goes into the `search_path` start-up option.
-- A new driver or query path of the explorer must be read-only by itself, and its tests must show that a write fails.
-- Declare every new `aantje.*` setting with scope `machine`; a manifest test pins it.
-- View trust is decided in `guardRelation`, which refuses an untrusted view with `VIEW_UNTRUSTED`. A new read path passes the connection's trust into `DataAccess.viewsTrusted` and turns `VIEW_UNTRUSTED` into the confirmation and a retry. Do not decide trust from a tree node's kind.
-- The data engine and notebook builder cannot use placeholders (`ATTACH` and `CREATE SECRET` take none). Every value goes through one escaping function (`quoteLiteral` and `quoteIdentifier` in `src/catalog/ddl.ts`, `pyString`). Add no second way.
-- Every error leaving the data engine goes through `maskSecrets` with `secretsOf(access)`. Add a new secret in `DataAccess` to `secretsOf`.
-- Keep the webview as it is: nonce policy, no data in markup, `textContent`, and `isWebviewMessage` for everything from the page. A new message type needs a new check.
-- Copy DDL composes SQL from catalog text. Identifiers are quoted, but unknown type names, default expressions and view SQL are copied verbatim, so read it before running it elsewhere. Nothing in aantje executes it. Script as CREATE opens the same text; Script as SELECT, ALTER and DROP quote every name and put only the snapshot number into comments, and a table's ALTER consists of comments only. The ALTER of a view copies the stored SQL. A name with a line break is written over several comment lines so it cannot leave the comment. A script runs only when the user runs it (F5).
-- Catalog text goes through the escaping in `src/tree/format.ts` before it enters a Markdown tooltip, and a tooltip never enables HTML or command links.
-- Review every new runtime dependency: the bundle contains `pg` and `sql.js`, and the VSIX ships the native DuckDB binding.
-- Licence notices travel with every copy: the build writes `THIRD-PARTY-NOTICES.md` from the source map (`scripts/notices.mjs`) and the VSIX contains it. The source map is not part of the VSIX.

@@ -59,39 +59,6 @@ When a read fails with an error the health check can explain (a file the store l
 - `scopeForOffer` looks the table up in the snapshot the tree shows, then in the newest; a table in neither (dropped, renamed) is checked as the lake.
 - Errors of a SQL editor run appear in its results panel and have no button.
 
-## Modules
-
-| Module                                                                                | Job                                                                                          |
-| ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `src/health/run.ts`                                                                   | `runHealthCheck`: runs the groups, emits events, builds the report.                          |
-| `src/health/model.ts`                                                                 | `CHECKS`, request, finding, event and report types, default limits.                          |
-| `src/health/catalog-checks.ts`, `catalog-run.ts`, `auto-compact.ts`                   | The catalog group: facts to findings, and the reads; the auto_compact findings.              |
-| `src/health/fix.ts`, `maintenance-script.ts`                                          | The script of a finding; one script for all findings.                                        |
-| `src/health/connection-checks.ts`, `connection-run.ts`                                | The connection group: settings checks, attach, store probe, classification of failures.      |
-| `src/health/storage-checks.ts`, `storage-run.ts`                                      | The storage group: listing and comparison.                                                   |
-| `src/health/deep-checks.ts`, `deep-run.ts`                                            | The deep group: Parquet footers.                                                             |
-| `src/health/request.ts`                                                               | `healthRequestForError`, `resolveRequest`: the button in error messages.                     |
-| `src/health-report/model.ts`                                                          | Panel state, `applyHealthEvent`, filter, verdict, key figures, `SCRIPTS`, `actionsOf`. Pure. |
-| `src/health-report/controller.ts`, `batcher.ts`                                       | The panels and their runs, cancel, close, event batches.                                     |
-| `src/health-report/protocol.ts`, `actions.ts`                                         | Message guards; `planHealthAction`.                                                          |
-| `src/health-report/page.ts`, `render.ts`, `style.ts`                                  | The browser side.                                                                            |
-| `src/health-report/markdown.ts`, `offer.ts`                                           | The Markdown document; the error-message offer.                                              |
-| `src/health-report/commands.vscode.ts`, `perform.vscode.ts`, `error-action.vscode.ts` | Commands, the real check, the actions that need VS Code.                                     |
-
-## API
-
-`runHealthCheck(deps, request, run?)` in `src/health/run.ts` takes:
-
-- `deps`: the open `reader`, the `access` (`DataAccess`: profile, password, S3 settings and credentials), and optionally `credentialsFrom` (only words the advice), `now`, `exists`, `caseInsensitive` and `env` (the environment of the extension host; used to suggest an S3 endpoint, empty if not given). Check functions never read `process.env`.
-- `request`: `scope` (`lake` or a table id), `depth` (`quick` or `deep`), the `snapshot` in view and optional `limits` (`findingsPerCheck`, `storageFiles`, `deepFiles`).
-- `run`: an `AbortSignal` and an `onEvent` callback.
-
-It returns a `HealthReport`: the groups (in the order catalog, connection, storage, deep), the findings (sorted by group, severity, check, table, id) and a summary. A `HealthFinding` has an `id` (`storage.file-missing:data:12`: check, then object), `check`, `severity`, `group`, `scope`, `title`, `detail`, `cause`, `fix`, and optionally `inspectSql`, `fixSql` with `fixStep`, `settingKey`, `objectKey` and `suggestion`. Events are `group`, `progress`, `finding` and `summary`; the summary is the last one. See `src/health/model.ts` for the types.
-
-`runHealthCheck` never rejects. A failing check makes its group `failed` with a message and the others go on. A cancel keeps what was found, marks unfinished groups `skipped` with `Cancelled.` and sets `summary.cancelled`. The same catalog and store give the same list. The lake is attached at its newest snapshot, and `aantje.queryTimeoutSeconds` (default 30 s) limits the attach and each statement, not the run: a server that accepts the connection and never answers ends the attach as `connection.attach-failed`.
-
-`healthRequestForError` returns a suggested request for a store 404, a data file missing on the local disk, a 403 or a connection failure, and nothing for other errors. `resolveRequest` turns it into a request with the table id looked up at the snapshot the read used; a table not found falls back to the lake.
-
 ## Scope of a schema
 
 A schema report (`HealthScope` `{ kind: 'schema', schemaId }`, a finding scope `{ kind: 'schema', id, name }`) limits what depends on tables and shows what does not as lake-wide.
@@ -265,18 +232,6 @@ A quick run costs about twenty statements on the catalog (anti-joins read whole 
 2. A catalog check: add a `check` to `CONSISTENCY_CHECKS` in `src/catalog/model.ts`, its rows to `CONSISTENCY_SQL` in `src/catalog/queries/maintenance.ts` (columns `table_id`, `kind`, `id`, `value`) and its texts to `PROBLEMS` in `src/health/catalog-checks.ts`. For another kind of fact, write a pure function from facts to findings in `src/health/*-checks.ts`.
 3. Build the finding with `finding()` from `src/health/finding.ts`: title, detail with numbers, cause, fix and `inspectSql`. When maintenance can fix it, add the check to `src/health/fix.ts` (or pass `fixSql` and `fixStep`) so that the script for all findings includes it.
 4. Test it against an edited copy of the history fixture with the exact finding, and check that the healthy fixture stays free of errors and warnings.
-
-## How to test
-
-```text
-npx vitest run test/unit/health- test/contract/health-reader.contract.test.ts
-npx vitest run test/unit/health-report
-AANTJE_POSTGRES=1 npx vitest run test/contract test/unit/health-
-AANTJE_RUSTFS=1 npx vitest run test/unit/health-rustfs.test.ts
-npm run test:integration -- --grep "the Health check"
-```
-
-Unit tests run every check on an edited copy of the history fixture and on a lake DuckDB writes and maintains (no error or warning after any maintenance step). They also cover the path rules, the comparison on the local disk and a fake S3 server, classification of the store's real error texts, and that no secret or foreign URL reaches a report. The panel is tested without VS Code (model, protocol, controller, Markdown, the page bundle against a DOM stand-in). The PostgreSQL and RustFS tests run only with their environment variable; the integration test runs in a real VS Code.
 
 ## Known limits
 

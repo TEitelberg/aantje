@@ -11,47 +11,6 @@ The SQL editor of aantje completes, explains and checks SQL while you type: tabl
 
 The columns of a view are offered and explained once the connection's views are trusted ([Columns of views](#columns-of-views)).
 
-## Public API
-
-```ts
-// src/sql/language.ts
-export function openLanguageService(options?: {
-  extensionDirectory?: string;
-  logger?: Logger;
-}): LanguageService;
-
-export interface LanguageService {
-  tokenize(text: string): Promise<SqlToken[]>;
-  vocabulary(): Promise<Vocabulary>;
-  diagnose(text: string, source?: string, catalog?: SqlCatalog): Promise<readonly Problem[] | undefined>;
-  complete(text: string, offset: number, catalog: SqlCatalog): Promise<Completions | undefined>;
-  hover(text: string, offset: number, catalog: SqlCatalog): Promise<Hover | undefined>;
-  signature(text: string, offset: number, catalog: SqlCatalog): Promise<SignatureHelp | undefined>;
-  dispose(): Promise<void>;
-}
-
-// src/sql/problems.ts
-export interface Problem {
-  readonly offset: number;
-  readonly length: number;
-  readonly message: string;
-  readonly severity: 'error' | 'warning';
-  /** What a quick fix can put in place of the range, the nearest first, quoted where the name needs it. */
-  readonly replacements: readonly string[];
-}
-export function quickFixes(problem: Problem): QuickFix[]; // { title, offset, length, text }
-
-// src/sql/language.vscode.ts
-export function registerSqlLanguage(deps: SqlLanguageDeps): vscode.Disposable;
-// deps: service, logger, connectionOf(document), catalogOf(document), debounceMs, onDidChangeConnection?, onDidChangeCatalog?
-```
-
-- All offsets are UTF-16 offsets into the text, as the editor counts. DuckDB reports UTF-8 byte offsets; the service converts them (`utf16Offsets`, `src/sql/script.ts`, shared with the SQL session).
-- The service owns a tiny in-memory DuckDB that attaches nothing, loads no extension and is created with `enable_external_access=false`, `autoinstall_known_extensions=false`, `autoload_known_extensions=false` and `allow_persistent_secrets=false`. `sql_tokenize`, `json_serialize_sql` and the `duckdb_*` functions need none of that, so it cannot read a file or reach a network. It is created on the first call and closed by `dispose()`.
-- `registerSqlLanguage` registers a completion provider (`.`, `"`, and `'` for the snapshot times), a hover provider, a signature help provider (`(` and `,`), a code action provider for the quick fixes and the diagnostic collection `aantje-sql` for documents of the language `sql` with the scheme `untitled` or `file`. `connectionOf` decides which documents take part, also for the syntax check, which needs no catalog. `catalogOf` gives the catalog of that connection; while it returns `undefined` (not connected), keywords, functions and types still complete and only the syntax is checked. An item whose `snippet` is true is inserted as a `SnippetString`. Marks are removed when the document closes; `onDidChangeCatalog` (the explorer reads the lake again) checks the open documents again.
-
-`src/extension.ts` creates one service, builds one `SqlCatalog` per connection with `catalogOfReader` at the newest snapshot that the explorer knows (again when the explorer reloads; `catalogCache`, `src/sql/editor.ts`) and disposes the service on deactivation. It is the snapshot that the SQL session queries, so completion follows it also while the tree shows a pinned snapshot. The catalog binds views through `trustedViewColumns` ([Columns of views](#columns-of-views)).
-
 ## The catalog port
 
 The service reads the lake through a port at one snapshot (`src/sql/catalog.ts`):
@@ -136,8 +95,8 @@ export function catalogOfReader(
 - **Details.** A column shows its type and `NOT NULL` (a column of a view the DuckDB type, e.g. `DECIMAL(10,2)`); a table its row count in data files; a function its first signature.
 - **Views.** Their columns come once the connection's views are trusted; until then one hint item says why a view offers none ([Columns of views](#columns-of-views)).
 - **Functions** come from `duckdb_functions()`, grouped by name with their overloads. Scalar macros of `main` complete like functions, table macros after FROM.
-- **Functions of DuckLake** are not in that list: the service loads no extension. The global ones (`ducklake_snapshots`, `ducklake_list_files`, `ducklake_expire_snapshots`, ...) come from `src/sql/ducklake-vocabulary.ts`, which `scripts/ducklake-vocabulary.mjs` generates ([below](#the-vocabulary-of-ducklake)); `src/sql/ducklake.ts` adds a description and an example to each and says which change the lake (procedures). The reading ones are offered after FROM, the procedures after CALL, both inserted with the lake's name as their first argument and placeholders for the other positional ones: `ducklake_table_changes('lake', '${1:schema_name}', '${2:table_name}', ${3:start_snapshot}, ${4:end_snapshot})`. The functions behind the lake's name (`lake.snapshots()`, `lake.table_changes()`, the procedures `lake.set_option()`, `lake.set_commit_message()`, `lake.merge_adjacent_files()`) are listed by hand in the same file, because DuckDB lists them for no catalog.
-- **Named arguments.** Inside the call of a function of DuckLake or of a table function of DuckDB (`read_csv`, `read_parquet`, `read_json`, ...), once its positional arguments are typed, the named ones that are not given yet are offered as `dry_run => `; `header = true`, `header := true` and `header => true` count as given. DuckDB's names come from `duckdb_functions()` ([below](#the-vocabulary-of-duckdb)).
+- **Functions of DuckLake** are not in that list: the service loads no extension. The global ones (`ducklake_snapshots`, `ducklake_list_files`, `ducklake_expire_snapshots`, ...) come from `src/sql/ducklake-vocabulary.ts`, generated from the DuckLake extension; `src/sql/ducklake.ts` adds a description and an example to each and says which change the lake (procedures). The reading ones are offered after FROM, the procedures after CALL, both inserted with the lake's name as their first argument and placeholders for the other positional ones: `ducklake_table_changes('lake', '${1:schema_name}', '${2:table_name}', ${3:start_snapshot}, ${4:end_snapshot})`. The functions behind the lake's name (`lake.snapshots()`, `lake.table_changes()`, the procedures `lake.set_option()`, `lake.set_commit_message()`, `lake.merge_adjacent_files()`) are listed by hand in the same file, because DuckDB lists them for no catalog.
+- **Named arguments.** Inside the call of a function of DuckLake or of a table function of DuckDB (`read_csv`, `read_parquet`, `read_json`, ...), once its positional arguments are typed, the named ones that are not given yet are offered as `dry_run => `; `header = true`, `header := true` and `header => true` count as given. DuckDB's names come from `duckdb_functions()`.
 - **Options of COPY.** In `COPY ... TO 'file' (`: the options of the format first, then those of every format, without the ones given; after FORMAT the formats `csv`, `parquet` and `json`; in `PARTITION_BY (` and `FORCE_QUOTE (` the columns of the table that is copied. The names are in `src/sql/duckdb.ts`.
 - **Window frames.** Inside `OVER (` first PARTITION BY, ORDER BY, ROWS, RANGE and GROUPS; in the frame the words that may come next: BETWEEN, UNBOUNDED PRECEDING and CURRENT ROW after ROWS, PRECEDING and FOLLOWING after an offset, AND after the first bound of BETWEEN, UNBOUNDED FOLLOWING after AND, the EXCLUDE forms after the frame.
 - **Other DuckDB statements.** A FROM-first query goes on with SELECT before the other clauses. PIVOT offers ON, USING and GROUP BY after its table, UNPIVOT NAME and VALUE after INTO. After DESCRIBE and SUMMARIZE the tables come first, then SELECT, FROM and WITH for a query; after EXPLAIN (and EXPLAIN ANALYZE) the statement keywords.
@@ -177,20 +136,6 @@ With the catalog of the document's connection, the parse tree of the syntax chec
 
 The catalog is the newest snapshot, as the SQL session sees it. A statement with `AT (VERSION => n)` is completed, explained and helped with the objects of snapshot n (`statementSnapshot`, `src/sql/context.ts`, and `at` of the port). Inside `AT (` the clause offers `VERSION =>` and `TIMESTAMP =>`; after `VERSION =>` (or in its number) the snapshots (newest first, at most 200) with time and changes, after `TIMESTAMP =>` the snapshot times as literals. Inside the quotes of the timestamp only the time is inserted, and the closing quote when it is missing; typing `'` opens the list there. DuckLake takes the last snapshot at or before the time, so the literal is one millisecond later than shown.
 
-## The vocabulary of DuckDB
-
-`loadVocabulary` reads DuckDB's functions with their parameters from `duckdb_functions()` of the service's DuckDB. For a table function that list holds the positional parameters and then the named ones (`read_csv`: `path`, then `header`, `delim`, ...) without saying where the named ones start. `src/sql/duckdb-vocabulary.ts` says it: the number of positional parameters of each table function that also takes named ones. `node scripts/duckdb-vocabulary.mjs` writes it from a throw-away in-memory DuckDB of the shipped `@duckdb/node-api` without extensions and with external access off, as the service's, with the binder technique of the [DuckLake vocabulary](#the-vocabulary-of-ducklake) (`EXPLAIN FROM f(NULL, ...)`: bound, nothing read or run). The service itself binds nothing: binding every table function would add about 160 ms to its start. The names stay those of the running DuckDB, so a new named option appears without a new file; a table function that binds to no number of NULL arguments (the variadic `repeat_row`) keeps all its parameters positional, and one whose overloads differ in their positional count makes the script fail.
-
-DuckDB lists the options of COPY nowhere. `src/sql/duckdb.ts` names them by format, as the DuckDB documentation describes them.
-
-`test/unit/sql-duckdb-vocabulary.test.ts` generates `duckdb-vocabulary.ts` again in memory and fails when it differs from the checked-in one: run the script and commit the file. It also binds `EXPLAIN COPY (SELECT 1 AS a) TO 'out.<format>' (FORMAT <format>, <option>)` for every option of `duckdb.ts` with external access off (no file is written) and fails when DuckDB does not know a name for its format.
-
-## The vocabulary of DuckLake
-
-`npm run vocabulary:ducklake` (`scripts/ducklake-vocabulary.mjs`) loads the `ducklake` extension from `test/.cache/duckdb-extensions` (or the directory given as argument) into a throw-away in-memory DuckDB of the shipped `@duckdb/node-api`, reads the `ducklake_*` rows of `duckdb_functions()` and writes `src/sql/ducklake-vocabulary.ts`, formatted by Prettier: per function its kind and overloads, each with its positional and its named parameters. `duckdb_functions()` lists both kinds of parameters in one list; the script tells them apart with the binder: the longest list of leading arguments that binds (`EXPLAIN FROM f(NULL::type, ...)`, nothing attached, nothing run) is the positional one.
-
-`test/unit/sql-ducklake-vocabulary.test.ts` generates the file again in memory and fails when it differs from the checked-in one, so a new DuckDB or DuckLake build shows up as a failing test: run the script and commit the file. The same test fails when a function has no text in `src/sql/ducklake.ts`, or a text no function; `ducklake_scan` and `ducklake_commit` are left out on purpose: the first refuses a direct call, the second takes no lake and is not among the functions that the DuckLake documentation describes.
-
 ## Performance and security
 
 Completion, hover and signature help tokenize only what changed (`tokenWindow`, `src/sql/token-window.ts`). DuckDB's lexer starts anew after every terminator, so the tokens of the last four texts are kept, and a new text is read again from the last terminator before its first change, up to the end of the statement at the cursor; a request for a text that is known needs no DuckDB at all. On a lake of 1 000 tables and 20 000 columns, completion while typing at the end of a script of 50 000 characters takes 2 to 5 ms instead of the 75 ms of tokenizing the whole text (about 1.5 ms per KB); the catalog part (the lookups of the port's cache and the items) takes 1 to 4 ms of that. A statement of 50 000 characters is still read whole. Texts longer than 500 000 characters get no completion, hover or signature help. The DuckDB and the vocabulary are created on the first call (about 130 ms) and kept.
@@ -210,14 +155,3 @@ The one thing that runs SQL is the binding of a view for its columns: the SQL st
 - The values of the IN list of PIVOT and the columns of the result of PIVOT or UNPIVOT are not known: they would need a query.
 - The arrow form of a lambda (`x -> x + 1`) is not read as one: DuckDB 2.0 refuses it by default, and `->` is also the JSON operator. A lambda parameter is offered besides, not instead of, a column of the same name.
 - The options of `COPY ... FROM` and the values of an option other than FORMAT are not offered; a qualified column in `* EXCLUDE (t.c)` is not completed.
-
-## Testing
-
-```bash
-npx vitest run test/unit/sql-context.test.ts test/unit/sql-position.test.ts test/unit/sql-completion.test.ts
-npx vitest run test/unit/sql-help.test.ts test/unit/sql-language.test.ts test/unit/sql-catalog.test.ts
-npx vitest run test/unit/sql-performance.test.ts test/unit/sql-ducklake-vocabulary.test.ts test/unit/sql-duckdb-vocabulary.test.ts
-npx vitest run test/unit/sql-view-columns.test.ts test/unit/sql-names.test.ts test/unit/sql-token-window.test.ts
-```
-
-The context tests are tables over clauses, positions and the select lists of CTEs and subqueries on the real tokenizer's tokens, the position tests over frames; the completion and help tests use the real `CatalogReader` on the fixtures and state exact lists; the language tests cover the syntax errors, that no text is ever run, and (against a real lake) that inserted names with hostile characters run, and that the example of every function of DuckLake and every statement snippet of a maintenance call runs. The name tests are tables of statements with the warned names marked and the names their quick fixes offer, and of statements that must get no warning, on the fixtures; every warned statement fails when it runs on a lake with data and runs once its first fix is in, a list of statements of DuckDB's own SQL runs without a warning, and on the lake of hostile names each fixed statement runs. The token window test compares the tokens after edits (a quote or comment that opens to the end of the text, a change at the start) with DuckDB's tokens of the whole text and counts what was read. The performance test measures completion on a made-up lake of 1 000 tables and 20 000 columns while typing at the end of a script of 50 000 characters: after a warm-up that reads the catalog, the median of 15 keystrokes stays under 50 ms. The view column tests drive `trustedViewColumns` with a fake trust and a fake engine behind `resolveViewColumns` (trusted, not trusted, a failed and an aborted read, the list that lacks columns while the read runs), and bind a view of a real lake at the newest snapshot and at an older one. The lake tests need the DuckDB extensions in `test/.cache/duckdb-extensions` ([Testing](testing.md)) and are skipped with a reason without them.

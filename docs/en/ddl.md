@@ -2,19 +2,6 @@
 
 `src/catalog/ddl.ts` turns catalog metadata into SQL text: **Copy DDL** for tables and views, **Copy Qualified Name** for schemas, tables, views and columns, and the **Script as** submenu, which opens scripts in an editor. Scripts are text; the commands never execute anything. The module is pure: no I/O, no `vscode`, no DuckDB at run time. The commands reach it through `src/actions.ts`; the script templates live in `src/script-templates.ts` and `src/script-templates/`.
 
-## Public API
-
-Main exports of `src/catalog/ddl.ts`:
-
-- `quoteIdentifier(name)` always double-quotes and doubles embedded quotes: `a"b` becomes `"a""b"`. `quoteLiteral(text)` doubles single quotes.
-- `qualifiedName(...parts)` quotes and joins with dots. For a column pass schema, table, column and one more part per struct field: `"sales"."orders"."customer"."name"`. List elements and map keys and values have no named path, so dotted names cannot address them.
-- `createTableDdl`, `createViewDdl`, `alterViewDdl` (`CREATE OR REPLACE VIEW`), `addColumnDdl` (statements plus fixed note lines), `macroDdl`, `dropMacroDdl`.
-- `typeName(type)` maps a DuckLake leaf type to its DuckDB name ([Type mapping](#type-mapping)).
-
-`createTableDdl` and `createViewDdl` return one statement ending in `;` for any schema, table, column, field and alias name. Default expressions, unknown type names and view SQL are copied from the catalog and are outside that guarantee ([Limits](#limits)).
-
-**Copy DDL** reads the columns again at the snapshot the tree shows, so an older snapshot gives the older column list. For a view it uses the definition of the tree node. If the connection was closed, it fails with `The connection is closed. Connect again to copy the DDL.` **Copy Qualified Name** on a column writes the whole path of nested fields.
-
 ## The Script as submenu
 
 The submenu **Script as** (group `2_script` of the context menu) has **SELECT**, **INSERT** (a table only), **CREATE**, **ALTER** and **DROP**. A node shows only the entries it has a script for. Each opens a new untitled SQL document. The commands (`aantje.scriptSelect`, `scriptInsert`, `scriptCreate`, `scriptAlter`, `scriptDrop`) are hidden from the Command Palette because they need a node.
@@ -223,21 +210,6 @@ DuckLake stores type names in `ducklake_column.column_type`. The module spells o
 | `struct`, `list`, `map`                          | `STRUCT("field" TYPE, ...)`, `TYPE[]`, `MAP(KEY, VALUE)`   |
 
 A type not in the table passes through unchanged (for example one a later DuckLake adds); DuckDB may then reject it, which is better than hiding the column. The statements target DuckDB 2.0. `variant`, `geometry`, `time_ns` and `timestamptz_ns` need a DuckDB that knows them. DuckDB 2.0 refuses `ENUM`, `UNION`, `BIT` and fixed-size `ARRAY` columns in DuckLake, so they have no entry.
-
-## Design decisions
-
-- **Always quote.** Deciding whether a name needs quotes means knowing every DuckDB keyword. Quoting is valid for every name and keeps the case.
-- **Defaults are copied verbatim**, so `ColumnInfo.defaultValue` must be a SQL expression. DuckLake stores a default as text plus a kind: an `expression` or a numeric or boolean `literal` is SQL as it stands; any other `literal` is the bare value without quotes (`2020-01-01`), which would be wrong. The catalog reader therefore quotes those literals, and also `nan`, `inf` and `-inf` (`defaultExpression` in `src/catalog/reader.ts`).
-- **Hostile names stay one identifier.** Doubling quotes keeps `x"; DROP TABLE y; --` inside one identifier.
-- **No DuckDB dependency in `src`.** DuckDB is the judge in the tests only: the generator is right if DuckDB accepts its output and builds the same table.
-
-## Testing
-
-```bash
-npx vitest run test/unit/ddl.test.ts test/unit/script*.test.ts test/unit/macros-lake.test.ts
-```
-
-Unit tests run generated statements in a real in-memory DuckDB and compare the result with the original tables and views. Lake tests run the scripts of the whole matrix against real DuckLake 2.0 catalogs (SQLite always, PostgreSQL with `npm run test:full`). Text tests pin the shape of scripts that need no engine. Hostile names are part of every group.
 
 ## Limits
 

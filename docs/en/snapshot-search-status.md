@@ -38,7 +38,7 @@ Without a node (view title, Command Palette, status bar) the commands act on the
 
 ## Change descriptions
 
-`describeChanges(changes)` turns the `changes_made` column of `ducklake_snapshot_changes` into text. The column holds comma-separated `token:argument` entries, for example `created_table:"main"."t",inserted_into_table:7`. `parseChanges` and the token vocabulary live in `src/catalog/changes.ts` ([Catalog reader](catalog-reader.md)); `src/snapshot.ts` owns the wording (`describeAction`). The vocabulary is the DuckLake specification plus tokens only the extension source knows (`flushed_inlined`, tags, `expired_snapshot`).
+`describeChanges(changes)` turns the `changes_made` column of `ducklake_snapshot_changes` into text. The column holds comma-separated `token:argument` entries, for example `created_table:"main"."t",inserted_into_table:7`. `parseChanges` and the token vocabulary live in `src/catalog/changes.ts`; `src/snapshot.ts` owns the wording (`describeAction`). The vocabulary is the DuckLake specification plus tokens only the extension source knows (`flushed_inlined`, tags, `expired_snapshot`).
 
 | Shown as                                                                                                                        | Token(s)                                                                                                |
 | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
@@ -53,57 +53,9 @@ Without a node (view title, Command Palette, status bar) the commands act on the
 
 - **Several changes** in one snapshot appear in stored order, separated by `; `.
 - **Names** are SQL identifiers in double quotes: `"sales"."orders"` is `sales.orders`; a doubled quote is one quote. A comma inside a quoted name does not separate two changes; a colon or line break inside a name belongs to the name.
-- **Ids.** `#<id>` is a catalog id (schemas, tables, views and macros share one id space), `@<id>` a snapshot id. The stored text names only created objects, so other changes show an id. The names come from `reader.snapshotChanges(id)` ([Catalog reader](catalog-reader.md)).
+- **Ids.** `#<id>` is a catalog id (schemas, tables, views and macros share one id space), `@<id>` a snapshot id. The stored text names only created objects, so other changes show an id. The names come from `reader.snapshotChanges(id)`.
 - **Nothing is hidden.** An unknown token, a known token with an argument of the wrong shape, or an entry without a colon is shown as stored. Such input never throws.
 - `null` and the empty string give `No recorded changes`.
-
-## Public API
-
-```ts
-// src/snapshot.ts
-export function describeChanges(changes: string | null): string;
-export function snapshotPickItems(
-  snapshots,
-  current: { selected: SnapshotId | 'latest'; latest: SnapshotId },
-): SnapshotPickItem[];
-export function snapshotChoices(
-  snapshots,
-  selected: SnapshotId | undefined,
-  within?: Lifetime,
-): SnapshotPickItem<SnapshotId>[];
-
-// src/search.ts
-export function searchPickItems(entries: readonly CatalogEntry[]): SearchPickItem[];
-export function treeNodeId(connectionId: string, entry: CatalogEntry): string;
-export function folderNodeId(connectionId: string, entry: CatalogEntry): string;
-
-// src/status.ts
-export function statusBarContent(state: StatusBarState): { text: string; tooltip: string };
-export function activeProfile(profiles, inUse: string | undefined, statusOf): Profile | undefined;
-```
-
-- `snapshotPickItems` sorts by id, newest first, not by commit time, which is the clock of the client that wrote the snapshot. The description is the first 19 characters of `SnapshotInfo.time` (ISO 8601 in UTC), so no `Date` and no time zone is involved and seconds are cut, not rounded.
-- `snapshotChoices` is the same list without the "Latest" row, optionally cut to the `Lifetime` of a table or view (first snapshot inclusive, end exclusive). The commands of [Time travel](time-travel.md) use it.
-- `searchPickItems` does not change its input. Names are ordered with the shared collator of `src/order.ts` (`en`, numeric, base sensitivity), so a name has the same place in the search and in the tree.
-- `statusBarContent` covers every `status` of the tree's `ConnectionState`; a new status is a compile error until it has a text.
-- Both item types are shaped like `vscode.QuickPickItem` plus a `value`, so a chosen item hands the selection back without a lookup.
-
-## Design decisions
-
-- **Pure functions, ready-made texts.** The adapter has nothing to decide, and ESLint keeps `vscode` out of these files.
-- **`picked` marks the selection.** VS Code honours `picked` only in multi-select pickers, so the wiring moves the picked row into `activeItems`.
-- **Unknown input is shown, not dropped.** DuckLake adds tokens over time; a history that silently left a change out would be worse than one that shows a raw token.
-- **Quote-aware splitting**, as in DuckLake's parser: a table can be named `orders, 2026`.
-- **A `Map` for the vocabulary**, so `constructor` or `toString` are not known tokens.
-- **The tooltip does not promise what a click cannot do.**
-
-## Testing
-
-```bash
-npx vitest run test/unit/snapshot.test.ts test/unit/search.test.ts test/unit/status.test.ts
-```
-
-The tests read the real fixture catalog (14 snapshots, plus a history fixture with commit messages) and check the pick rows, the descriptions of every token and of malformed input, the order and node ids of the search (including a comparison with the nodes of the real tree), and the status bar texts for every state.
 
 ## Limits
 
