@@ -2,8 +2,12 @@ import type { AzureAuthMode } from '../connections/profile';
 import { AantjeError, isAantjeError, userMessageOf } from '../errors';
 import type { Logger } from '../log';
 import template from '../../deploy/azure/azuredeploy.json';
-import { ArmRequestError, ArmUnreachableError, DeploymentFailedError, FIREWALL_RULE } from './arm';
-import type { ArmClient, WaitOptions } from './arm';
+import type { ArmClient } from './arm';
+import { deploymentId, DeploymentFailedError } from './arm-deployments';
+import type { DeploymentRequest, WaitOptions } from './arm-deployments';
+import { armReasons, deniesPermission, validationFailure } from './arm-errors';
+import { FIREWALL_RULE } from './arm-firewall';
+import { ArmRequestError, ArmUnreachableError } from './arm-transport';
 import { decodeClaims, requireUserName } from './jwt';
 import { parseLakeOutputs } from './lake-outputs';
 import type { LakeOutputs } from './lake-outputs';
@@ -37,12 +41,12 @@ export interface CreatedLake {
 export interface LakeDeps {
   readonly arm: Pick<
     ArmClient,
-    | 'canAssignRoles'
     | 'postgresVersion'
     | 'storageNameProblem'
     | 'serverNameProblem'
     | 'createResourceGroup'
     | 'deleteResourceGroup'
+    | 'validateDeployment'
     | 'startDeployment'
     | 'waitForDeployment'
   >;
@@ -69,8 +73,9 @@ export interface DeployedLake {
 }
 
 /**
- * Checks what can be checked without cost (the right to assign roles, free names), then deploys the template and waits
- * for it. Throws a message for the user, and does not start the deployment, when a check fails.
+ * Checks what can be checked without cost (free names, a PostgreSQL version of the region), lets Azure check the
+ * deployment (which also decides whether the account may create every resource of the template), then deploys the
+ * template and waits for it. Throws a message for the user, and does not start the deployment, when a check fails.
  */
 export async function deployLake(request: LakeRequest, deps: LakeDeps): Promise<DeployedLake> {
   const { arm, report } = deps;
@@ -82,14 +87,7 @@ export async function deployLake(request: LakeRequest, deps: LakeDeps): Promise<
   const names = resourceNames(namePrefix, suffix);
   deps.log.info(`Signed in to Azure as ${userName ?? oid} (object id ${oid}) in the tenant ${tid}.`);
 
-  report('Checking your permissions and the names');
-  const scope = request.newResourceGroup ? undefined : resourceGroup;
-  if (!(await arm.canAssignRoles(subscriptionId, scope))) {
-    throw new AantjeError(
-      'AUTH_FAILED',
-      `Your account may not create role assignments${scope === undefined ? ' in this subscription' : ` in the resource group "${resourceGroup}"`}. aantje needs it to give you access to the data files. Ask for the role Owner or User Access Administrator, or choose another resource group.`,
-    );
-  }
+  report('Checking the names');
   const taken =
     (await arm.storageNameProblem(subscriptionId, names.storageAccount)) ??
     (await arm.serverNameProblem(subscriptionId, names.server));
@@ -105,7 +103,7 @@ export async function deployLake(request: LakeRequest, deps: LakeDeps): Promise<
     );
   }
   deps.log.info(
-    `Checks passed: your account may create role assignments, the names are free (server "${names.server}", storage account "${names.storageAccount}"), PostgreSQL ${postgresVersion ?? 'of the template'}.`,
+    `Checks passed: the names are free (server "${names.server}", storage account "${names.storageAccount}"), PostgreSQL ${postgresVersion ?? 'of the template'}.`,
   );
 
   report('Looking up your public IP address');
@@ -133,26 +131,28 @@ export async function deployLake(request: LakeRequest, deps: LakeDeps): Promise<
     authentication: request.authentication,
     tenantId: tid,
   };
+  const deployment: DeploymentRequest = {
+    template,
+    parameters: {
+      namePrefix,
+      size: request.size,
+      principalId: oid,
+      principalType: 'User',
+      clientIp,
+      administratorLoginPassword: password,
+      authentication: request.authentication,
+      ...(principalName === undefined ? {} : { principalName }),
+      location: request.location,
+      uniqueSuffix: suffix,
+      ...(postgresVersion === undefined ? {} : { postgresVersion }),
+    },
+  };
+  await checkDeployment(request, pending.deployment, deployment, deps);
   // Kept before the start: if waiting breaks off, the deployment goes on in Azure and only these tell how to finish it.
   await deps.pending.add(pending, entra ? undefined : password);
   report('Starting the deployment');
   try {
-    await arm.startDeployment(subscriptionId, resourceGroup, pending.deployment, {
-      template,
-      parameters: {
-        namePrefix,
-        size: request.size,
-        principalId: oid,
-        principalType: 'User',
-        clientIp,
-        administratorLoginPassword: password,
-        authentication: request.authentication,
-        ...(principalName === undefined ? {} : { principalName }),
-        location: request.location,
-        uniqueSuffix: suffix,
-        ...(postgresVersion === undefined ? {} : { postgresVersion }),
-      },
-    });
+    await arm.startDeployment(subscriptionId, resourceGroup, pending.deployment, deployment);
   } catch (error) {
     // Without an answer the deployment may have started; any other failure means that nothing runs.
     if (error instanceof ArmUnreachableError) {
@@ -162,9 +162,49 @@ export async function deployLake(request: LakeRequest, deps: LakeDeps): Promise<
     throw request.newResourceGroup ? await withoutNewGroup(error, request, deps) : error;
   }
   deps.log.info(
-    `Started the deployment "${pending.deployment}" in the resource group "${resourceGroup}": ${portalLink(tid, deploymentId(pending))}`,
+    `Started the deployment "${pending.deployment}" in the resource group "${resourceGroup}": ${portalLink(tid, deploymentId(pending.subscriptionId, pending.resourceGroup, pending.deployment))}`,
   );
   return deployedLake(pending, await waitForLake(pending, deps), entra ? undefined : password);
+}
+
+/**
+ * Azure's check of the deployment before it starts, with the request that starts it. Azure decides there, among other
+ * things, whether the account may create every resource of the template, the role assignment included; aantje does not
+ * evaluate permissions itself. A refusal stops the run before anything is deployed, and a resource group that this run
+ * created is deleted again.
+ */
+async function checkDeployment(
+  request: LakeRequest,
+  name: string,
+  deployment: DeploymentRequest,
+  deps: LakeDeps,
+): Promise<void> {
+  deps.report('Letting Azure check the deployment');
+  try {
+    await deps.arm.validateDeployment(request.subscriptionId, request.resourceGroup, name, deployment);
+  } catch (error) {
+    const refused = validationRefusal(error, request);
+    throw request.newResourceGroup ? await withoutNewGroup(refused, request, deps) : refused;
+  }
+  deps.log.info(`Azure's check of the deployment "${name}" passed.`);
+}
+
+// A refused permission gets the roles that the template needs; any other refusal says what Azure said.
+function validationRefusal(error: unknown, request: LakeRequest): unknown {
+  if (!(error instanceof ArmRequestError) || error.armError === undefined) {
+    return error;
+  }
+  if (!deniesPermission(error.armError)) {
+    return validationFailure(error.armError, error.status);
+  }
+  const where = request.newResourceGroup
+    ? ' in this subscription'
+    : ` in the resource group "${request.resourceGroup}"`;
+  return new AantjeError(
+    'AUTH_FAILED',
+    `Azure's check before the deployment refused your account a permission${where}. The lake includes a role assignment that gives you access to the data files: ask for the role Owner or User Access Administrator, or choose another resource group. That check may miss a role that your account has only through a management group; assigning the role on the subscription or the resource group helps then. Azure said: ${armReasons(error.armError)}`,
+    { cause: error },
+  );
 }
 
 // Azure refused the start, so the resource group that this run created holds nothing: delete it rather than leave an
@@ -254,10 +294,6 @@ function stillRunning(error: unknown, lake: PendingLake, state: 'goes on' | 'may
     `${said} ${state === 'goes on' ? `${capitalized(where)} goes on in Azure.` : `If ${where} has started, it goes on in Azure.`} Run "aantje: Finish Creating Azure DuckLake..." to wait for it again and add the connection.`,
     { cause: error },
   );
-}
-
-function deploymentId(lake: PendingLake): string {
-  return `/subscriptions/${lake.subscriptionId}/resourceGroups/${lake.resourceGroup}/providers/Microsoft.Resources/deployments/${lake.deployment}`;
 }
 
 // The progress shows each poll; the log shows each change of the state and each resource once it has ended.

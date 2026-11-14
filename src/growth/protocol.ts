@@ -1,5 +1,6 @@
 import {
   isArrayOf,
+  isBoolean,
   isCount,
   isExactShape,
   isFiniteNumber,
@@ -11,10 +12,10 @@ import {
   isString,
   own,
 } from '../guards';
-import { isSnapshot } from '../snapshot-report/protocol';
+import type { Test } from '../guards';
 import { actionGuard } from '../shell/protocol';
-import { isReportScope } from '../shell/scope';
-import type { GrowthActionRequest } from './actions';
+import { SCOPED_WINDOW_FIELDS } from '../snapshot-changes/protocol';
+import type { GrowthActionId, GrowthActionRequest } from './actions';
 import type { GrowthMarkdownView } from './markdown';
 import { METRICS } from './model';
 import type { GrowthData } from './model';
@@ -24,7 +25,6 @@ export type GrowthPageRequest = { readonly type: 'action' } & GrowthActionReques
 type GrowthMessage = { readonly type: 'growth'; readonly data: GrowthData };
 
 const isInteger = (value: unknown): boolean => isFiniteNumber(value) && Number.isInteger(value);
-const isFlag = (value: unknown): boolean => typeof value === 'boolean';
 
 const isChange = isShape({
   tableId: isCount,
@@ -36,29 +36,26 @@ const isChange = isShape({
 });
 
 const isData = isShape({
-  connection: isString,
-  scope: isReportScope,
+  ...SCOPED_WINDOW_FIELDS,
   focus: isNullOr(isCount),
-  latest: isCount,
-  snapshots: isArrayOf(isSnapshot),
-  more: isFlag,
-  read: isOptional(isCount),
-  expired: isOptional(isFlag),
+  expired: isOptional(isBoolean),
   tables: isArrayOf(isShape({ id: isCount, schema: isString, name: isString })),
   changes: isArrayOf(isChange),
-  inlinedMore: isFlag,
-  inlinedFailed: isFlag,
+  inlinedMore: isBoolean,
+  inlinedFailed: isBoolean,
 });
 
 export function isGrowthMessage(value: unknown): value is GrowthMessage {
   return isObject(value) && own(value, 'type') === 'growth' && isData(own(value, 'data'));
 }
 
-/** A known action with exactly its fields; `planAction` checks that they name sent data. */
-export const isGrowthAction = actionGuard({
+const ACTION_FIELDS: Readonly<Record<GrowthActionId, Readonly<Record<string, Test>>>> = {
   showCatalog: { snapshot: isCount },
   query: { snapshot: isCount, table: isCount },
-}) as (value: unknown) => value is GrowthPageRequest;
+};
+
+/** A known action with exactly its fields; `planAction` checks that they name sent data. */
+export const isGrowthAction = actionGuard(ACTION_FIELDS) as (value: unknown) => value is GrowthPageRequest;
 
 /** The page's choices for Open as Markdown; the extension fits them to the data. */
 export const isGrowthView: (value: unknown) => value is GrowthMarkdownView = isExactShape({

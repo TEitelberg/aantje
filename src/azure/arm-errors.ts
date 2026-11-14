@@ -18,10 +18,49 @@ function errorOf(error: Record<string, unknown>): ArmError {
   if (inner && /^(DeploymentFailed|ResourceDeploymentFailure)$/.test(String(error.code))) {
     return errorOf(inner);
   }
-  return {
-    code: typeof error.code === 'string' ? error.code : 'Unknown',
-    message: typeof error.message === 'string' ? error.message : '',
-  };
+  return plainError(error);
+}
+
+const plainError = (error: Record<string, unknown>): ArmError => ({
+  code: typeof error.code === 'string' ? error.code : 'Unknown',
+  message: typeof error.message === 'string' ? error.message : '',
+});
+
+const detailsOf = (error: Record<string, unknown>): Record<string, unknown>[] =>
+  Array.isArray(error.details) ? error.details.filter(isObject) : [];
+
+const DENIED = /^(Linked)?AuthorizationFailed$/;
+// The check before a deployment can name a refused permission only in its text, under `InvalidTemplateDeployment`.
+const DENIED_TEXT =
+  /Authorization failed for template resource|does not have (authorization|permission) to perform action/i;
+
+/**
+ * Whether the `error` of an ARM answer, or an error among its details at any depth, says that Azure refused the
+ * caller a permission: the code `AuthorizationFailed` or `LinkedAuthorizationFailed`, or the text of such a refusal.
+ */
+export function deniesPermission(error: unknown): boolean {
+  return (
+    isObject(error) &&
+    (DENIED.test(String(error.code)) ||
+      DENIED_TEXT.test(String(error.message)) ||
+      detailsOf(error).some(deniesPermission))
+  );
+}
+
+/** The errors at the ends of the details of an ARM error: the reasons, below the errors that only wrap them. */
+function reasonsOf(error: unknown): ArmError[] {
+  if (!isObject(error)) {
+    return [];
+  }
+  const below = detailsOf(error).flatMap(reasonsOf);
+  return below.length > 0 ? below : [plainError(error)];
+}
+
+/** What Azure said in an ARM error, as `code: message` for each of its reasons. */
+export function armReasons(error: unknown): string {
+  return reasonsOf(error)
+    .map(({ code, message }) => `${code}: ${message}`.replace(/\s+/g, ' ').trim())
+    .join(' ');
 }
 
 const RULES: readonly { readonly match: RegExp; readonly text: string }[] = [
@@ -65,7 +104,7 @@ const RULES: readonly { readonly match: RegExp; readonly text: string }[] = [
 ];
 
 /** A message for the user: the known causes in plain words, always followed by what Azure said. */
-export function describeArmError(error: ArmError, status?: number): string {
+function describeArmError(error: ArmError, status?: number): string {
   const said = `${error.code}: ${error.message}`.replace(/\s+/g, ' ').trim();
   const rule = RULES.find(({ match }) => match.test(said));
   const hint =
@@ -78,5 +117,19 @@ export function armFailure(error: ArmError, status?: number): AantjeError {
   return new AantjeError(
     status === 401 ? 'AUTH_FAILED' : 'CONNECTION_FAILED',
     describeArmError(error, status),
+  );
+}
+
+/**
+ * The error of a deployment that Azure's check before the start refused. Azure wraps the reasons
+ * (`InvalidTemplateDeployment`, `PreflightValidationCheckFailed`); each reason is shown with the hint of a known cause.
+ */
+export function validationFailure(error: unknown, status: number): AantjeError {
+  return new AantjeError(
+    status === 401 ? 'AUTH_FAILED' : 'CONNECTION_FAILED',
+    [
+      "Azure's check of the deployment refused it.",
+      ...reasonsOf(error).map((reason) => describeArmError(reason, status)),
+    ].join(' '),
   );
 }

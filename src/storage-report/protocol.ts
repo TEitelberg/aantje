@@ -1,5 +1,6 @@
 import {
   isArrayOf,
+  isBoolean,
   isCount,
   isExactShape,
   isNullOr,
@@ -15,7 +16,8 @@ import { isScheduled } from '../catalog/scheduled';
 import { actionGuard } from '../shell/protocol';
 import { isReportScope } from '../shell/scope';
 import type { ActionMessage } from '../shell/protocol';
-import { isGrowthPoint } from '../stats/protocol';
+import type { Test } from '../guards';
+import { isGrowthPoint } from '../shell/file-growth';
 import type { StorageActionId, StorageData, StorageView } from './model';
 
 type StorageMessage = { readonly type: 'storage'; readonly data: StorageData };
@@ -41,7 +43,7 @@ const isData = isShape({
   readAt: isString,
   storage: isShape({
     dataPath: isNullOr(isString),
-    encrypted: (value) => typeof value === 'boolean',
+    encrypted: isBoolean,
     dataFiles: isTotals,
     deleteFiles: isTotals,
     scheduledForDeletion: isScheduled,
@@ -63,8 +65,7 @@ export function isStorageMessage(value: unknown): value is StorageMessage {
 
 export type StorageAction = ActionMessage & { readonly action: StorageActionId; readonly table?: number };
 
-/** A known action with the table id where one applies and no other field; the extension checks it was sent. */
-export const isStorageAction: (value: unknown) => value is StorageAction = actionGuard({
+const ACTION_FIELDS: Readonly<Record<StorageActionId, Readonly<Record<string, Test>>>> = {
   showStatistics: { table: isCount },
   revealTable: { table: isCount },
   scriptMerge: { table: isCount },
@@ -72,7 +73,10 @@ export const isStorageAction: (value: unknown) => value is StorageAction = actio
   scriptCleanup: {},
   scriptExpire: {},
   showProperties: {},
-});
+};
+
+/** A known action with the table id where one applies and no other field; the extension checks it was sent. */
+export const isStorageAction: (value: unknown) => value is StorageAction = actionGuard(ACTION_FIELDS);
 
 export const isStorageView: (value: unknown) => value is StorageView = isExactShape({
   filter: isString,

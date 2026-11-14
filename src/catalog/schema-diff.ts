@@ -1,3 +1,4 @@
+import { groupBy } from '../order';
 import type { CatalogEntry, ColumnInfo } from './model';
 
 interface ColumnChangeBase {
@@ -43,7 +44,8 @@ function place(
   return into;
 }
 
-function longestIncreasing(values: readonly number[]): Set<number> {
+/** The positions of one longest strictly increasing run of the values: the siblings that keep their order. */
+export function longestIncreasing(values: readonly number[]): Set<number> {
   const runs: { readonly length: number; readonly previous: number }[] = [];
   for (const value of values) {
     let best = { length: 1, previous: -1 };
@@ -66,13 +68,11 @@ function longestIncreasing(values: readonly number[]): Set<number> {
 // Moved: siblings present in both states that are outside the longest run keeping its relative order.
 // Adding or dropping a sibling moves nobody.
 function movedIds(before: ReadonlyMap<number, Placed>, after: ReadonlyMap<number, Placed>): Set<number> {
-  const byParent = new Map<number | null, Placed[]>();
-  for (const [id, now] of after) {
+  const stayed = [...after].flatMap(([id, now]) => {
     const was = before.get(id);
-    if (was?.parent === now.parent) {
-      byParent.set(now.parent, [...(byParent.get(now.parent) ?? []), was]);
-    }
-  }
+    return was?.parent === now.parent ? [was] : [];
+  });
+  const byParent = groupBy(stayed, (was) => was.parent);
   const moved = new Set<number>();
   for (const siblings of byParent.values()) {
     const kept = longestIncreasing(siblings.map((sibling) => sibling.index));

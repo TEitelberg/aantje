@@ -1,10 +1,10 @@
 import { AantjeError, isAantjeError, userMessageOf } from '../errors';
 import type { Logger } from '../log';
-import { isPassingPollFailure } from './arm';
 import type { ArmClient } from './arm';
 import type { CreatedLake } from './create-lake';
-import { capitalized, elapsed, TOLERATED_POLL_FAILURES } from './operations';
+import { capitalized, elapsed } from './operations';
 import type { ArmOperation } from './operations';
+import { pollUntil } from './poll';
 
 export type DeleteScope = 'resource group' | 'resources';
 
@@ -36,7 +36,6 @@ export interface FollowDeps {
 
 const FOLLOW_POLL_MS = 15_000;
 const FOLLOW_TIMEOUT_MS = 60 * 60_000;
-// As while waiting for a deployment: a few unanswered polls in a row pass.
 
 /** The resource ids a delete acts on, as Azure lists them. */
 export function lakeResourceIds(lake: CreatedLake): { readonly server: string; readonly storage: string } {
@@ -128,33 +127,27 @@ async function followOne({ what, operation }: StartedDeletion, deps: FollowDeps)
   const { pollMs = FOLLOW_POLL_MS, timeoutMs = FOLLOW_TIMEOUT_MS } = deps;
   const now = deps.now ?? Date.now;
   const begin = now();
-  let failures = 0;
-  for (;;) {
-    try {
-      if (await deps.arm.operationDone(operation)) {
-        deps.log.info(`Azure finished deleting ${what} after ${elapsed(now() - begin)}.`);
-        return;
-      }
-      failures = 0;
-    } catch (error) {
-      if (!isPassingPollFailure(error) || ++failures > TOLERATED_POLL_FAILURES) {
-        throw new AantjeError(
-          isAantjeError(error) ? error.code : 'CONNECTION_FAILED',
-          `Azure did not delete ${what}: ${userMessageOf(error)}`,
-          { cause: error },
-        );
-      }
-      deps.log.warn(`No answer how the deletion of ${what} goes on (${error.userMessage}); asking again.`);
-    }
-    if (now() - begin >= timeoutMs) {
-      throw new AantjeError(
+  // As while waiting for a deployment: a few unanswered polls in a row pass, each waiting twice as long.
+  await pollUntil(async () => ((await deps.arm.operationDone(operation)) ? true : undefined), {
+    pollMs,
+    timeoutMs,
+    sleep: deps.sleep,
+    spent: () => now() - begin,
+    onRetry: (error) =>
+      deps.log.warn(`No answer how the deletion of ${what} goes on (${error.userMessage}); asking again.`),
+    onFailure: (error) =>
+      new AantjeError(
+        isAantjeError(error) ? error.code : 'CONNECTION_FAILED',
+        `Azure did not delete ${what}: ${userMessageOf(error)}`,
+        { cause: error },
+      ),
+    onTimeout: () =>
+      new AantjeError(
         'TIMEOUT',
         `Azure has not finished deleting ${what} after ${elapsed(timeoutMs)}. Check it in the Azure portal.`,
-      );
-    }
-    // As while waiting for a deployment: each failed poll in a row waits twice as long.
-    await deps.sleep(pollMs * 2 ** failures);
-  }
+      ),
+  });
+  deps.log.info(`Azure finished deleting ${what} after ${elapsed(now() - begin)}.`);
 }
 
 const resourceLabel = ({ id, type }: { id: string; type: string }): string =>

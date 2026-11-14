@@ -1,8 +1,7 @@
-import { formatUtc } from '../shell/model';
-import type { ChartOption } from '../shell/chart-option';
 import { firstIndex, tip } from '../shell/chart-option';
+import type { ChartOption } from '../shell/chart-option';
+import { formatUtc, plural, whoText } from '../shell/model';
 import type { Palette } from '../shell/palette';
-import { plural } from '../shell/model';
 import { METRIC_LABEL, formatDelta, formatMetric, formatStep } from './model';
 import type { Metric, Step, GrowthXAxis } from './model';
 
@@ -21,7 +20,7 @@ function tooltipOf(metric: Metric, step: Step | undefined, before: Step | undefi
   if (!step) {
     return '';
   }
-  const who = [step.author, step.message].filter((part) => part !== null && part !== '').join(' · ');
+  const who = whoText(step.author, step.message);
   return tip(`@${step.id} · ${formatUtc(step.time)}`, [
     ...(who === '' ? [] : [who]),
     `${METRIC_LABEL[metric]}: ${formatStep(metric, step)}`,

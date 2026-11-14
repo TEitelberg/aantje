@@ -57,7 +57,7 @@ A snapshot button selects a snapshot. The detail pane shows its time, author, me
 | Compare the catalog with ...  | The Markdown report of **Compare Snapshots** between N and the snapshot before it (`previous @P`) or the newest one (`latest @L`). | the other snapshot exists                                                  |
 | Rows changed (for each table) | The grid of the changes of the table between snapshot N-1 and N, as **Show Rows Changed** in the tree.                             | the snapshot inserted or deleted rows of the table, did not drop it, N > 0 |
 
-Which action the data offers is decided by the snapshot report (`planSnapshotReportAction`, `src/snapshot-report/actions.ts`), so the two panels cannot disagree.
+Which action the data offers is decided as in the snapshot report (`planSnapshotAction`, `src/snapshot-changes/actions.ts`), and both draw the detail pane with `src/snapshot-changes/detail.ts`, so the two panels cannot disagree.
 
 ## Open as Markdown
 

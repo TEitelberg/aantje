@@ -1,23 +1,28 @@
 import * as vscode from 'vscode';
 import type { Register } from '../command.vscode';
-import { openWithPassword } from '../connections/connect';
+import { testConnection } from '../connections/connect';
 import type { ConnectDeps } from '../connections/connect';
 import { createWizardUi } from '../connections/ports.vscode';
 import type { PostgresProfile } from '../connections/profile';
 import type { ConnectionStore } from '../connections/store';
 import type { DataAccessFactory } from '../data/resolve';
 import type { ViewTrustStore } from '../data/trust';
+import { userMessageOf } from '../errors';
 import type { Logger } from '../log';
+import type { QueryHistory } from '../sql/history';
 import { ArmClient } from './arm';
 import { allowMyIpFlow } from './allow-ip';
 import { attachNewLake } from './attach-lake';
 import type { AzureAuth } from './auth.vscode';
 import { azureNotebookConfig } from './config-export';
-import { requireUserName } from './jwt';
+import { pendingNotice } from './pending';
 import type { PendingLakes } from './pending';
 import { discoverPublicIp } from './public-ip';
+import { unattachedNotice } from './registry';
 import type { LakeRegistry } from './registry';
-import { createLakeFlow, deleteLakeFlow, finishLakeFlow, importLakeFlow } from './wizard';
+import { createLakeFlow, finishLakeFlow } from './create-flow';
+import { deleteLakeFlow } from './delete-flow';
+import { importLakeFlow } from './import-flow';
 
 interface AzureCommandEnv {
   readonly store: ConnectionStore;
@@ -27,6 +32,7 @@ interface AzureCommandEnv {
   readonly dataAccess: DataAccessFactory;
   readonly connect: ConnectDeps;
   readonly trust: ViewTrustStore;
+  readonly history: Pick<QueryHistory, 'clear'>;
   readonly register: Register;
   readonly logger: Logger;
 }
@@ -48,6 +54,42 @@ export function registerAzureCommands(env: AzureCommandEnv): vscode.Disposable[]
     report: (step: string) => void,
   ): Promise<void> =>
     attachNewLake(await env.dataAccess(profile, undefined), dataPath, { sleep, report, log });
+
+  // A deployment that was interrupted by closing the editor or reloading the window waits for Finish Creating.
+  const notice = pendingNotice(pending.list());
+  if (notice !== undefined) {
+    const finish = 'Finish';
+    void vscode.window.showWarningMessage(notice, finish).then((answer) => {
+      if (answer === finish) {
+        void vscode.commands.executeCommand('aantje.finishAzureLake');
+      }
+    });
+  }
+
+  // A lake that was saved as a connection but whose first attach never finished: the mark is set before the attach and
+  // cleared after it, so it also catches a failed attach whose message is long gone.
+  for (const { connectionId, dataPath } of registry.unattached()) {
+    const profile = store.get(connectionId);
+    if (profile?.kind !== 'postgres') {
+      void registry.markAttached(connectionId);
+      continue;
+    }
+    const attachNow = 'Attach now';
+    void vscode.window.showWarningMessage(unattachedNotice(profile.name), attachNow).then(async (answer) => {
+      if (answer !== attachNow) {
+        return;
+      }
+      try {
+        await ui.withProgress(`Attaching the Azure DuckLake "${profile.name}"...`, async (report) => {
+          await attach(profile, dataPath, report);
+        });
+        await registry.markAttached(connectionId);
+        ui.info(`Attached the Azure DuckLake "${profile.name}".`);
+      } catch (error) {
+        ui.error(`Attaching "${profile.name}" failed: ${userMessageOf(error)}`);
+      }
+    });
+  }
 
   return [
     register('aantje.createAzureLake', async () => {
@@ -81,13 +123,9 @@ export function registerAzureCommands(env: AzureCommandEnv): vscode.Disposable[]
         store,
         clipboard: () => Promise.resolve(vscode.env.clipboard.readText()),
         test: async (profile, password) => {
-          const opened =
-            profile.azureAuth === 'entra'
-              ? await openWithPassword(profile, env.connect)
-              : await env.connect.open(profile, password);
-          await opened.reader.close();
+          await testConnection(profile, password, env.connect);
         },
-        entraUser: async () => requireUserName(await auth.postgresToken(undefined)),
+        entraUser: () => auth.entraUser(undefined),
         log,
       });
     }),
@@ -128,6 +166,7 @@ export function registerAzureCommands(env: AzureCommandEnv): vscode.Disposable[]
         removeConnection: async (removed) => {
           await store.remove(removed.id);
           await env.trust.revoke(removed);
+          await env.history.clear(removed.id);
         },
         log,
         sleep,

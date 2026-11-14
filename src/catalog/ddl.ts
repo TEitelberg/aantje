@@ -41,6 +41,16 @@ export function quoteIdentifier(name: string): string {
   return `"${name.replaceAll('"', '""')}"`;
 }
 
+/**
+ * An identifier as DuckDB compares it: A to Z match in either case, every other letter only itself, so `"Ä"` and `"ä"`
+ * are two names. Every comparison of catalog names goes through it.
+ */
+export const foldIdentifier = (name: string): string =>
+  name.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+
+/** Whether two identifiers name the same object for DuckDB; see `foldIdentifier`. */
+export const sameIdentifier = (a: string, b: string): boolean => foldIdentifier(a) === foldIdentifier(b);
+
 /** A string literal, doubling embedded single quotes. */
 export function quoteLiteral(text: string): string {
   return `'${text.replaceAll("'", "''")}'`;
@@ -58,12 +68,21 @@ export function createTableDdl(
   columns: readonly ColumnInfo[],
   options: readonly { readonly name: string; readonly value: string }[] = [],
 ): string {
+  return createTableNamed([schemaName, tableName], columns, options);
+}
+
+/** `createTableDdl` with the name in other parts: one part names the table without its schema. */
+export function createTableNamed(
+  name: readonly string[],
+  columns: readonly ColumnInfo[],
+  options: readonly { readonly name: string; readonly value: string }[] = [],
+): string {
   const definitions = columns.map((column) => `  ${columnDefinition(column)}`);
   const clause =
     options.length === 0
       ? ''
-      : ` WITH (${options.map(({ name, value }) => `${name} = ${value}`).join(', ')})`;
-  return `CREATE TABLE ${qualifiedName(schemaName, tableName)} (\n${definitions.join(',\n')}\n)${clause};`;
+      : ` WITH (${options.map((option) => `${option.name} = ${option.value}`).join(', ')})`;
+  return `CREATE TABLE ${qualifiedName(...name)} (\n${definitions.join(',\n')}\n)${clause};`;
 }
 
 // DuckLake accepts only NULL, a boolean, a number or a string as the default of an added column.
@@ -143,8 +162,8 @@ export function columnDefinition(column: ColumnInfo): string {
   return parts.join(' ');
 }
 
-// Nested types are rebuilt from `children` (struct fields, list element, map key and value).
-function sqlType(column: ColumnInfo): string {
+/** The DuckDB type of a column; nested types are rebuilt from `children` (struct fields, list element, map key and value). */
+export function sqlType(column: ColumnInfo): string {
   switch (column.type) {
     case 'struct':
       return `STRUCT(${column.children.map((field) => `${quoteIdentifier(field.name)} ${sqlType(field)}`).join(', ')})`;
@@ -158,19 +177,24 @@ function sqlType(column: ColumnInfo): string {
   }
 }
 
+/** A DuckLake `decimal(p,s)`, with the precision and the scale as its groups. */
+export const DECIMAL = /^decimal\(\s*(\d+)\s*,\s*(\d+)\s*\)$/;
+
 /** DuckDB name of a DuckLake leaf type; other types (e.g. nested ones as a macro stores them) pass through. */
 export function typeName(type: string): string {
-  const decimal = /^decimal\(\s*(\d+)\s*,\s*(\d+)\s*\)$/.exec(type);
+  const decimal = DECIMAL.exec(type);
   return decimal ? `DECIMAL(${decimal[1]},${decimal[2]})` : (LEAF_TYPES.get(type) ?? type);
 }
 
 /**
  * `CREATE OR REPLACE MACRO` with all overloads comma-separated, because a second `CREATE MACRO` of the name fails.
- * Overloaded table macro queries get parentheses, or the comma continues the select list.
+ * Overloaded table macro queries get parentheses, or the comma continues the select list. `head` `CREATE MACRO` fails
+ * instead of replacing a macro of the name.
  */
 export function macroDdl(
   schemaName: string,
   macro: Pick<MacroInfo, 'name' | 'kind' | 'implementations'>,
+  head: MacroHead = 'CREATE OR REPLACE MACRO',
 ): string {
   const overloaded = macro.implementations.length > 1;
   const body = (sql: string): string =>
@@ -178,15 +202,18 @@ export function macroDdl(
   const overloads = macro.implementations.map(
     ({ parameters, sql }) => `(${parameters.map(parameterDefinition).join(', ')}) AS ${body(sql)}`,
   );
-  return `CREATE OR REPLACE MACRO ${qualifiedName(schemaName, macro.name)}${overloads.join(', ')};`;
+  return `${head} ${qualifiedName(schemaName, macro.name)}${overloads.join(', ')};`;
 }
+
+export type MacroHead = 'CREATE OR REPLACE MACRO' | 'CREATE MACRO';
 
 /** `DROP MACRO` for all overloads; a table macro needs `TABLE`. */
 export function dropMacroDdl(schemaName: string, macro: Pick<MacroInfo, 'name' | 'kind'>): string {
   return `DROP MACRO ${macro.kind === 'table' ? 'TABLE ' : ''}${qualifiedName(schemaName, macro.name)};`;
 }
 
-function parameterDefinition({ name, type, defaultValue }: MacroParameter): string {
+/** `"name" TYPE := default`: a parameter as `CREATE MACRO` defines it. */
+export function parameterDefinition({ name, type, defaultValue }: MacroParameter): string {
   return [
     quoteIdentifier(name),
     ...(type === null ? [] : [typeName(type)]),

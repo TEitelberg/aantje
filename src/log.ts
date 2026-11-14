@@ -77,6 +77,7 @@ export async function logFailure<T>(logger: Logger, what: string, run: () => Pro
 
 // Log text for a thrown value. An `AantjeError` reads `code: userMessage`; other errors keep their stack, also as a
 // cause: `openCatalog` wraps unexpected errors, so the cause locates the bug. Causes follow as `Caused by:`.
+/** Exported for its test. */
 export function formatError(error: unknown): string {
   const lines = [describeError(error)];
   const seen = new Set<unknown>([error]);

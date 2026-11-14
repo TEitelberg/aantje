@@ -15,7 +15,8 @@ export interface NotebookSpec {
   readonly table: TableRef;
   readonly snapshot?: SnapshotId; // undefined: follows the latest snapshot
   readonly shownSnapshot?: SnapshotId; // the snapshot the tree showed, informational
-  readonly s3: S3Settings; // settings values, never keys
+  readonly storage?: StorageConfig; // where the data files are and how to sign in; never a secret
+  readonly dataPath?: string; // the data path of the catalog
   readonly extensionDirectory?: string;
   readonly generatedOn: string; // YYYY-MM-DD, passed in so the function stays pure
 }
@@ -26,14 +27,14 @@ export function buildNotebook(spec: NotebookSpec): NotebookCell[]; // { kind, la
 
 ## The cells
 
-The notebook always has these eight cells:
+The notebook has these eight cells. A connection whose storage signs in with Microsoft Entra gets one more code cell for that sign-in ([below](#storage-sign-in-in-the-notebook)).
 
 | #   | Kind     | Content                                                                                                                                 |
 | --- | -------- | --------------------------------------------------------------------------------------------------------------------------------------- |
 | 1   | markdown | Title `schema.table`, where the notebook comes from (date, connection, catalog kind, snapshot), how to run it, how secrets are handled. |
 | 2   | code     | `%pip install "duckdb>=2.0.0" pandas`, alone, so a failed install is easy to see and repeat.                                            |
 | 3   | code     | Imports (`getpass`, `os`, `duckdb`) and the helper `lit()` that quotes a SQL string literal.                                            |
-| 4   | code     | Configuration: catalog variables, `SNAPSHOT`, the `S3_*` variables, `EXTENSION_DIRECTORY`.                                              |
+| 4   | code     | Configuration: catalog variables, `SNAPSHOT`, the storage variables (`S3_*`, `AZURE_*`), `EXTENSION_DIRECTORY`.                         |
 | 5   | code     | Connection: `duckdb.connect`, `INSTALL`/`LOAD`, the secrets, the read-only `ATTACH`, `USE lake` (or its first schema).                  |
 | 6   | markdown | "Ask your question": `QUERY` is the statement of **Select Top 1000 Rows**; DuckDB has no `TOP`; tables are addressed through `lake`.    |
 | 7   | code     | `QUERY = '''SELECT * FROM lake."schema"."table" LIMIT 1000'''` and `con.sql(QUERY).df()`.                                               |
@@ -54,7 +55,7 @@ PG_METADATA_SCHEMA = None
 # Snapshot to read; None follows the latest snapshot.
 SNAPSHOT = 6
 
-# S3: only needed when the data files of the table are stored on S3.
+# Storage (S3-compatible store): only needed when the data files of the table are stored there.
 S3_ENDPOINT = 'http://localhost:9000'
 S3_REGION = 'us-east-1'
 S3_URL_STYLE = 'path'
@@ -66,7 +67,7 @@ S3_SECRET_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY')
 EXTENSION_DIRECTORY = None
 ```
 
-SQLite and DuckDB profiles have one catalog variable, `CATALOG_PATH`, instead of `PG_*`. A Quack profile has `QUACK_HOST`, `QUACK_PORT`, `QUACK_TOKEN`, `QUACK_TLS` and `QUACK_FINGERPRINT` (`None` checks the certificate against the system trust store). The connection cell attaches `ducklake:sqlite:<path>`, `ducklake:<path>` (DuckDB file), `ducklake:postgres:` with `META_SECRET 'aantje_pg'`, or `ducklake:quack:<host>:<port>` with the secret `aantje_quack`, `META_DISABLE_SSL` and, with a fingerprint and TLS on, `META_SSL_FINGERPRINT`. The extensions are `ducklake` plus `sqlite`, `postgres`, or `quack` with `httpfs` (none for a DuckDB file), and `httpfs` when S3 is used (an endpoint, a region, a URL style or both keys are set; the `aantje_s3` secret is created then too). With `PG_SSL` the `aantje_pg` secret carries `SSLMODE 'verify-full'` and `SSLROOTCERT 'system'`, without it `SSLMODE 'disable'`. `PG_SSL` holds the connection's `ssl` value. The connection cell ends by deleting the secrets from the kernel ([Secrets](#secrets)).
+SQLite and DuckDB profiles have one catalog variable, `CATALOG_PATH`, instead of `PG_*`. A Quack profile has `QUACK_HOST`, `QUACK_PORT`, `QUACK_TOKEN`, `QUACK_TLS` and `QUACK_FINGERPRINT` (`None` checks the certificate against the system trust store). The connection cell attaches `ducklake:sqlite:<path>`, `ducklake:<path>` (DuckDB file), `ducklake:postgres:` with `META_SECRET 'aantje_pg'`, or `ducklake:quack:<host>:<port>` with the secret `aantje_quack`, `META_DISABLE_SSL` and, with a fingerprint and TLS on, `META_SSL_FINGERPRINT`. The extensions are `ducklake` plus `sqlite`, `postgres`, or `quack` with `httpfs` (none for a DuckDB file), and the extensions of the storage of the connection (`httpfs` for S3 and R2, `aws` only for the credential chain, `azure` for Azure and OneLake) and the storage secret, which is the same statement the extension builds for its own engine. With `PG_SSL` the `aantje_pg` secret carries `SSLMODE 'verify-full'` and `SSLROOTCERT 'system'`, without it `SSLMODE 'disable'`. `PG_SSL` holds the connection's `ssl` value. The connection cell ends by deleting the secrets from the kernel ([Secrets](#secrets)).
 
 ## Relation to the grid and to the data package
 
@@ -83,16 +84,40 @@ The notebook and the preview grid run the same logic on purpose: the connection 
 
 ## Secrets
 
-The cells never contain a password or a key. `NotebookSpec` has no field for them, and `buildNotebook` reads only named fields of the profile and S3 settings, so an object that carries a password at runtime cannot leak it. See [Security](security.md#notebooks).
+The cells never contain a password or a key. `NotebookSpec` has no field for them, and `buildNotebook` reads only named fields of the profile and the storage configuration, so an object that carries a password at runtime cannot leak it. See [Security](security.md#notebooks).
 
 - The PostgreSQL password is read from `PGPASSWORD` or asked for with `getpass` when the configuration cell runs (PostgreSQL profiles only). The Quack token is read from `QUACK_TOKEN` or asked for the same way (Quack profiles only).
-- The S3 key id and secret come from `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`. A missing one is asked for only when `S3_ENDPOINT` is set. The credentials stored by **Set S3 Credentials** serve the grid and do not reach the notebook, which runs in another process. With an endpoint and a local file catalog both prompts still appear; Enter leaves the value empty.
+- The storage secrets come from environment variables, else they are asked for with `getpass`: `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` for S3, `AZURE_STORAGE_CONNECTION_STRING` for a connection string, `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` and `AZURE_CLIENT_SECRET` for a service principal. Microsoft Entra uses a device code sign-in instead. What is stored for the connection (**Set Storage Sign-in...**) or by **Set S3 Credentials** serves the extension and does not reach the notebook, which runs in another process. A missing S3 key is asked for only when an endpoint is set; with an endpoint and a local file catalog both prompts still appear, and Enter leaves the value empty.
 - The values live in Python variables of the kernel and in the `CREATE SECRET` statements DuckDB receives, never in the `ATTACH` string.
-- The connection cell deletes the lists `pg` and `s3` and the variables `PG_PASSWORD` (or `QUACK_TOKEN`), `S3_KEY_ID` and `S3_SECRET_KEY` from the kernel afterwards. Run the notebook from the configuration cell on; running the connection cell alone fails because the variables are gone.
+- The connection cell deletes the lists `pg` and `s3` and the variables `PG_PASSWORD` (or `QUACK_TOKEN`) and the storage secrets (for example `S3_KEY_ID` and `S3_SECRET_KEY`) from the kernel afterwards. The sign-in of a Microsoft Entra notebook keeps its credential, because the token has to be renewed. Run the notebook from the configuration cell on; running the connection cell alone fails because the variables are gone.
 
-## S3 settings
+## Storage
 
-`aantje.s3.endpoint`, `aantje.s3.region` and `aantje.s3.urlStyle` pre-fill `S3_ENDPOINT`, `S3_REGION` and `S3_URL_STYLE`; an empty value becomes `None`. The endpoint may carry a scheme: `http://localhost:9000` gives `ENDPOINT 'localhost:9000'` and `USE_SSL false`, `https://...` gives `USE_SSL true`, and an endpoint without scheme leaves `USE_SSL` to DuckDB (TLS). The secret `aantje_s3` is created only when an endpoint or both keys are present.
+The notebook reads the storage of its connection ([Data access](data-access.md#storage-of-a-connection)); the cells hold the endpoint, region, URL style, account name, tenant and client ID, never a secret. The storage secret has a name of its own per connection and **no scope**: a notebook belongs to one connection, and what its account may read at the service is the decision of the storage. A scope is not written, not even as a comment.
+
+| Storage                   | What the cells do                                                                                                                                            |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| AWS S3, keys              | `S3_KEY_ID`, `S3_SECRET_KEY` and `S3_SESSION_TOKEN` from `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN`, else asked for with `getpass` |
+| AWS S3, credential chain  | the secret uses the chain with the chain and profile of the connection; `aws` is loaded; no key is asked for                                                 |
+| S3-compatible store, R2   | the endpoint (`http://` turns TLS off, `https://` turns it on, no scheme leaves it to DuckDB) or the R2 account ID, region, URL style, and the keys as above |
+| Azure, connection string  | `AZURE_STORAGE_CONNECTION_STRING`, else `getpass`                                                                                                            |
+| Azure, account key or SAS | composed into a connection string; the key or token comes from a prompt, a value with `;` is refused                                                         |
+| Azure, service principal  | `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` and `AZURE_CLIENT_SECRET` (or the certificate path), else asked for                                                     |
+| Azure or OneLake, chain   | the secret uses the credential chain of the kernel's machine                                                                                                 |
+| Azure or OneLake, Entra   | a sign-in cell with device code ([below](#storage-sign-in-in-the-notebook))                                                                                  |
+
+A connection without `storage` still uses the machine settings `aantje.s3.endpoint`, `aantje.s3.region` and `aantje.s3.urlStyle` to pre-fill `S3_ENDPOINT`, `S3_REGION` and `S3_URL_STYLE`; an empty value becomes `None`. The credentials stored by **Set S3 Credentials** serve the extension and do not reach the notebook. The secret is created only when an endpoint or both keys are present.
+
+### Storage sign-in in the notebook
+
+The token of the Microsoft account of VS Code cannot be handed to a kernel, so the kernel signs in itself. For `azure` and `onelake` with `signIn` `entra` the notebook gets a sign-in cell, modelled on the Azure notebooks of the [Docker stack](../../docker/README.md#azure-notebooks):
+
+- The install cell also installs `azure-identity`.
+- The cell creates a `DeviceCodeCredential` for the tenant of the connection (the home tenant without one), prints the code to enter at the sign-in page of Microsoft, asks for a token for `https://storage.azure.com/.default` and creates the secret with `PROVIDER access_token`. The token lives in a Python variable of the kernel, never in the notebook.
+- A token lasts about an hour. The cell defines `refresh_storage_secret()`, which replaces the secret with a new token from the same credential; call it when requests start to fail with an expired token. The credential stays in the kernel, so a second sign-in is usually not needed. The token for PostgreSQL is not renewed in the kernel: run the sign-in cell again, then the connect cell.
+- A connection that also signs in to PostgreSQL with Microsoft Entra (`azureAuth` `entra`) gets the token for `https://ossrdbms-aad.database.windows.net/.default` from the same credential in the same cell.
+
+**Limit.** A tenant that blocks the device code flow with Conditional Access gives no notebook with Microsoft Entra for this connection. Use another sign-in for the connection (service principal, credential chain, connection string) or the SQL editor.
 
 ## Snapshots
 
@@ -100,7 +125,9 @@ A notebook created while the tree is pinned to a snapshot gets `SNAPSHOT = <id>`
 
 ## Limits
 
-- An Azure DuckLake (a PostgreSQL connection with a storage account) gets no notebook: the cells cannot load the `azure` extension, sign in to the storage account or to PostgreSQL with Microsoft Entra. The context menu of its tables and views does not offer Create Notebook (they carry the context value `table.azure` or `view.azure`), and a call from elsewhere is refused with a pointer to the SQL editor; the Azure notebooks of the [Docker stack](../../docker/README.md#azure-notebooks) cover that case.
+- A Microsoft Entra sign-in to the storage needs the device code flow ([above](#storage-sign-in-in-the-notebook)); a tenant that blocks it gives no such notebook.
+- Two lakes of the same service in one kernel (two S3 endpoints, two Azure accounts) do not work side by side: each notebook creates an unscoped secret for its service, and which of two secrets of the same type DuckDB picks for a path is not defined. Add a scope to the secrets yourself if you need both in one kernel.
+- Google Cloud Storage is not supported.
 - The notebook is generated once; later changes to the tree, connection or settings do not reach an open notebook.
 - Paths and hosts in the cells are those of the extension host. A kernel on another machine does not find a local catalog file or a host reachable only from the extension host.
 - A relative `DATA_PATH` of a DuckLake resolves against the kernel's working directory, not the catalog file ([Data access](data-access.md)).

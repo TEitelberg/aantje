@@ -19,9 +19,9 @@ import * as queries from '../queries/objects';
 import { splitExpirable } from '../expirable';
 import { splitScheduled } from '../scheduled';
 import { toIsoUtc } from '../timestamp';
-import { readColumns } from './columns';
+import { readColumnEntries, readColumns } from './columns';
 import { toIsoUtcOrNull, toNumber, toNumberOrNull, toText, toTextOrNull } from './rows';
-import type { Attempt, Run } from './rows';
+import type { Attempt, Run, WithCommits } from './rows';
 
 const SUPPORTED_VERSION = /^1\.\d+$/;
 
@@ -124,6 +124,7 @@ type CoreReads = Pick<
   | 'tables'
   | 'views'
   | 'columns'
+  | 'columnEntries'
   | 'entries'
   | 'metadata'
   | 'snapshotCount'
@@ -134,7 +135,7 @@ type CoreReads = Pick<
 >;
 
 /** Reads of the catalog structure: snapshots, schemas, tables, views, columns, properties and storage. */
-export function coreReads(run: Run, attempt: Attempt): CoreReads {
+export function coreReads(run: Run, attempt: Attempt, withCommits: WithCommits): CoreReads {
   return {
     info: () => readInfo(run),
 
@@ -147,8 +148,7 @@ export function coreReads(run: Run, attempt: Attempt): CoreReads {
     expirableSnapshots: (metadata = readMetadata(run)) => readExpirable(run, metadata),
 
     async snapshots(limit?: number): Promise<SnapshotInfo[]> {
-      // Older specifications have no commit columns.
-      const rows = (await attempt(queries.snapshots(limit))) ?? (await run(queries.snapshots(limit, false)));
+      const rows = await withCommits((commitColumns) => queries.snapshots(limit, commitColumns));
       return rows.map((row) => ({
         id: toNumber(row.snapshot_id),
         time: toIsoUtc(toText(row.snapshot_time)),
@@ -198,6 +198,8 @@ export function coreReads(run: Run, attempt: Attempt): CoreReads {
     },
 
     columns: (tableId, snapshot) => readColumns(run, tableId, snapshot),
+
+    columnEntries: (snapshot) => readColumnEntries(run, snapshot),
 
     async entries(snapshot): Promise<CatalogEntry[]> {
       const rows = await run(queries.entries(snapshot));

@@ -1,11 +1,13 @@
 import { quoteLiteral } from '../catalog/ddl';
 import { setupStatements } from '../data/attach';
-import { EXTENSION_HINT, firstLine, secretsOf } from '../data/errors';
-import { guardedOpen, loadEngine } from '../data/open-lake';
+import { secretsOf } from '../data/errors';
+import { withOpenLake } from '../data/open-lake';
 import type { DataAccess } from '../data/types';
-import { AantjeError, messageOf, userMessageOf } from '../errors';
+import { loadEngine } from '../duckdb/engine';
+import { locate } from '../storage/location';
+import { extensionFailure, scrubbed } from '../duckdb/messages';
+import { AantjeError, userMessageOf } from '../errors';
 import type { Logger } from '../log';
-import { maskSecrets } from '../secrets';
 import { isRolePropagation, withBackoff } from './retry';
 
 export interface AttachDeps {
@@ -14,10 +16,12 @@ export interface AttachDeps {
   readonly log: Pick<Logger, 'warn'>;
 }
 
-/** The container of a data path as a glob: listing it needs a data role on the account and reads nothing. */
+/**
+ * The container of a data path as a glob: listing it needs a data role on the account and reads nothing. Exported for
+ * its test.
+ */
 export function containerGlob(dataPath: string): string {
-  const { protocol, username, host } = new URL(dataPath);
-  return `${protocol}//${username}@${host}/*`;
+  return `${locate(dataPath).root}*`;
 }
 
 /**
@@ -28,7 +32,7 @@ export function containerGlob(dataPath: string): string {
 export async function attachNewLake(access: DataAccess, dataPath: string, deps: AttachDeps): Promise<void> {
   const engine = await loadEngine();
   const attempt = (): Promise<void> =>
-    guardedOpen({
+    withOpenLake({
       engine,
       access,
       signal: undefined,
@@ -36,17 +40,18 @@ export async function attachNewLake(access: DataAccess, dataPath: string, deps: 
       cancelledText: 'Attaching the new lake was cancelled.',
       activity: 'Attaching the new lake',
       use: async ({ connection }) => {
-        await connection.run(`SELECT count(*) FROM glob(${quoteLiteral(containerGlob(dataPath))})`);
+        // A local data path has no container to list.
+        if (locate(dataPath).family !== 'local') {
+          await connection.run(`SELECT count(*) FROM glob(${quoteLiteral(containerGlob(dataPath))})`);
+        }
       },
       fail: (cause, phase) => {
-        const text = firstLine(maskSecrets(messageOf(cause), secretsOf(access)));
-        return new AantjeError(
-          'CONNECTION_FAILED',
-          phase === 'extension'
-            ? `A DuckDB extension that the lake needs could not be installed or loaded (${text}). ${EXTENSION_HINT}`
-            : `Cannot attach the new lake: ${text}`,
-          { cause: new Error(text) },
-        );
+        const { line } = scrubbed(cause, secretsOf(access));
+        return phase === 'extension'
+          ? extensionFailure('A DuckDB extension that the lake needs', line)
+          : new AantjeError('CONNECTION_FAILED', `Cannot attach the new lake: ${line}`, {
+              cause: new Error(line),
+            });
       },
     });
   await withBackoff(attempt, {

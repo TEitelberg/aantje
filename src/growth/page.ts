@@ -1,11 +1,11 @@
 /// <reference lib="dom" />
 // Browser side of the Growth report: state and events; the DOM is built in render.ts.
-import { cardGrid, pageHeader } from '../shell/blocks';
-import { drawChart } from '../shell/charts';
-import type { Chart } from '../shell/charts';
+import { cardGrid, focusPane, markPicked, pageHeader } from '../shell/blocks';
+import type { ListRow } from '../shell/blocks';
 import { el } from '../shell/dom';
+import { isHighContrast } from '../shell/palette';
+import { reportPage } from '../shell/report-page';
 import { scopeSuffix } from '../shell/scope';
-import type { Page, PageContext, PageKind } from '../shell/page';
 import { readTheme } from '../shell/theme';
 import type { Theme } from '../shell/theme';
 import type { GrowthActionRequest } from './actions';
@@ -21,17 +21,15 @@ import {
 } from './model';
 import type { GrowthData, GrowthXAxis, Metric, Step, TableChoice } from './model';
 import { isGrowthMessage } from './protocol';
-import { detailChildren, filters, growthPane, markRows, noteChildren, snapshotList } from './render';
-import type { ListRow } from './render';
+import { detailChildren, filters, growthPane, noteChildren, snapshotList } from './render';
 import { restoreGrowthChoices } from './state';
 
 /** Keeps the choices when the same report is read again. */
-function createGrowthPage(context: PageContext): Page<GrowthData> {
+export const growthPage = reportPage<GrowthData>('growth', isGrowthMessage, ({ context, charts, mount }) => {
   let data: GrowthData;
   let choices: TableChoice[];
   let steps: Step[];
   let theme: Theme;
-  let chart: Chart | undefined;
   let table: number | undefined;
   let metric: Metric = 'rows';
   let axis: GrowthXAxis = 'snapshot';
@@ -42,9 +40,7 @@ function createGrowthPage(context: PageContext): Page<GrowthData> {
   const notes = el('div', 'notes');
   const growth = el('section', 'growth');
   const list = el('section', 'list');
-  const detail = el('section', 'detail');
-  // The pane is replaced when the selection changes; it takes the focus that the button in it loses.
-  detail.tabIndex = -1;
+  const detail = focusPane('detail');
 
   const ask = (request: GrowthActionRequest): void => context.post({ type: 'action', ...request });
 
@@ -56,24 +52,31 @@ function createGrowthPage(context: PageContext): Page<GrowthData> {
         axis,
         scope: growthScopeLabel(choices, table),
         selected,
-        contrast: theme.mode.startsWith('hc'),
+        contrast: isHighContrast(theme.mode),
       },
       theme.palette,
     );
 
   function drawGrowth(): void {
-    chart?.dispose();
-    chart = undefined;
-    const pane = growthPane(metric, growthScopeLabel(choices, table), steps.length > 0);
-    growth.replaceChildren(...pane.children);
-    if (pane.box) {
-      chart = drawChart(pane.box, theme.chart, chartOption(), undefined, (index) => {
-        const step = steps[index];
-        if (step) {
-          select(step.id);
-        }
-      });
-    }
+    charts.clear();
+    growth.replaceChildren(
+      ...growthPane(
+        metric,
+        growthScopeLabel(choices, table),
+        {
+          charts,
+          option: chartOption(),
+          onItemClick: (index) => {
+            const step = steps[index];
+            if (step) {
+              select(step.id);
+            }
+          },
+        },
+        steps.length > 0,
+      ),
+    );
+    charts.drawAll(theme);
   }
 
   function drawList(): void {
@@ -88,8 +91,8 @@ function createGrowthPage(context: PageContext): Page<GrowthData> {
   }
 
   function markSelection(): void {
-    markRows(rows, selected);
-    chart?.update(chartOption());
+    markPicked(rows, selected);
+    charts.charts[0]?.update(chartOption());
     detail.replaceChildren(
       ...detailChildren({ steps, selected, table, metric, scope: growthScopeLabel(choices, table) }, ask),
     );
@@ -145,23 +148,9 @@ function createGrowthPage(context: PageContext): Page<GrowthData> {
       );
       const main = el('main');
       main.append(...(next.snapshots.length > 0 ? [bar] : []), cards, notes, growth, list, detail);
-      context.app.replaceChildren(header.element, main);
+      mount(header, main);
       drawView();
-      header.settle();
     },
-    redraw() {
-      if (data) {
-        drawView();
-      }
-    },
-    resize() {
-      chart?.resize();
-    },
+    redraw: drawView,
   };
-}
-
-export const growthPage: PageKind<GrowthData> = {
-  type: 'growth',
-  isMessage: isGrowthMessage,
-  create: createGrowthPage,
-};
+});

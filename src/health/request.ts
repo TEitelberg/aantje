@@ -2,6 +2,8 @@ import type { CatalogEntry, SnapshotId } from '../catalog/model';
 import type { TableRef } from '../data/types';
 import { isAantjeError } from '../errors';
 import type { HealthRequest } from './model';
+import { storeProblemOf } from '../storage/diagnose';
+import type { StoreProblem } from '../storage/diagnose';
 
 type HealthReason = 'missing-object' | 'access-denied' | 'connection';
 
@@ -40,22 +42,22 @@ function describe(error: unknown): { code?: string; text: string; known?: TableR
   return { text: '' };
 }
 
-// A store 404 or a missing local data file, in the wording of DuckDB or aantje. Other "No such file or
-// directory" messages (a catalog file, an extension directory) must not match.
-const MISSING =
-  /HTTP 404|does not exist on this machine|IO Error: Cannot open file "[^"]*": (?:No such file or directory|The system cannot find the (?:file|path) specified)/;
+const REASON: Readonly<Record<StoreProblem, HealthReason>> = {
+  'not-found': 'missing-object',
+  'missing-file': 'missing-object',
+  'no-bucket': 'missing-object',
+  denied: 'access-denied',
+  expired: 'access-denied',
+  role: 'access-denied',
+  unresolved: 'connection',
+  ssl: 'connection',
+  unreachable: 'connection',
+};
 
 function reasonOf(code: string | undefined, text: string): HealthReason | undefined {
-  if (MISSING.test(text)) return 'missing-object';
-  if (/HTTP 403|AccessDenied|SignatureDoesNotMatch|InvalidAccessKeyId/.test(text)) return 'access-denied';
-  if (
-    code === 'CONNECTION_FAILED' ||
-    code === 'AUTH_FAILED' ||
-    /Could not (connect|resolve)|SSL connect error/.test(text)
-  ) {
-    return 'connection';
-  }
-  return undefined;
+  const problem = storeProblemOf(text);
+  if (problem !== undefined) return REASON[problem];
+  return code === 'CONNECTION_FAILED' || code === 'AUTH_FAILED' ? 'connection' : undefined;
 }
 
 /** Resolves a suggested request; a table missing from `entries` (dropped, renamed since) falls back to the whole lake. */

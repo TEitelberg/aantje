@@ -1,12 +1,11 @@
 import type * as vscode from 'vscode';
-import { showConnectFirst } from '../command.vscode';
 import { openReport } from '../shell/host.vscode';
 import { LAKE_SCOPE, scopeKey, scopeOfNode, scopeSuffix } from '../shell/scope';
 import type { ReportScope } from '../shell/scope';
 import { reportPortOf } from '../shell/report-port.vscode';
 import type { ReportCommandEnv } from '../shell/report-port.vscode';
-import { performSnapshotReportAction } from '../snapshot-report/execute';
 import { planGrowthAction } from './actions';
+import { performGrowthAction } from './execute';
 import { growthKind } from './kind';
 import { readGrowth } from './read';
 
@@ -20,8 +19,6 @@ interface GrowthParams {
 const GOAL = 'show its growth';
 
 export function registerGrowthCommand(env: ReportCommandEnv): vscode.Disposable[] {
-  const { store } = env;
-
   const report = openReport(env, {
     command: COMMAND,
     kind: growthKind,
@@ -36,30 +33,17 @@ export function registerGrowthCommand(env: ReportCommandEnv): vscode.Disposable[
         `Growth${name === undefined ? '' : ` of ${name}`} · ${profile.name}${name === undefined ? scopeSuffix(scope) : ''}`,
     }),
     planAction: planGrowthAction,
-    perform: (plan, profile) => performSnapshotReportAction(plan, reportPortOf(env, profile)),
+    perform: (plan, profile) => performGrowthAction(plan, reportPortOf(env, profile)),
   });
 
   return [
     { dispose: () => report.dispose() },
-    env.register(COMMAND, async (node) => {
-      const ref = node?.ref;
-      if (ref?.kind !== 'connection' && ref?.kind !== 'schema' && ref?.kind !== 'table') {
-        return;
-      }
-      const profile = store.get(ref.connectionId);
-      if (!profile) {
-        showConnectFirst(GOAL);
-        return;
-      }
+    report.command(env.register, (ref): GrowthParams | undefined => {
       if (ref.kind === 'table') {
-        await report.show(profile, {
-          focus: ref.table.id,
-          name: `${ref.schema.name}.${ref.table.name}`,
-          scope: LAKE_SCOPE,
-        });
-      } else {
-        await report.show(profile, { focus: null, name: undefined, scope: scopeOfNode(ref) ?? LAKE_SCOPE });
+        return { focus: ref.table.id, name: `${ref.schema.name}.${ref.table.name}`, scope: LAKE_SCOPE };
       }
+      const scope = scopeOfNode(ref);
+      return scope && { focus: null, name: undefined, scope };
     }),
   ];
 }

@@ -22,6 +22,21 @@ export const queryTimedOut = (timeoutMs: number, cause?: unknown): AantjeError =
 export const catalogClosed = (): AantjeError =>
   new AantjeError('CONNECTION_FAILED', 'The catalog connection is closed.');
 
+/** A statement that the engine refused, with the engine's reason. */
+export const queryFailed = (reason: string, cause: unknown): AantjeError =>
+  new AantjeError('QUERY_FAILED', `The catalog query failed: ${reason}`, { cause });
+
+/** An integer that a number cannot hold exactly: the driver refuses it instead of passing on a rounded id or count. */
+export const unsafeInteger = (value: number | bigint): AantjeError =>
+  new AantjeError(
+    'QUERY_FAILED',
+    `The catalog returned the integer ${value}, which is larger than the largest exactly representable number (${Number.MAX_SAFE_INTEGER}).`,
+  );
+
+/** A catalog file that cannot be read; `code` is the code of the file system (`ENOENT`, `EACCES`). */
+export const unreadableFile = (path: string, code: string | undefined, cause: unknown): AantjeError =>
+  new AantjeError('FILE_NOT_FOUND', `Cannot read "${path}": ${code ?? 'unknown error'}.`, { cause });
+
 /** The signal that ends one query (its limit, its caller, the driver's close) and the error that tells which. */
 export function queryLimits(
   shutdown: AbortSignal,

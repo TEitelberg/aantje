@@ -1,4 +1,5 @@
-import { count, plural } from '../shell/model';
+import { groupBy } from '../order';
+import { count } from '../shell/model';
 import type { Card } from '../shell/model';
 import type { ReportScope } from '../shell/scope';
 import type {
@@ -39,7 +40,6 @@ export const DEPTHS: readonly number[] = [1, 2, 3, 4, 5];
 const MAX_ROWS = 500;
 export const MAX_LAKE_ROWS = 200;
 export const MAX_ISSUES = 100;
-const MAX_NAMES = 10;
 
 export const DEPENDENCIES_KIND_LABEL: Readonly<Record<NodeKind, string>> = {
   table: 'table',
@@ -58,9 +58,6 @@ export const KIND_SIGN: Readonly<Record<NodeKind, string>> = {
 
 /** `shop.events`: the names as the tree shows them, without quotes. */
 export const nodeName = (node: DependencyNode): string => `${node.schema}.${node.name}`;
-
-/** The key of the panel and of the saved state for an object. */
-export const nodeKey = (node: DependencyNode): string => `${node.kind}:${node.id}`;
 
 // One object of a list, reached from `parent` over one edge.
 interface Row {
@@ -90,16 +87,15 @@ export function traverse(
   direction: Direction,
   depth: number,
 ): Traversal {
-  const next = new Map<number, { readonly to: number; readonly via: DependencyEdge['kind'] }[]>();
-  for (const { from, to, kind } of data.edges) {
-    const [source, target] = direction === 'usedBy' ? [to, from] : [from, to];
-    next.set(source, [...(next.get(source) ?? []), { to: target, via: kind }]);
-  }
+  const next = groupBy(
+    data.edges,
+    ({ from, to }) => (direction === 'usedBy' ? to : from),
+    ({ from, to, kind }) => ({ to: direction === 'usedBy' ? from : to, via: kind }),
+  );
   for (const list of next.values()) {
     list.sort((a, b) => a.to - b.to);
   }
   const parents = new Map<number, Row>();
-  const children = new Map<number, Row[]>();
   const seen = new Set([start]);
   let cycle = false;
   const isAncestor = (candidate: number, of: number): boolean => {
@@ -120,13 +116,14 @@ export function traverse(
           seen.add(to);
           const row = { node: to, depth: at, parent: from, via };
           parents.set(to, row);
-          children.set(from, [...(children.get(from) ?? []), row]);
           following.push(to);
         }
       }
     }
     level = following;
   }
+  // Every node reached once, below the node it was reached from, in the order it was reached.
+  const children = groupBy(parents.values(), (row) => row.parent);
   const rows: Row[] = [];
   const visit = (from: number): void => {
     for (const row of children.get(from) ?? []) {
@@ -145,58 +142,10 @@ export function traverse(
   };
 }
 
-// Every object that uses the dropped one, directly or through others, fails.
-interface DropImpact {
-  readonly objects: readonly number[];
-  // `2 views and 1 table macro`; empty when nothing breaks.
-  readonly summary: string;
-  // The first `MAX_NAMES` by name, and how many more there are.
-  readonly names: readonly string[];
-  readonly more: number;
-}
-
-export function dropImpact(data: DependenciesData, target: number): DropImpact {
-  // Only the objects reached count, at any depth; the rows of the list are not needed.
-  const { reached: objects } = traverse(data, target, 'usedBy', 0);
-  const perKind = new Map<NodeKind, number>();
-  for (const index of objects) {
-    const kind = data.nodes[index]?.kind;
-    if (kind) {
-      perKind.set(kind, (perKind.get(kind) ?? 0) + 1);
-    }
-  }
-  const phrase: Record<NodeKind, [string, string]> = {
-    table: ['table', 'tables'],
-    view: ['view', 'views'],
-    scalarMacro: ['scalar macro', 'scalar macros'],
-    tableMacro: ['table macro', 'table macros'],
-  };
-  const names = objects
-    .map((index) => data.nodes[index])
-    .filter((node): node is DependencyNode => node !== undefined)
-    .map(nodeName);
-  return {
-    objects,
-    summary: (Object.keys(phrase) as NodeKind[])
-      .filter((kind) => perKind.has(kind))
-      .map((kind) => plural(perKind.get(kind) ?? 0, ...phrase[kind]))
-      .join(', '),
-    names: names.slice(0, MAX_NAMES),
-    more: Math.max(names.length - MAX_NAMES, 0),
-  };
-}
-
 /** The name of an object by index, empty for an index that is no node. */
 export function nameAt(data: Pick<DependenciesData, 'nodes'>, index: number): string {
   const node = data.nodes[index];
   return node ? nodeName(node) : '';
-}
-
-/** The sentence for the impact; `name` is how the object is written, code in a document. */
-export function impactText(name: string, impact: DropImpact): string {
-  return impact.objects.length === 0
-    ? `Nothing in this lake uses ${name}; dropping it breaks no view or macro.`
-    : `Dropping ${name} breaks ${plural(impact.objects.length, 'object', 'objects')}: ${impact.summary}.`;
 }
 
 /** The broken and the unresolved references of the given objects (all of them without a set). */
@@ -294,7 +243,15 @@ interface LakeRow {
   readonly dependsOn: number;
 }
 
-/** The lake's objects, most used first; `text` keeps those whose name or kind contains it, ignoring case. */
+/** Whether the name or the kind of an object contains the filter `text`, ignoring case; an empty text keeps all. */
+export function matchesFilter(node: DependencyNode, text: string): boolean {
+  const needle = text.trim().toLowerCase();
+  return (
+    needle === '' || `${nodeName(node)} ${DEPENDENCIES_KIND_LABEL[node.kind]}`.toLowerCase().includes(needle)
+  );
+}
+
+/** The lake's objects that match the filter `text`, most used first. */
 export function lakeRows(
   data: DependenciesData,
   text: string,
@@ -306,14 +263,9 @@ export function lakeRows(
     used.set(to, (used.get(to) ?? 0) + 1);
     uses.set(from, (uses.get(from) ?? 0) + 1);
   }
-  const needle = text.trim().toLowerCase();
   const all = data.nodes
     .map((node, index) => ({ index, node }))
-    .filter(
-      ({ node }) =>
-        needle === '' ||
-        `${nodeName(node)} ${DEPENDENCIES_KIND_LABEL[node.kind]}`.toLowerCase().includes(needle),
-    )
+    .filter(({ node }) => matchesFilter(node, text))
     .map(({ index }) => ({ node: index, usedBy: used.get(index) ?? 0, dependsOn: uses.get(index) ?? 0 }))
     .sort((a, b) => b.usedBy - a.usedBy || a.node - b.node);
   return { rows: all.slice(0, limit), omitted: Math.max(all.length - limit, 0) };

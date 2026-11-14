@@ -1,6 +1,7 @@
-import { LAKE_SUBJECT, oneLine, scriptDocument } from '../maintenance-document';
-import type { ScriptBlock } from '../maintenance-document';
-import type { FixStep, HealthFinding } from './model';
+import { LAKE_SUBJECT, oneLine, scriptDocument } from '../maintenance/document';
+import type { ScriptBlock } from '../maintenance/document';
+import type { FixStep } from '../maintenance/steps';
+import type { HealthFinding } from './model';
 
 // Findings named in a block or listed as open; the rest is counted.
 const NAMED = 3;

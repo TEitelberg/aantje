@@ -1,7 +1,8 @@
 import { qualifiedName, quoteLiteral } from '../catalog/ddl';
 import { LAKE } from '../data/attach';
 import { PREVIEW_LIMIT } from '../data/types';
-import { commented, newestComment, newestNote, pinnedOf } from '../script';
+import { commented } from '../ddl-script/check';
+import { atVersion, newestComment, newestNote, pinnedOf } from '../script';
 import type { ChangedTable } from '../tree/refs';
 import { blocks, catalogOf } from './common';
 import type { Folder, Ref, Tree } from './common';
@@ -14,11 +15,11 @@ export function selectStatistics(tree: Tree, ref: Folder<'statistics'>): string 
   const pinned = pinnedOf(tree, ref.connectionId);
   const schema = quoteLiteral(ref.schema.name);
   const table = quoteLiteral(ref.table.name);
-  const at = pinned === undefined ? '' : ` AT (VERSION => ${pinned})`;
+  const at = atVersion(pinned);
   return blocks([
     [
       '-- Files and size of the table, as DuckLake counts them',
-      ...newestComment(pinned, { fromReport: tree.fromReport }),
+      ...newestComment(pinned),
       `SELECT * FROM ducklake_table_info(${lake}) WHERE table_id = ${ref.table.id};`,
     ],
     [

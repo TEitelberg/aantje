@@ -16,7 +16,11 @@ import type {
 } from '../catalog/model';
 import type { ConnectionKind, ConnectionProfile } from '../connections/profile';
 import type { RelationColumn } from '../data/types';
-import { describeAction, describeChanges, formatUtc } from '../snapshot';
+import { codeBlock, inlineCode, markdownText, withoutInvisible } from '../markdown';
+import { count, formatBytes, formatDuration } from '../shell/numbers';
+import { describeAction } from '../catalog/changes';
+import { describeChanges, formatUtc } from '../snapshot';
+import type { HistoryEntry, HistoryStatus } from '../sql/history';
 import type { ConnectionState } from './refs';
 
 // Descriptions and Markdown tooltips of the explorer nodes; pure.
@@ -89,12 +93,11 @@ export function tableTooltip(schema: SchemaInfo, table: TableInfo): string {
   );
 }
 
+// The definition stays out of the tooltips of views and macros: a long one fills the screen. Script as CREATE shows it.
 export function viewTooltip(schema: SchemaInfo, view: ViewInfo): string {
   return blocks(
-    inlineCode(`${schema.name}.${view.name}`),
+    `${inlineCode(`${schema.name}.${view.name}`)} (view, dialect ${markdownText(view.dialect)})`,
     view.comment && markdownText(view.comment),
-    `Definition (dialect: ${markdownText(view.dialect)}):`,
-    codeBlock(view.sql, 'sql'),
   );
 }
 
@@ -148,12 +151,11 @@ function parameterText({ name, type, defaultValue }: MacroParameter): string {
 export function macroTooltip(schema: SchemaInfo, macro: MacroInfo): string {
   return blocks(
     `${inlineCode(`${schema.name}.${macro.name}`)} (${macro.kind} macro)`,
-    ...macro.implementations.map(({ dialect, parameters, sql }) =>
+    ...macro.implementations.map(({ dialect, parameters }) =>
       blocks(
         `Dialect: ${markdownText(dialect)}`,
         parameters.length > 0 &&
           `Parameters: ${parameters.map((p) => inlineCode(parameterText(p))).join(', ')}`,
-        codeBlock(sql, 'sql'),
       ),
     ),
   );
@@ -249,6 +251,62 @@ function snapshotFacts(
   );
 }
 
+export const QUERY_HISTORY_TOOLTIP =
+  'The statements that this aantje ran on this connection in the SQL editor, on this machine, newest first. Queries of other users and tools are not in it.';
+
+// The longest label of a statement; the tooltip has all of it.
+const QUERY_LABEL_LENGTH = 80;
+
+/** The label of a statement of the Query History: on one line, without control characters, shortened. */
+export function queryLabel(sql: string): string {
+  const line = withoutInvisible(sql.slice(0, QUERY_LABEL_LENGTH * 4), ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const characters = Array.from(line);
+  return characters.length > QUERY_LABEL_LENGTH
+    ? `${characters.slice(0, QUERY_LABEL_LENGTH - 1).join('')}…`
+    : line;
+}
+
+const pad = (value: number): string => String(value).padStart(2, '0');
+const localDay = (date: Date): string =>
+  `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+const localTime = (date: Date): string => `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+
+/** The local time it started (with the day unless it is `now`'s) and how long it ran. */
+export function queryDescription(entry: HistoryEntry, now: number): string {
+  const started = new Date(entry.startedAt);
+  const day = localDay(started) === localDay(new Date(now)) ? '' : `${localDay(started)} `;
+  return `${day}${localTime(started)} · ${formatDuration(entry.elapsedMs)}`;
+}
+
+const STATUS_TEXT: Readonly<Record<HistoryStatus, string>> = {
+  ok: 'succeeded',
+  failed: 'failed',
+  cancelled: 'cancelled',
+};
+
+/** The whole statement as code, when and how long it ran, its rows and status, and the error of a failure. */
+export function queryTooltip(entry: HistoryEntry): string {
+  const started = new Date(entry.startedAt);
+  const rows =
+    entry.rows === undefined
+      ? []
+      : [`Rows returned: ${count(entry.rows)}${entry.partial ? ' (more rows exist)' : ''}`];
+  return blocks(
+    codeBlock(entry.sql, 'sql'),
+    entry.cut && 'The statement is longer than 64 KiB; only its start is stored.',
+    list([
+      `Started: ${localDay(started)} ${localTime(started)}:${pad(started.getSeconds())} (local time)`,
+      `Duration: ${formatDuration(entry.elapsedMs)}`,
+      ...rows,
+      ...(entry.changed === undefined ? [] : [`Rows changed: ${count(entry.changed)}`]),
+      `Status: ${STATUS_TEXT[entry.status]}`,
+    ]),
+    entry.error && `Error: ${markdownText(entry.error)}`,
+  );
+}
+
 /** One change of a snapshot: the catalog's object name and what happened to it. */
 export function changeDetail(change: ResolvedChange): TreeDetail {
   const name = change.name === null ? undefined : [change.schemaName, change.name].filter(Boolean).join('.');
@@ -264,62 +322,10 @@ function snapshotLabel({ snapshot, latestSnapshot }: ConnectionState): string {
   return snapshot === 'latest' ? `@${String(latestSnapshot)}` : `@${snapshot} (pinned)`;
 }
 
-/** Binary units (1 KB = 1024 B), one decimal at most. */
-export function formatBytes(bytes: number): string {
-  let value = bytes;
-  for (const unit of ['B', 'KB', 'MB', 'GB']) {
-    // Compare the rounded value: 1023.96 KB must become 1 MB, not "1024 KB".
-    const rounded = Number(value.toFixed(1));
-    if (rounded < 1024) {
-      return `${rounded} ${unit}`;
-    }
-    value /= 1024;
-  }
-  return `${Number(value.toFixed(1))} TB`;
-}
-
 function blocks(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join('\n\n');
 }
 
 function list(items: readonly string[]): string {
   return items.map((item) => `- ${item}`).join('\n');
-}
-
-// Escapes catalog text so no Markdown renders. CommonMark allows a backslash before any ASCII punctuation,
-// which covers list markers, setext underlines, entities and bare URLs.
-export function markdownText(text: string): string {
-  return text
-    .replace(INVISIBLE_EXCEPT_BREAKS, '')
-    .replace(/[!-/:-@[-`{-~]/g, '\\$&')
-    .replace(/\r?\n/g, '  \n');
-}
-
-// Control and invisible format characters (bidi overrides, zero-width joiners) and Unicode line/paragraph
-// separators. They can reorder the surrounding text, so names and comments show without them.
-const INVISIBLE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
-// Keeps tab and line breaks: markdownText turns comment line breaks into hard breaks.
-const INVISIBLE_EXCEPT_BREAKS = /(?![\t\n\r])[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu;
-
-// Code span for catalog text. Whitespace collapses to one space: a blank line would end the paragraph
-// and render the rest of the name as Markdown.
-export function inlineCode(raw: string): string {
-  const text = raw.replace(/\s+/g, ' ').replace(INVISIBLE, '');
-  const fence = backticks(text, 1);
-  const padding = text.startsWith('`') || text.endsWith('`') ? ' ' : '';
-  return `${fence}${padding}${text}${padding}${fence}`;
-}
-
-// Like `inlineCode` without the invisible characters, but the lines stay: a bidi override in the SQL of a view would
-// reorder the text around it.
-export function codeBlock(raw: string, language: string): string {
-  const text = raw.replace(INVISIBLE_EXCEPT_BREAKS, '');
-  const fence = backticks(text, 3);
-  return `${fence}${language}\n${text}\n${fence}`;
-}
-
-// A backtick run longer than any inside the text, so the text cannot end its own code.
-function backticks(text: string, minimum: number): string {
-  const longest = Math.max(0, ...Array.from(text.matchAll(/`+/g), (run) => run[0].length));
-  return '`'.repeat(Math.max(minimum, longest + 1));
 }

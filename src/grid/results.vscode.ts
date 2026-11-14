@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { messageOf } from '../errors';
 import { createPanel } from '../shell/host.vscode';
 import type { ResultsTarget, ResultsView } from '../sql/results';
 import type { SqlEvent } from '../sql/session';
@@ -11,10 +12,13 @@ import type { BindingAction, BindingSnapshot } from './results-binding';
 import type { ResultsRunSummary } from './results-model';
 import { groupCount, parseLayout, resultsPlace } from './results-place';
 import type { EditorLayout, ResultsPlace } from './results-place';
+import { GRID_CSS } from './style';
 
 interface ResultsHost {
   /** "Go to statement": the editor of the key shows the range of the script. */
   revealStatement(key: string, offset: number, length: number): void;
+  /** "Open as New Query" of a statement that aantje built: a new editor on the same connection gets its text. */
+  openQuery?(key: string): void;
   /** Sets a window context key for `when` clauses. */
   setContext?(key: string, value: boolean): void;
 }
@@ -74,6 +78,9 @@ async function settledLayout(): Promise<EditorLayout | undefined> {
 const placeIn = (layout: EditorLayout | undefined, column: number): ResultsPlace | undefined =>
   layout && resultsPlace(layout, column);
 
+/** Notes a step of placing the results that failed; the results stay usable. */
+type Warn = (message: string) => void;
+
 const shows = (group: vscode.TabGroup, document: vscode.TextDocument): boolean =>
   vscode.window.tabGroups.all.includes(group) &&
   group.tabs.some((tab) => keysOfTab(tab).includes(document.uri.toString()));
@@ -87,6 +94,7 @@ async function putBelow<T>(
   document: vscode.TextDocument,
   editorGroup: vscode.TabGroup,
   put: (column: vscode.ViewColumn) => T,
+  warn: Warn,
 ): Promise<T | undefined> {
   const layout = await settledLayout();
   const editorColumn = editorGroup.viewColumn;
@@ -102,7 +110,12 @@ async function putBelow<T>(
   await vscode.commands.executeCommand('workbench.action.lockEditorGroup');
   const made = placeIn(await layoutNow(), editorColumn);
   const result = made?.kind === 'column' ? put(made.column) : undefined;
-  await vscode.commands.executeCommand('workbench.action.focusAboveGroup');
+  try {
+    await vscode.commands.executeCommand('workbench.action.focusAboveGroup');
+  } catch (error) {
+    // What `put` made stands where it belongs; only the focus stays below.
+    warn(`The focus could not go back to the editor above the results: ${messageOf(error)}`);
+  }
   return result;
 }
 
@@ -110,18 +123,20 @@ async function putBelow<T>(
 async function createBelow(
   key: string,
   create: (column: vscode.ViewColumn) => vscode.WebviewPanel,
+  warn: Warn,
 ): Promise<{ panel: vscode.WebviewPanel; editorGroup?: vscode.TabGroup }> {
   const editor = editorOf(key);
   const editorGroup = groupInColumn(editor?.viewColumn);
-  let panel: vscode.WebviewPanel | undefined;
+  // The panel that was made, also when a later step failed: a second one would leave the first one behind.
+  const made: { panel?: vscode.WebviewPanel } = {};
   try {
     if (editor && editorGroup) {
-      panel = await putBelow(editor.document, editorGroup, create);
+      await putBelow(editor.document, editorGroup, (column) => (made.panel = create(column)), warn);
     }
-  } catch {
-    // The results still open, beside the editor.
+  } catch (error) {
+    warn(`The results panel could not open below its editor and opens beside it: ${messageOf(error)}`);
   }
-  return { panel: panel ?? create(vscode.ViewColumn.Beside), editorGroup };
+  return { panel: made.panel ?? create(vscode.ViewColumn.Beside), editorGroup };
 }
 
 /** The panel of the entry, taken from it: its disposal keeps the entry. */
@@ -144,6 +159,7 @@ export class ResultsPanels implements ResultsView {
   private followTimer: ReturnType<typeof setTimeout> | undefined;
   /** The document whose editor became the active one since the panels last followed the editors. */
   private activated: string | undefined;
+  private readonly warn: Warn = (message) => this.deps.log?.warn(message);
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -163,14 +179,14 @@ export class ResultsPanels implements ResultsView {
   }
 
   /** A run shows collapsed results again, and puts results that were dragged away back below the editor. */
-  begin(target: ResultsTarget, script: { text: string; startedAt: number }): void {
+  begin(target: ResultsTarget, script: { text: string; startedAt: number; built?: boolean }): void {
     const known = this.entries.get(target.key);
     const entry = known ?? this.open(target);
     entry.title = `${target.title} · results`;
     if (entry.panel) {
       entry.panel.title = entry.title;
     }
-    entry.run.begin(script.text);
+    entry.run.begin(script.text, script.built === true);
     if (known?.collapsed) {
       this.collapse(target.key, false);
     } else if (known?.panel) {
@@ -237,7 +253,9 @@ export class ResultsPanels implements ResultsView {
   }
 
   private place(key: string, entry: Entry): void {
-    const made = this.enqueue(() => createBelow(key, (column) => this.makePanel(key, entry, column)));
+    const made = this.enqueue(() =>
+      createBelow(key, (column) => this.makePanel(key, entry, column), this.warn),
+    );
     void made.then(
       ({ panel, editorGroup }) => {
         entry.editorGroup = editorGroup;
@@ -248,9 +266,7 @@ export class ResultsPanels implements ResultsView {
       (error: unknown) => {
         // Without a panel the entry would swallow every later run of this editor.
         this.forget(key, entry);
-        void vscode.window.showErrorMessage(
-          `Could not open the results panel: ${error instanceof Error ? error.message : String(error)}`,
-        );
+        void vscode.window.showErrorMessage(`Could not open the results panel: ${messageOf(error)}`);
       },
     );
   }
@@ -267,7 +283,10 @@ export class ResultsPanels implements ResultsView {
       viewType: 'aantje.results',
       title: entry.title,
       script: 'grid-client.js',
+      // Draws the plans of Explain and Analysis; the data grid does not load it.
+      before: ['plan-client.js'],
       column: { viewColumn: column, preserveFocus: true },
+      css: GRID_CSS,
     });
     entry.panel = panel;
     receiveFrom(panel, this.deps, (message) => void this.handle(key, entry, message));
@@ -307,7 +326,10 @@ export class ResultsPanels implements ResultsView {
       if (editor && group) {
         await this.moveBelow(entry, editor.document, group);
       }
-    }).catch(() => undefined); // The panel stays where it is.
+    }).catch((error: unknown) => {
+      // The panel stays where it is.
+      this.warn(`The results panel could not move below its editor: ${messageOf(error)}`);
+    });
   }
 
   /** Puts the panel below the editor in `group` and brings it forward there; once per group, so that a failure does not repeat. */
@@ -321,11 +343,16 @@ export class ResultsPanels implements ResultsView {
       return;
     }
     entry.editorGroup = group;
-    await putBelow(document, group, (column) => {
-      if (entry.panel === panel && (panel.viewColumn !== column || !panel.visible)) {
-        panel.reveal(column, true);
-      }
-    });
+    await putBelow(
+      document,
+      group,
+      (column) => {
+        if (entry.panel === panel && (panel.viewColumn !== column || !panel.visible)) {
+          panel.reveal(column, true);
+        }
+      },
+      this.warn,
+    );
   }
 
   private scheduleFollow(): void {
@@ -337,7 +364,10 @@ export class ResultsPanels implements ResultsView {
     }
     this.followTimer = setTimeout(() => {
       this.followTimer = undefined;
-      void this.enqueue(() => this.follow()).catch(() => undefined); // The panels stay where they are.
+      void this.enqueue(() => this.follow()).catch((error: unknown) => {
+        // The panels stay where they are.
+        this.warn(`The results panels could not follow their editors: ${messageOf(error)}`);
+      });
     }, FOLLOW_DELAY_MS);
   }
 
@@ -402,6 +432,9 @@ export class ResultsPanels implements ResultsView {
         }
         break;
       }
+      case 'openQuery':
+        this.host.openQuery?.(key);
+        break;
       case 'copy':
       case 'export':
         await transfer(this.deps, message);

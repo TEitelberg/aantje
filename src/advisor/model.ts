@@ -1,12 +1,12 @@
-import type { SnapshotId, StorageInfo } from '../catalog/model';
-import { MAINTENANCE_LABEL } from '../maintenance-labels';
+import type { DeletedFiles, SnapshotId, StorageInfo } from '../catalog/model';
+import { MAINTENANCE_LABEL } from '../maintenance/labels';
 import { DEFAULT_DELETE_OLDER_THAN } from '../catalog/scheduled';
 import type { Card } from '../shell/model';
 import { count, files, formatBytes, groupedPlural } from '../shell/model';
 import { expirableLine, expirableNote, scheduledLine, scheduledNote } from '../shell/scheduled-text';
 import { lakeWide } from '../shell/scope';
 import type { ReportScope } from '../shell/scope';
-import { percent } from '../stats/model';
+import { percent } from '../shell/numbers';
 
 /** The share of deleted rows from which `ducklake_rewrite_data_files` rewrites a file when `rewrite_delete_threshold` is not set (checked with DuckDB 2.0.0). */
 export const DEFAULT_REWRITE_THRESHOLD = 0.95;
@@ -65,6 +65,11 @@ interface MergeCandidate {
   readonly smallBytes: number;
   /** The estimate of the number of data files after a merge, see `estimatedFilesAfterMerge`. */
   readonly estimatedAfter: number;
+  /**
+   * The files of the table with deleted rows, when some of the small files have them: the merge leaves them alone, so
+   * its script rewrites them first. Null when they could not be read: the script then says so.
+   */
+  readonly deleted?: DeletedFiles | null;
 }
 
 interface RewriteCandidate {
@@ -118,7 +123,13 @@ export interface AdvisorData {
   readonly flush: readonly FlushCandidate[];
   /** A list of candidates was cut at `CANDIDATE_LIMIT`. */
   readonly more?: true;
+  /** The inlined rows of some tables could not be read: `flush` may lack tables. */
+  readonly inlinedFailed?: true;
 }
+
+/** The note on a page and in a document whose data has `inlinedFailed`. */
+export const INLINED_FAILED_NOTE =
+  'The inlined rows of some tables could not be read, so Flush Inlined Data may be worth doing for more tables than listed.';
 
 /** A share as the reports write it: `95 %`. */
 export const advisorShareText = (share: number): string => percent(share);
@@ -135,8 +146,9 @@ export function sizeText(measure: FileMeasure): string {
 }
 
 /**
- * Estimated data files after a merge: small files become target-size files. A merge keeps partitions and delete
- * files apart, so the real number can be higher.
+ * Estimated data files after a merge: small files become target-size files. It counts on the rewrite that the Merge
+ * script puts first, so the small files with deleted rows are merged too. A merge keeps partitions apart, so the real
+ * number can be higher.
  */
 export function estimatedFilesAfterMerge(
   totalFiles: number,

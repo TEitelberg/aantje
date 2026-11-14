@@ -51,3 +51,30 @@ export function viewConfirmation(deps: ViewConfirmationDeps): (profile: Connecti
     return question;
   };
 }
+
+/** What `readTrusting` asks: the trust the user gave, and the question that records it or throws `ABORTED`. */
+export interface TrustGate {
+  readonly viewsTrusted: (profile: ConnectionProfile) => boolean;
+  readonly confirmViews: (profile: ConnectionProfile) => Promise<void>;
+}
+
+/**
+ * Runs a read with the current trust. When the guard refuses an untrusted view that it finds at the snapshot, asks once
+ * and reads again trusted. This covers a table node that is a view at an older snapshot, and the snapshot report,
+ * which never passes a tree node. A decline is the `ABORTED` error of the question, and nothing is read again.
+ */
+export async function readTrusting<T>(
+  profile: ConnectionProfile,
+  gate: TrustGate,
+  read: (trusted: boolean) => Promise<T>,
+): Promise<T> {
+  try {
+    return await read(gate.viewsTrusted(profile));
+  } catch (error) {
+    if (!(error instanceof AantjeError) || error.code !== 'VIEW_UNTRUSTED') {
+      throw error;
+    }
+    await gate.confirmViews(profile);
+    return await read(true);
+  }
+}

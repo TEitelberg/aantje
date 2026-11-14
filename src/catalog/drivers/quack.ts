@@ -1,14 +1,14 @@
 import type * as Duckdb from '@duckdb/node-api';
-import { quackSecretStatement, quackUri } from '../../data/attach';
-import { EXTENSION_HINT, firstLine, quackProblem } from '../../data/errors';
-import { EXTENSION_TIMEOUT_MS, loadEngine, MAX_TIMEOUT_MS } from '../../data/open-lake';
-import type { Engine } from '../../data/open-lake';
+import { EXTENSION_TIMEOUT_MS, loadEngine, MAX_TIMEOUT_MS } from '../../duckdb/engine';
+import type { Engine } from '../../duckdb/engine';
+import { EXTENSION_HINT, extensionFailure, scrubbed } from '../../duckdb/messages';
+import { quackProblem, quackSecretStatement, quackUri } from '../../duckdb/quack';
 import { AantjeError, messageOf } from '../../errors';
 import { maskSecrets } from '../../secrets';
 import { quoteLiteral } from '../ddl';
 import type { Driver, QueryOptions, Row, Value } from './driver';
 import { toRow } from './duckdb';
-import { catalogClosed, NO_ENGINE_ADVICE, queryCancelled, queryLimits, track } from './limits';
+import { catalogClosed, NO_ENGINE_ADVICE, queryCancelled, queryFailed, queryLimits, track } from './limits';
 
 export interface QuackOptions {
   readonly host: string;
@@ -327,19 +327,11 @@ function closeQuietly(link: Link, instance: Duckdb.DuckDBInstance): void {
   }
 }
 
-function scrubbed(link: Link, cause: unknown): string {
-  return firstLine(maskSecrets(messageOf(cause), link.secrets));
-}
-
 function openError(link: Link, cause: unknown, phase: 'extension' | 'setup'): AantjeError {
-  const message = scrubbed(link, cause);
+  const message = scrubbed(cause, link.secrets).line;
   const safe = { cause: new Error(message) };
   if (phase === 'extension') {
-    return new AantjeError(
-      'CONNECTION_FAILED',
-      `The DuckDB extensions quack and httpfs, which read a Quack server, could not be installed or loaded (${message}). ${EXTENSION_HINT}`,
-      safe,
-    );
+    return extensionFailure('The DuckDB extensions quack and httpfs, which read a Quack server', message);
   }
   const problem = quackProblem(message);
   return problem?.code === 'AUTH_FAILED'
@@ -353,12 +345,12 @@ function openError(link: Link, cause: unknown, phase: 'extension' | 'setup'): Aa
 
 function queryError(link: Link, cause: unknown): AantjeError {
   if (cause instanceof AantjeError) return cause;
-  const message = scrubbed(link, cause);
+  const message = scrubbed(cause, link.secrets).line;
   const problem = quackProblem(message);
   const safe = { cause: new Error(message) };
   return problem
     ? new AantjeError(problem.code, `The catalog query on ${link.endpoint} failed: ${problem.reason}.`, safe)
-    : new AantjeError('QUERY_FAILED', `The catalog query failed: ${message}`, safe);
+    : queryFailed(message, safe.cause);
 }
 
 /** `work`, or a rejection with `cancelled()` as soon as `cancel` fires; the engine call then goes on alone. */

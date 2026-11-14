@@ -2,13 +2,21 @@ import type { ConnectionProfile } from '../connections/profile';
 import type { GrowthPoint, SnapshotId, StorageInfo } from '../catalog/model';
 import { CLEANUP_OVERDUE_DAYS, hasManySmallFiles } from '../catalog/thresholds';
 import { compareText } from '../order';
-import { count, files, formatBytes, formatUtc, plural, tableLabel } from '../shell/model';
+import {
+  approximateCount,
+  count,
+  files,
+  formatBytes,
+  formatUtc,
+  percent,
+  plural,
+  tableLabel,
+} from '../shell/model';
+import type { Card, Severity } from '../shell/model';
 import { waitText } from '../shell/numbers';
 import { expirableLine, expirableNote, scheduledLine, scheduledNote } from '../shell/scheduled-text';
 import { lakeWide } from '../shell/scope';
 import type { ReportScope } from '../shell/scope';
-import type { Card, Severity } from '../shell/model';
-import { percent } from '../stats/model';
 
 /** The tables that the page and the document hold; a lake with more tables says how many are left out. */
 export const TABLE_LIMIT = 1000;
@@ -29,6 +37,10 @@ export type StorageActionId =
   | 'scriptCleanup'
   | 'scriptExpire'
   | 'showProperties';
+
+/** What the figures of a schema leave to the lake, on the page and in the document. */
+export const LAKE_WIDE_NOTE =
+  'The data path, the encryption, the files scheduled for deletion and the snapshots to expire are lake-wide.';
 
 /** A table with the figures of its visible data files and delete files at the snapshot. */
 export interface StorageTable {
@@ -74,9 +86,6 @@ export interface StorageView {
 
 const DAY_MS = 86_400_000;
 
-/** How long the oldest scheduled file has waited, in the words of the health check. */
-export const ageText = waitText;
-
 interface Scheduled {
   readonly severity: Severity;
   readonly files: string;
@@ -97,7 +106,8 @@ export function scheduledOf(data: Pick<StorageData, 'storage' | 'readAt'>): Sche
     severity: waited > CLEANUP_OVERDUE_DAYS * DAY_MS ? 'warning' : 'ok',
     files: files(total),
     oldest: formatUtc(oldestScheduledAt),
-    age: ageText(waited),
+    // How long the oldest scheduled file has waited, in the words of the health check.
+    age: waitText(waited),
   };
 }
 
@@ -134,7 +144,7 @@ export function storageCards(data: StorageData): Card[] {
     },
     {
       label: 'Rows',
-      value: `${data.approximate ? '~' : ''}${count(data.rows)}`,
+      value: approximateCount(data.rows, data.approximate),
       severity: 'ok',
       hint: data.approximate
         ? 'A file holds more than this snapshot (after a compaction or a delete file for several snapshots), so the count of some tables can be off.'
@@ -190,8 +200,7 @@ export function shareText(table: StorageTable, data: Pick<StorageData, 'storage'
   return total === 0 ? '–' : percent(table.sizeBytes / total);
 }
 
-export const rowsText = (table: StorageTable): string =>
-  `${table.approximate ? '~' : ''}${count(table.rows)}`;
+export const rowsText = (table: StorageTable): string => approximateCount(table.rows, table.approximate);
 
 /** The tables whose name (`schema.table`) holds the text, regardless of case; all of them for an empty filter. */
 export function matchingTables(tables: readonly StorageTable[], filter: string): StorageTable[] {
@@ -199,7 +208,9 @@ export function matchingTables(tables: readonly StorageTable[], filter: string):
   return tables.filter((table) => wanted === '' || tableLabel(table).toLowerCase().includes(wanted));
 }
 
-export type SortKey = 'name' | 'files' | 'size' | 'rows' | 'small';
+/** The columns the table list sorts by; the saved choices of a page are checked against this list. */
+export const SORT_KEYS = ['name', 'files', 'size', 'rows', 'small'] as const;
+export type SortKey = (typeof SORT_KEYS)[number];
 
 export interface Sort {
   readonly key: SortKey;

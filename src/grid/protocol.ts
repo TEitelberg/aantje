@@ -14,27 +14,31 @@ import {
 import type { Test } from '../guards';
 import type { GridData, RowKind } from '../data/types';
 import type { SqlEvent } from '../sql/session';
+import { PROFILE_VIEWS } from './results-model';
 import type { ResultsRunState, ResultsRunSummary } from './results-model';
 
-export type CopyScope = 'cell' | 'row' | 'all';
+/** What was copied: a cell, a row, all rows of a grid, or the whole text of a profile or plan. */
+export type CopyScope = 'cell' | 'row' | 'all' | 'text';
 
 export type WebviewMessage =
   | { readonly type: 'ready' }
   | { readonly type: 'copy'; readonly text: string; readonly what: CopyScope }
   | { readonly type: 'export'; readonly csv: string; readonly suggestedName: string }
   /** Results page only: "Go to statement", the index is the one of the events. */
-  | { readonly type: 'reveal'; readonly index: number };
+  | { readonly type: 'reveal'; readonly index: number }
+  /** Results page only: "Open as New Query" of a statement that aantje built. */
+  | { readonly type: 'openQuery' };
 
 /** A new run, each event of it, its end, and the whole run again for a page that loads later. */
 export type ResultsMessage =
-  | { readonly type: 'results-begin'; readonly script: string }
+  | { readonly type: 'results-begin'; readonly script: string; readonly built?: boolean }
   | { readonly type: 'results-event'; readonly event: SqlEvent }
   | { readonly type: 'results-end'; readonly summary: ResultsRunSummary }
   | { readonly type: 'results-state'; readonly state: ResultsRunState };
 
 export type ExtensionMessage = { readonly type: 'data'; readonly data: GridData } | ResultsMessage;
 
-const COPY_SCOPES: readonly unknown[] = ['cell', 'row', 'all'] satisfies CopyScope[];
+const COPY_SCOPES: readonly unknown[] = ['cell', 'row', 'all', 'text'] satisfies CopyScope[];
 
 const ROW_KINDS: readonly unknown[] = [
   'insert',
@@ -103,6 +107,8 @@ export function isWebviewMessage(value: unknown): value is WebviewMessage {
       );
     case 'reveal':
       return isCount(own(value, 'index'));
+    case 'openQuery':
+      return true;
     default:
       return false;
   }
@@ -138,6 +144,8 @@ const isSqlEvent = (value: unknown): value is SqlEvent => {
       );
     case 'error':
       return isError(event);
+    case 'profile':
+      return isShape({ json: isString })(event);
     default:
       return false;
   }
@@ -161,13 +169,22 @@ const isStatement = isShape({
 });
 
 const isResultSet: Test = (value) =>
-  isShape({ statement: isCount, truncated: isBoolean, elapsedMs: isFiniteNumber })(value) && hasRows(value);
+  isShape({
+    statement: isCount,
+    truncated: isBoolean,
+    elapsedMs: isFiniteNumber,
+    text: isOptional(isString),
+    label: isOptional(isString),
+    profile: isOptional(isString),
+    view: isOptional(isOneOf(...PROFILE_VIEWS.map(([view]) => view))),
+  })(value) && hasRows(value);
 
 const isRunState = isShape({
   script: isString,
   statements: isArrayOf(isStatement),
   resultSets: isArrayOf(isResultSet),
   end: isOptional(isRunSummary),
+  built: isOptional(isBoolean),
 });
 
 /** Checks the rows of a message: a broken message must not throw in the page. */
@@ -188,7 +205,7 @@ export function isResultsMessage(value: unknown): value is ResultsMessage {
   }
   switch (own(value, 'type')) {
     case 'results-begin':
-      return isString(own(value, 'script'));
+      return isShape({ script: isString, built: isOptional(isBoolean) })(value);
     case 'results-event':
       return isSqlEvent(own(value, 'event'));
     case 'results-end':

@@ -1,6 +1,20 @@
 /// <reference lib="dom" />
 // DOM builders of the Growth report; user input comes back through callbacks.
-import { actionButton, choiceSelect, dataTable, empty, note, tableRow, toolbar } from '../shell/blocks';
+import {
+  actionButton,
+  choiceSelect,
+  dataTable,
+  empty,
+  modeGroup,
+  note,
+  pickCell,
+  tableRow,
+  toolbar,
+  whoLine,
+} from '../shell/blocks';
+import type { ListRow } from '../shell/blocks';
+import type { ChartSet } from '../shell/chart-set';
+import type { ChartOption } from '../shell/chart-option';
 import { el } from '../shell/dom';
 import { LIST_ROWS, formatUtc, shortUtc } from '../shell/model';
 import type { GrowthActionRequest } from './actions';
@@ -19,11 +33,6 @@ import {
   truncationNote,
 } from './model';
 import type { GrowthData, GrowthXAxis, Metric, Step, TableChoice } from './model';
-
-export interface ListRow {
-  readonly row: HTMLElement;
-  readonly pick: HTMLElement;
-}
 
 interface DetailView {
   readonly steps: readonly Step[];
@@ -46,18 +55,21 @@ interface FilterHandlers {
   readonly onAxis: (axis: GrowthXAxis) => void;
 }
 
-/** The heading and, when there are steps, the box that the chart is drawn into. */
+/** The heading and, when there are steps, the box of the chart; a click on a point picks its step. */
 export function growthPane(
   metric: Metric,
   scope: string,
+  chart: {
+    readonly charts: ChartSet;
+    readonly option: ChartOption;
+    readonly onItemClick: (index: number) => void;
+  },
   hasSteps: boolean,
-): { readonly children: HTMLElement[]; readonly box: HTMLElement | undefined } {
+): HTMLElement[] {
   const heading = el('h2', undefined, `${METRIC_LABEL[metric]} of ${scope}`);
-  if (!hasSteps) {
-    return { children: [heading, empty('This catalog has no snapshots.')], box: undefined };
-  }
-  const box = el('div', 'chart');
-  return { children: [heading, box], box };
+  return hasSteps
+    ? [heading, chart.charts.box(chart.option, { onItemClick: chart.onItemClick })]
+    : [heading, empty('This catalog has no snapshots.')];
 }
 
 export function noteChildren(data: GrowthData, steps: readonly Step[]): HTMLElement[] {
@@ -78,13 +90,11 @@ export function snapshotList(
   const rows = new Map<number, ListRow>();
   const shown = steps.toReversed().slice(0, LIST_ROWS);
   const body = shown.map((step) => {
-    const pick = el('button', 'pick', `@${step.id}`);
-    pick.setAttribute('aria-label', `Snapshot ${step.id}. Select it to see its actions.`);
-    pick.addEventListener('click', () => onSelect(step.id));
-    const first = el('td');
-    first.append(pick);
+    const { cell, pick } = pickCell(`@${step.id}`, `Snapshot ${step.id}. Select it to see its actions.`, () =>
+      onSelect(step.id),
+    );
     const row = tableRow([
-      first,
+      cell,
       shortUtc(step.time),
       el('td', 'number', formatStep(metric, step)),
       el('td', 'number', formatDelta(metric, step.delta[metric])),
@@ -104,13 +114,6 @@ export function snapshotList(
   return { children, rows };
 }
 
-export function markRows(rows: ReadonlyMap<number, ListRow>, selected: number | undefined): void {
-  for (const [id, { row, pick }] of rows) {
-    row.className = id === selected ? 'selected' : '';
-    pick.setAttribute('aria-pressed', String(id === selected));
-  }
-}
-
 /** The pane of the selected snapshot, or the hint to select one. */
 export function detailChildren(view: DetailView, ask: (request: GrowthActionRequest) => void): HTMLElement[] {
   const { metric, table } = view;
@@ -118,7 +121,6 @@ export function detailChildren(view: DetailView, ask: (request: GrowthActionRequ
   if (!step) {
     return [note('Select a snapshot in the list or the chart to see its actions.')];
   }
-  const who = [step.author, step.message].filter((part) => part !== null && part !== '');
   const actions = el('div', 'actions');
   actions.append(
     actionButton(`Show catalog at @${step.id}`, () => ask({ action: 'showCatalog', snapshot: step.id })),
@@ -134,7 +136,7 @@ export function detailChildren(view: DetailView, ask: (request: GrowthActionRequ
   );
   return [
     el('h2', undefined, `@${step.id} · ${formatUtc(step.time)}`),
-    ...(who.length > 0 ? [el('p', 'who-line', who.join(' · '))] : []),
+    ...whoLine(step.author, step.message),
     el(
       'p',
       undefined,
@@ -142,28 +144,6 @@ export function detailChildren(view: DetailView, ask: (request: GrowthActionRequ
     ),
     actions,
   ];
-}
-
-function modes<Id extends string>(
-  label: string,
-  entries: readonly { readonly id: Id; readonly text: string }[],
-  current: Id,
-  apply: (id: Id) => void,
-): HTMLElement {
-  const box = el('div', 'axis');
-  const buttons = entries.map(({ id, text }) => {
-    const button = el('button', 'mode', text);
-    button.setAttribute('aria-pressed', String(current === id));
-    button.addEventListener('click', () => {
-      for (const other of buttons) {
-        other.setAttribute('aria-pressed', String(other === button));
-      }
-      apply(id);
-    });
-    return button;
-  });
-  box.append(`${label}: `, ...buttons);
-  return box;
 }
 
 export function filters(view: FilterView, on: FilterHandlers): HTMLElement {
@@ -176,20 +156,22 @@ export function filters(view: FilterView, on: FilterHandlers): HTMLElement {
   );
   return toolbar(
     tableChoice.element,
-    modes(
+    modeGroup(
       'Show',
-      METRICS.map((id) => ({ id, text: METRIC_LABEL[id] })),
+      METRICS.map((value) => ({ value, text: METRIC_LABEL[value] })),
       view.metric,
       on.onMetric,
+      { className: 'axis', shown: true },
     ),
-    modes(
+    modeGroup(
       'X axis',
       [
-        { id: 'snapshot' as const, text: 'Snapshots' },
-        { id: 'time' as const, text: 'Time' },
+        { value: 'snapshot' as const, text: 'Snapshots' },
+        { value: 'time' as const, text: 'Time' },
       ],
       view.axis,
       on.onAxis,
+      { className: 'axis', shown: true },
     ),
   );
 }

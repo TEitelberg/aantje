@@ -1,15 +1,6 @@
 /// <reference lib="dom" />
 // DOM builders of the Dependencies page. They take the state they show and report user input through callbacks.
-import {
-  actionButton,
-  dataTable,
-  empty,
-  keyList,
-  note,
-  searchBox,
-  tableRow,
-  truncation,
-} from '../shell/blocks';
+import { dataTable, empty, keyList, modeGroup, note, searchBox, tableRow, truncation } from '../shell/blocks';
 import { el } from '../shell/dom';
 import {
   BROKEN_KIND,
@@ -21,9 +12,7 @@ import {
   MAX_ISSUES,
   REASON_TEXT,
   brokenName,
-  dropImpact,
   edgeVerb,
-  impactText,
   issuesOf,
   lakeRows,
   limitNote,
@@ -31,6 +20,7 @@ import {
   traverse,
 } from './model';
 import type { DependenciesData, Direction } from './model';
+import { iconButton } from './icons';
 import type { GraphReach } from './picture';
 import type { DependenciesActionId } from './protocol';
 import type { DependenciesShow } from './state';
@@ -39,7 +29,7 @@ const DETAIL_NAMES = 30;
 
 type Ask = (action: DependenciesActionId, node: number) => void;
 
-// `visualize` is given while the list shows: the graph is then one click away.
+// The icons at the end of the heading line. `visualize` is given while the list shows: the graph is then one click away.
 function actionsFor(
   current: DependenciesData,
   node: number,
@@ -48,33 +38,32 @@ function actionsFor(
 ): HTMLElement {
   const found = current.nodes[node];
   const name = nameAt(current, node);
-  const actions = el('div', 'actions');
-  actions.append(
+  const icons = el('div', 'icons');
+  icons.append(
     ...(visualize
-      ? [actionButton('Visualize', () => visualize(node), `Show ${name} in the graph of the dependencies`)]
-      : []),
-    actionButton('Show in tree', () => ask('showInTree', node), `Show ${name} in the tree`),
-    ...(found?.kind === 'table'
-      ? [actionButton('Statistics', () => ask('showStatistics', node), `Show the statistics of ${name}`)]
+      ? [
+          iconButton('graph', 'Visualize', `Show ${name} in the graph of the dependencies`, () =>
+            visualize(node),
+          ),
+        ]
       : []),
     ...(node === current.target
       ? []
       : [
-          actionButton(
-            'Dependencies',
-            () => ask('showDependencies', node),
-            `Show the dependencies of ${name}`,
+          iconButton('hierarchy', 'Dependencies', `Show the dependencies of ${name}`, () =>
+            ask('showDependencies', node),
           ),
         ]),
-    actionButton('Script as CREATE', () => ask('scriptCreate', node), `Open the CREATE script of ${name}`),
-    actionButton('Script as ALTER', () => ask('scriptAlter', node), `Open the ALTER script of ${name}`),
-    actionButton(
-      'Script as DROP',
-      () => ask('scriptDrop', node),
-      `Open the DROP script of ${name}; nothing runs`,
-    ),
+    ...(found?.kind === 'table'
+      ? [
+          iconButton('chart', 'Statistics', `Show the statistics of ${name}`, () =>
+            ask('showStatistics', node),
+          ),
+        ]
+      : []),
+    iconButton('tree', 'Show in tree', `Show ${name} in the tree`, () => ask('showInTree', node)),
   );
-  return actions;
+  return icons;
 }
 
 function neighbours(current: DependenciesData, node: number, which: Direction): HTMLElement[] {
@@ -103,6 +92,7 @@ function neighbours(current: DependenciesData, node: number, which: Direction): 
   ];
 }
 
+/** The pane of the selected object: its heading line with the icons, and its direct neighbours; empty without one. */
 export function detailChildren(
   data: DependenciesData | undefined,
   selected: number | undefined,
@@ -111,23 +101,23 @@ export function detailChildren(
 ): HTMLElement[] {
   const node = selected === undefined ? undefined : data?.nodes[selected];
   if (!data || selected === undefined || !node) {
-    return [note('Select an object in the list or the graph to see what you can do with it.')];
+    return [];
   }
-  return [
+  const line = el('div', 'title-line');
+  line.append(
     el(
       'h2',
       undefined,
       `${KIND_SIGN[node.kind]} ${nameAt(data, selected)} · ${DEPENDENCIES_KIND_LABEL[node.kind]}`,
     ),
     actionsFor(data, selected, ask, visualize),
-    ...(data.target === null
-      ? [...neighbours(data, selected, 'usedBy'), ...neighbours(data, selected, 'dependsOn')]
-      : []),
-  ];
+  );
+  return [line, ...neighbours(data, selected, 'usedBy'), ...neighbours(data, selected, 'dependsOn')];
 }
 
-export function issuesChildren(current: DependenciesData, shown?: ReadonlySet<number>): HTMLElement[] {
-  const { broken, unresolved } = issuesOf(current, shown);
+/** The problems of the given objects (all of them without a set): broken references and texts not followed. */
+export function issuesChildren(current: DependenciesData, covered?: ReadonlySet<number>): HTMLElement[] {
+  const { broken, unresolved } = issuesOf(current, covered);
   const brokenRows = broken.slice(0, MAX_ISSUES).map((item) => {
     const name = el('td', 'name', nameAt(current, item.from));
     return tableRow([name, el('td', 'what', brokenName(item)), BROKEN_KIND[item.kind]]);
@@ -139,12 +129,12 @@ export function issuesChildren(current: DependenciesData, shown?: ReadonlySet<nu
   return [
     el('h2', undefined, 'Broken references'),
     broken.length === 0
-      ? note('No object listed here names something that the lake does not have.')
+      ? note('No object here names something that the lake does not have.')
       : dataTable(['Object', 'Names', 'As'], brokenRows),
     ...(broken.length > MAX_ISSUES ? [truncation(MAX_ISSUES, broken.length, 'broken references', '')] : []),
     el('h2', undefined, 'Not followed'),
     unresolved.length === 0
-      ? note('Every text of the objects listed here was read.')
+      ? note('Every text of the objects here was read.')
       : dataTable(['Object', 'Why', 'Detail'], unresolvedRows),
     ...(unresolved.length > MAX_ISSUES ? [truncation(MAX_ISSUES, unresolved.length, 'texts', '')] : []),
   ];
@@ -164,8 +154,6 @@ interface ListView {
   readonly cut: HTMLElement | undefined;
   readonly emptyText: string;
   readonly cycle: boolean;
-  /** The objects that the issues cover; undefined for the lake report. */
-  readonly shown: ReadonlySet<number> | undefined;
 }
 
 interface ListInput {
@@ -199,7 +187,6 @@ function lakeList(current: DependenciesData, input: ListInput): ListView {
         ? 'No view or macro in this lake uses a table, view or macro.'
         : 'No object matches the filter.',
     cycle: false,
-    shown: undefined,
   };
 }
 
@@ -234,7 +221,6 @@ function targetList(current: DependenciesData, target: number, input: ListInput)
         ? `No view or macro uses ${nameAt(current, target)}.`
         : `${nameAt(current, target)} uses no table, view or macro.`,
     cycle: traversal.cycle,
-    shown: new Set([target, ...traversal.rows.map(({ node }) => node)]),
   };
 }
 
@@ -288,31 +274,8 @@ export function listChildren(
   return { children: [keyed, ...(view.cut ? [view.cut] : [])], buttons };
 }
 
-/** A group of buttons of which one is pressed, for the direction and the depth. */
-export function choice<T extends string | number>(
-  label: string,
-  options: readonly { readonly value: T; readonly text: string }[],
-  current: T,
-  pick: (value: T) => void,
-): HTMLElement {
-  const group = el('div', 'direction');
-  group.setAttribute('role', 'group');
-  group.setAttribute('aria-label', label);
-  const pressed: { readonly value: T; readonly button: HTMLElement }[] = [];
-  for (const option of options) {
-    const button = el('button', 'mode', option.text);
-    button.setAttribute('aria-pressed', String(option.value === current));
-    button.addEventListener('click', () => {
-      for (const other of pressed) {
-        other.button.setAttribute('aria-pressed', String(other.value === option.value));
-      }
-      pick(option.value);
-    });
-    pressed.push({ value: option.value, button });
-    group.append(button);
-  }
-  return group;
-}
+// The groups of the toolbar take the class of their stylesheet.
+const DIRECTION_LOOK = { className: 'direction' } as const;
 
 export interface ToolbarChoices {
   readonly show: DependenciesShow;
@@ -324,7 +287,7 @@ export interface ToolbarChoices {
 
 /**
  * The controls: List or Graph, then the filter of the lake, or the direction, the depth and what the graph of an object
- * holds. `listOnly` and `graphOnly` are hidden in the other view.
+ * holds. `listOnly` and `graphOnly` are hidden in the other view: the graph of an object shows both directions.
  */
 export function toolbarChildren(
   current: DependenciesData,
@@ -335,7 +298,7 @@ export function toolbarChildren(
   readonly listOnly: HTMLElement[];
   readonly graphOnly: HTMLElement[];
 } {
-  const shows = choice(
+  const shows = modeGroup(
     'Show as',
     [
       { value: 'list' as const, text: 'List' },
@@ -343,12 +306,13 @@ export function toolbarChildren(
     ],
     choices.show,
     (show) => onChange({ show }),
+    DIRECTION_LOOK,
   );
   if (current.target === null) {
     const search = searchBox('Object', choices.text, (text) => onChange({ text }));
     return { children: [shows, search], listOnly: [search], graphOnly: [] };
   }
-  const reaches = choice(
+  const reaches = modeGroup(
     'Objects in the graph',
     [
       { value: 'connected' as const, text: 'Connected' },
@@ -356,53 +320,29 @@ export function toolbarChildren(
     ],
     choices.reach,
     (reach) => onChange({ reach }),
+    DIRECTION_LOOK,
+  );
+  const directions = modeGroup(
+    'Direction',
+    DIRECTIONS.map((value) => ({ value, text: DIRECTION_LABEL[value] })),
+    choices.direction,
+    (direction) => onChange({ direction }),
+    DIRECTION_LOOK,
   );
   return {
     children: [
       shows,
-      choice(
-        'Direction',
-        DIRECTIONS.map((value) => ({ value, text: DIRECTION_LABEL[value] })),
-        choices.direction,
-        (direction) => onChange({ direction }),
-      ),
-      choice(
+      directions,
+      modeGroup(
         'Depth',
         DEPTHS.map((value) => ({ value, text: `Depth ${value}` })),
         choices.depth,
         (depth) => onChange({ depth }),
+        DIRECTION_LOOK,
       ),
       reaches,
     ],
-    listOnly: [],
+    listOnly: [directions],
     graphOnly: [reaches],
   };
-}
-
-export function impactSection(current: DependenciesData, target: number, ask: Ask): HTMLElement {
-  const impact = dropImpact(current, target);
-  const section = el('section', impact.objects.length > 0 ? 'impact warning' : 'impact');
-  section.append(
-    el('h2', undefined, `If you drop ${nameAt(current, target)}`),
-    el(
-      'p',
-      undefined,
-      `${impact.objects.length > 0 ? '⚠ ' : ''}${impactText(nameAt(current, target), impact)}`,
-    ),
-  );
-  if (impact.objects.length > 0) {
-    const names = el('ul');
-    names.append(...impact.names.map((name) => el('li', undefined, name)));
-    section.append(names, ...(impact.more > 0 ? [note(`… and ${impact.more} more`)] : []));
-  }
-  const actions = el('div', 'actions');
-  actions.append(
-    actionButton(
-      'Open Script as DROP',
-      () => ask('scriptDrop', target),
-      `Open the DROP script of ${nameAt(current, target)} in a SQL document; nothing runs`,
-    ),
-  );
-  section.append(actions);
-  return section;
 }

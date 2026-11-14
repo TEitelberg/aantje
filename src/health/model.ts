@@ -1,4 +1,6 @@
 import type { SnapshotId } from '../catalog/model';
+import type { LakeScript, TableScript } from '../maintenance/labels';
+import type { FixStep } from '../maintenance/steps';
 import { compareText } from '../order';
 
 export type HealthSeverity = 'error' | 'warning' | 'info';
@@ -72,11 +74,15 @@ export const CHECKS = {
   'connection.local-path-missing': { group: 'connection', severities: ['error'] },
   'connection.relative-data-path': { group: 'connection', severities: ['warning'] },
   'connection.credentials-missing': { group: 'connection', severities: ['warning'] },
+  'connection.kind-mismatch': { group: 'connection', severities: ['warning'] },
+  'connection.account-mismatch': { group: 'connection', severities: ['error'] },
+  'connection.sign-in-expired': { group: 'connection', severities: ['warning', 'error'] },
   'connection.endpoint-not-set': { group: 'connection', severities: ['warning', 'error'] },
   'connection.url-style-vhost-ip': { group: 'connection', severities: ['warning'] },
   'connection.endpoint-with-path': { group: 'connection', severities: ['warning'] },
   'connection.endpoint-cleartext': { group: 'connection', severities: ['warning'] },
   'connection.store-access-denied': { group: 'connection', severities: ['error'] },
+  'connection.store-role-missing': { group: 'connection', severities: ['error'] },
   'connection.store-bucket-missing': { group: 'connection', severities: ['error'] },
   'connection.store-host-unresolved': { group: 'connection', severities: ['error'] },
   'connection.store-unreachable': { group: 'connection', severities: ['error'] },
@@ -94,9 +100,20 @@ export const CHECKS = {
 
 export type CheckId = keyof typeof CHECKS;
 
-/** The steps of a maintenance script in the order they have to run: an option first, since a table with `auto_compact` false is skipped by the compaction. */
-export const FIX_STEPS = ['option', 'compact', 'expire', 'cleanup', 'orphans'] as const;
-export type FixStep = (typeof FIX_STEPS)[number];
+/** A script of the Maintenance menu that fixes the findings of a check: one for the lake, or one for the table of a finding. */
+type Fix =
+  | { readonly level: 'lake'; readonly kind: LakeScript }
+  | { readonly level: 'table'; readonly kind: TableScript };
+
+/** The checks that a script of the Maintenance menu fixes; the finding carries its SQL and the page offers the script. */
+export const FIXES: Readonly<Partial<Record<CheckId, Fix>>> = {
+  'catalog.cleanup-overdue': { level: 'lake', kind: 'cleanup' },
+  'catalog.cleanup-pending': { level: 'lake', kind: 'cleanup' },
+  'catalog.many-snapshots': { level: 'lake', kind: 'expire' },
+  'storage.file-orphaned': { level: 'lake', kind: 'orphans' },
+  'catalog.small-files': { level: 'table', kind: 'merge' },
+  'catalog.large-inlined-data': { level: 'table', kind: 'flush' },
+};
 
 export interface HealthFinding {
   /** Stable for the same check and object (`storage.file-missing:data:12`) across runs. */
@@ -120,10 +137,15 @@ export interface HealthFinding {
   readonly fixStep?: FixStep;
   /** An `aantje.*` setting, without the `aantje.` prefix, to look at. */
   readonly settingKey?: string;
+  /** The fix lives at the connection, not in the machine settings: the panel offers these commands. */
+  readonly connectionActions?: readonly ConnectionAction[];
   readonly objectKey?: string;
   /** An S3 endpoint the extension host environment names; the panel offers to write it into the settings. */
   readonly suggestion?: EndpointSuggestion;
 }
+
+/** Edit Connection, or Set Storage Sign-in for the keys and tokens of the connection's storage only. */
+export type ConnectionAction = 'editConnection' | 'setStorageSignIn';
 
 /** The `aantje.s3.endpoint` and `aantje.s3.urlStyle` values a finding suggests, and the endpoint's source. */
 export interface EndpointSuggestion {

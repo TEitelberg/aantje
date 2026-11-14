@@ -59,7 +59,7 @@ The page sends an action id and, for a table, its catalog id; never a command or
 | `scriptExpire`   |         | The same for Expire Snapshots.                                                                                   |
 | `showProperties` |         | Opens the [Properties](reports.md#the-properties-report) panel of the connection.                                |
 
-The scripts are those of the Maintenance menu (`maintenanceOf` in `src/maintenance.ts`, see [Maintenance](maintenance.md)). The document belongs to the connection, so F5 runs it there; opening never runs it.
+The scripts are those of the Maintenance menu (`maintenanceOf` in `src/maintenance/scripts.ts`, see [Maintenance](maintenance.md)). The document belongs to the connection, so F5 runs it there; opening never runs it.
 
 ## Open as Markdown
 

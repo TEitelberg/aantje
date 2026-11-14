@@ -1,4 +1,4 @@
-import type { MaintenanceKind } from './maintenance';
+import type { MaintenanceKind } from './maintenance/scripts';
 import type { NodeRef } from './tree/refs';
 
 /** A table as the reports name it; a report may add statistics, which the script templates read from the node. */

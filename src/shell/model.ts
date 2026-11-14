@@ -1,8 +1,7 @@
 import { formatUtc } from '../snapshot';
 
 // Shared by every report's pure part: severities, key figures and number formats.
-export { formatBytes } from '../tree/format';
-export { count, files, groupedPlural, plural } from './numbers';
+export { approximateCount, count, files, formatBytes, groupedPlural, percent, plural } from './numbers';
 export { formatUtc };
 
 /** A time as `formatUtc` writes it, without ` UTC`, for tables whose header names the zone. */
@@ -20,6 +19,10 @@ export const LIST_ROWS = 200;
 /** `schema.name`, or the bare name for a table without a schema. */
 export const tableLabel = (table: { readonly schema: string | null; readonly name: string }): string =>
   table.schema === null ? table.name : `${table.schema}.${table.name}`;
+
+/** `author · message` of a snapshot, leaving out what is missing or empty; empty when both are. */
+export const whoText = (author: string | null, message: string | null): string =>
+  [author, message].filter((part) => part !== null && part !== '').join(' · ');
 
 export type Severity = 'ok' | 'warning' | 'error';
 

@@ -1,5 +1,17 @@
-import { CHECKS, FIX_STEPS, HEALTH_GROUPS } from '../health/model';
-import { isArrayOf, isCount, isObject, isOneOf, isOptional, isShape, isString, isTrue, own } from '../guards';
+import { CHECKS, HEALTH_GROUPS } from '../health/model';
+import { FIX_STEPS } from '../maintenance/steps';
+import {
+  isArrayOf,
+  isBoolean,
+  isCount,
+  isObject,
+  isOneOf,
+  isOptional,
+  isShape,
+  isString,
+  isTrue,
+  own,
+} from '../guards';
 import type { Test } from '../guards';
 import { actionGuard } from '../shell/protocol';
 import type { ActionMessage } from '../shell/protocol';
@@ -60,7 +72,7 @@ const isSummary: Test = isShape({
   infos: isCount,
   omitted: isCount,
   elapsedMs: isCount,
-  cancelled: (value) => typeof value === 'boolean',
+  cancelled: isBoolean,
 });
 
 const isEvent: Test = (value) => {
@@ -132,6 +144,8 @@ export const isHealthAction: (value: unknown) => value is HealthAction = actionG
   setting: ofFinding,
   useEndpoint: ofFinding,
   setCredentials: ofFinding,
+  editConnection: ofFinding,
+  setStorageSignIn: ofFinding,
   script: ofFinding,
   revealTable: ofFinding,
   showStatistics: ofFinding,

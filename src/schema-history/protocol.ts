@@ -1,6 +1,8 @@
 import {
   isArrayOf,
+  isBoolean,
   isCount,
+  isExactShape,
   isNullOr,
   isObject,
   isOneOf,
@@ -9,8 +11,9 @@ import {
   isString,
   own,
 } from '../guards';
+import type { Test } from '../guards';
 import { actionGuard } from '../shell/protocol';
-import type { SchemaHistoryActionRequest } from './actions';
+import type { SchemaHistoryActionId, SchemaHistoryActionRequest } from './actions';
 import type { SchemaHistoryMarkdownView } from './markdown';
 import { CELL_KINDS } from './model';
 import type { SchemaHistoryData } from './model';
@@ -36,7 +39,7 @@ const isSnapshot = isShape({
   message: isNullOr(isString),
   events: isArrayOf(isEvent),
   previous: isNullOr(isCount),
-  exists: (value) => typeof value === 'boolean',
+  exists: isBoolean,
 });
 
 const isColumn = isShape({
@@ -54,8 +57,8 @@ const isData = isShape({
   schema: isNullOr(isString),
   name: isString,
   latest: isCount,
-  exists: (value) => typeof value === 'boolean',
-  more: (value) => typeof value === 'boolean',
+  exists: isBoolean,
+  more: isBoolean,
   snapshots: isArrayOf(isSnapshot),
   columns: isArrayOf(isColumn),
 });
@@ -65,18 +68,20 @@ export function isSchemaHistoryMessage(value: unknown): value is SchemaHistoryMe
 }
 
 // The fields of each action; `against` goes with the comparison only.
-const hasAction = actionGuard({
+const ACTION_FIELDS: Readonly<Record<SchemaHistoryActionId, Readonly<Record<string, Test>>>> = {
   showCatalog: { snapshot: isCount },
   compareSchema: { snapshot: isCount, against: isOneOf('previous', 'latest') },
   query: { snapshot: isCount },
   scriptAlter: {},
-});
+};
 
 /** A known action with exactly its fields; `planAction` checks that they name sent data. */
-export const isSchemaHistoryAction = hasAction as (value: unknown) => value is SchemaHistoryPageRequest;
+export const isSchemaHistoryAction = actionGuard(ACTION_FIELDS) as (
+  value: unknown,
+) => value is SchemaHistoryPageRequest;
 
 /** The page's choices for Open as Markdown; the extension fits them to the data. */
-export const isSchemaHistoryView: (value: unknown) => value is SchemaHistoryMarkdownView = isShape({
+export const isSchemaHistoryView: (value: unknown) => value is SchemaHistoryMarkdownView = isExactShape({
   kinds: isArrayOf(isKind),
   text: isString,
   range: isOptional(isShape({ from: isCount, to: isCount })),

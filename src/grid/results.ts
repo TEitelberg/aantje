@@ -10,14 +10,15 @@ export class ResultsRun {
 
   constructor(private readonly send: (message: ResultsMessage) => void) {}
 
+  /** The run as the page has it; only the tests read it. */
   get state(): ResultsRunState | undefined {
     return this.run;
   }
 
-  /** A new run replaces the last one. */
-  begin(script: string): void {
-    this.run = beginRun(script);
-    this.post({ type: 'results-begin', script: this.run.script });
+  /** A new run replaces the last one; `built` marks a statement that aantje built. */
+  begin(script: string, built = false): void {
+    this.run = beginRun(script, built);
+    this.post({ type: 'results-begin', script: this.run.script, ...(built ? { built: true } : {}) });
   }
 
   /** An event of a run that was not begun (the panel was closed meanwhile) is dropped. */

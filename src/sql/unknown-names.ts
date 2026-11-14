@@ -1,13 +1,12 @@
 // Warnings for the tables, views and columns that the lake certainly does not have. A false warning is worse than
 // a missing one: whatever the text and the catalog do not settle gives none.
-import { quoteIdentifier } from '../catalog/ddl';
-import { lower, statementReferences } from '../dependencies/references';
-import type { Reference } from '../dependencies/references';
-import { nameOf } from './catalog';
+import { quoteName } from './tokens';
+import { foldIdentifier, sameIdentifier } from '../catalog/ddl';
+import { statementReferences } from './parse-tree';
+import type { Reference } from './parse-tree';
+import { DEFAULT_SCHEMA, nameOf } from './catalog';
 import type { SqlCatalog, SqlEntry } from './catalog';
-import { needsQuotes } from './completion';
-import { DEFAULT_SCHEMA } from './context';
-import { openLookup, same } from './lookup';
+import { openLookup } from './lookup';
 import type { Lookup } from './lookup';
 import { nearestNames } from './problems';
 import type { Problem } from './problems';
@@ -140,15 +139,16 @@ interface Finding {
 }
 
 async function unqualified(name: string, use: ColumnUse, env: Env): Promise<Finding | undefined> {
-  const key = lower(name);
+  const key = foldIdentifier(name);
   if (VALUE_FUNCTIONS.has(key) || VIRTUAL_COLUMNS.has(key) || env.mentioned.has(key)) return undefined;
   const relations = use.scopes.flatMap((scope) => scope.relations);
   if (relations.length === 0 || use.scopes.some((scope) => scope.aliases.has(key))) return undefined;
   // `SELECT t FROM t` is the row of t.
-  if (relations.some((relation) => relation.name !== undefined && same(relation.name, name)))
+  if (relations.some((relation) => relation.name !== undefined && sameIdentifier(relation.name, name)))
     return undefined;
   const lists = await Promise.all(relations.map((relation) => columnsOf(relation, env)));
-  if (lists.some((columns) => !columns || columns.some((column) => same(column, name)))) return undefined;
+  if (lists.some((columns) => !columns || columns.some((column) => sameIdentifier(column, name))))
+    return undefined;
   const innermost = use.scopes.find((scope) => scope.relations.length > 0)?.relations ?? [];
   const candidates = await scopeCandidates(innermost, env);
   const nearest = nearestNames(
@@ -158,7 +158,7 @@ async function unqualified(name: string, use: ColumnUse, env: Env): Promise<Find
   return {
     message: `No relation of the query has a column "${name}".`,
     candidates: nearest
-      .flatMap((found) => candidates.filter((candidate) => same(candidate.name, found)))
+      .flatMap((found) => candidates.filter((candidate) => sameIdentifier(candidate.name, found)))
       .slice(0, MAX_CANDIDATES),
   };
 }
@@ -170,11 +170,12 @@ async function scopeCandidates(relations: readonly TreeRelation[], env: Env): Pr
   );
   const counts = new Map<string, number>();
   for (const { columns = [] } of lists) {
-    for (const column of columns) counts.set(lower(column), (counts.get(lower(column)) ?? 0) + 1);
+    for (const column of columns)
+      counts.set(foldIdentifier(column), (counts.get(foldIdentifier(column)) ?? 0) + 1);
   }
   return lists.flatMap(({ relation, columns = [] }) =>
     columns.flatMap((column): Candidate[] => {
-      if ((counts.get(lower(column)) ?? 0) === 1) return [{ name: column }];
+      if ((counts.get(foldIdentifier(column)) ?? 0) === 1) return [{ name: column }];
       return relation.name === undefined ? [] : [{ name: column, qualifier: relation.name }];
     }),
   );
@@ -186,7 +187,7 @@ async function qualified(
   use: ColumnUse,
   env: Env,
 ): Promise<Finding | undefined> {
-  const key = lower(name);
+  const key = foldIdentifier(name);
   if (VIRTUAL_COLUMNS.has(key) || env.mentioned.has(key)) return undefined;
   const relation = relationNamed(use, qualifier);
   if (!relation) return undefined;
@@ -194,10 +195,10 @@ async function qualified(
     use.scopes.flatMap((scope) => scope.relations).map((r) => columnsOf(r, env)),
   );
   // `q.c` is the field c of a column q when q's relation lacks c.
-  if (lists.some((columns) => !columns || columns.some((column) => same(column, qualifier))))
+  if (lists.some((columns) => !columns || columns.some((column) => sameIdentifier(column, qualifier))))
     return undefined;
   const columns = await columnsOf(relation, env);
-  if (!columns || columns.some((column) => same(column, name))) return undefined;
+  if (!columns || columns.some((column) => sameIdentifier(column, name))) return undefined;
   return {
     message: `"${qualifier}" has no column "${name}".`,
     candidates: nearestNames(name, columns).map((found) => ({ name: found })),
@@ -208,7 +209,7 @@ async function qualified(
 function relationNamed(use: ColumnUse, name: string): TreeRelation | undefined {
   for (const scope of use.scopes) {
     const named = scope.relations.filter(
-      (relation) => relation.name !== undefined && same(relation.name, name),
+      (relation) => relation.name !== undefined && sameIdentifier(relation.name, name),
     );
     if (named.length > 0) return named.length === 1 ? named[0] : undefined;
   }
@@ -224,8 +225,8 @@ const UNSURE: Resolved = { kind: 'unsure' };
 
 async function resolveTable({ catalog, schema, name, at }: TreeTable, env: Env): Promise<Resolved> {
   if (at && at.version === undefined) return UNSURE;
-  if (FILE_LIKE.test(name) || env.mentioned.has(lower(name))) return UNSURE;
-  if (env.system.has(lower(name)) || SYSTEM_PREFIX.test(name)) return UNSURE;
+  if (FILE_LIKE.test(name) || env.mentioned.has(foldIdentifier(name))) return UNSURE;
+  if (env.system.has(foldIdentifier(name)) || SYSTEM_PREFIX.test(name)) return UNSURE;
   const lookup = await env.lookupAt(at?.version);
   const inSchema = lookup && schemaOf(catalog, schema, lookup, env);
   if (!lookup || inSchema === undefined) return UNSURE;
@@ -236,12 +237,12 @@ async function resolveTable({ catalog, schema, name, at }: TreeTable, env: Env):
 // The schema of the lake that the name certainly reads; `x.t` may name the catalog x, which only the lake's own name
 // (`lake.t`, the table t of main) or a schema of the lake settles.
 function schemaOf(catalog: string, schema: string, lookup: Lookup, env: Env): string | undefined {
-  if (catalog !== '') return same(catalog, lookup.lake) ? lookup.schema(schema)?.name : undefined;
+  if (catalog !== '') return sameIdentifier(catalog, lookup.lake) ? lookup.schema(schema)?.name : undefined;
   if (env.qualifiedOnly) return undefined;
   if (schema === '') return lookup.schema(DEFAULT_SCHEMA)?.name;
-  if (OTHER_CATALOGS.has(lower(schema))) return undefined;
+  if (OTHER_CATALOGS.has(foldIdentifier(schema))) return undefined;
   const own = lookup.schema(schema)?.name;
-  return own ?? (same(schema, lookup.lake) ? lookup.schema(DEFAULT_SCHEMA)?.name : undefined);
+  return own ?? (sameIdentifier(schema, lookup.lake) ? lookup.schema(DEFAULT_SCHEMA)?.name : undefined);
 }
 
 // The names of a relation in order; undefined when they are not all certain.
@@ -309,14 +310,14 @@ async function itemColumns(
       const read =
         qualifier === undefined
           ? relations
-          : relations.filter(({ name }) => name !== undefined && same(name, qualifier));
+          : relations.filter(({ name }) => name !== undefined && sameIdentifier(name, qualifier));
       if (read.length === 0) return undefined;
       const lists = await Promise.all(read.map((relation) => columnsOf(relation, env)));
       if (lists.some((columns) => columns === undefined)) return undefined;
       return lists
         .flatMap((columns) => columns ?? [])
-        .filter((column) => !exclude.has(lower(column)))
-        .map((column) => rename.get(lower(column)) ?? column);
+        .filter((column) => !exclude.has(foldIdentifier(column)))
+        .map((column) => rename.get(foldIdentifier(column)) ?? column);
     }
   }
 }
@@ -329,12 +330,11 @@ function renamed(columns: readonly string[], aliases: readonly string[]): readon
 
 // DuckDB renames a repeated column of a subquery (`a_1`): the names are no longer certain.
 function unique(columns: readonly string[]): readonly string[] | undefined {
-  return new Set(columns.map(lower)).size === columns.length ? columns : undefined;
+  return new Set(columns.map(foldIdentifier)).size === columns.length ? columns : undefined;
 }
 
 function warning(part: NamePart, message: string, candidates: readonly Candidate[], env: Env): Problem {
-  const quote = (name: string): string =>
-    part.quoted || needsQuotes(name, env.reserved) ? quoteIdentifier(name) : name;
+  const quote = (name: string): string => quoteName(name, env.reserved, part.quoted);
   return {
     severity: 'warning',
     offset: part.offset,
@@ -357,7 +357,10 @@ interface NamePart {
 // The last of the dotted names at a location, in the document; undefined when the text does not spell `names`.
 function lastPart(query: ParsedQuery, at: number, names: readonly string[]): NamePart | undefined {
   const parts = namePartsAt(query.text, at);
-  if (parts.length < names.length || names.some((name, index) => !same(parts[index]?.name ?? '', name))) {
+  if (
+    parts.length < names.length ||
+    names.some((name, index) => !sameIdentifier(parts[index]?.name ?? '', name))
+  ) {
     return undefined;
   }
   const last = parts[names.length - 1];

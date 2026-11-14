@@ -1,6 +1,9 @@
 import { dropMacroDdl, qualifiedName } from './catalog/ddl';
 import { isMainSchema } from './catalog/model';
-import { commented, macroScript, newestNote, pinnedOf, selectStatement, viewScript } from './script';
+import { commented } from './ddl-script/check';
+import { macroScript, viewScript } from './ddl-script/definitions';
+import { commentStatement, dropColumnStatement, dropStatement } from './ddl-script/statements';
+import { newestNote, pinnedOf, selectStatement } from './script';
 import {
   alterColumn,
   columnBlocks,
@@ -12,10 +15,9 @@ import {
   blocks,
   catalogOf,
   COMMENTED_OUT,
-  dropColumnStatement,
   dropList,
+  dropsAt,
   dropScript,
-  dropStatement,
   RUN,
   selectScript,
   TEMPLATE_HEADER,
@@ -43,7 +45,7 @@ import {
   viewBlock,
 } from './script-templates/new-objects';
 import { alterTable, createTable, insertTable, tableSelect } from './script-templates/table';
-import { byName } from './tree/model';
+import { byName } from './order';
 import type { ChangedTable, NodeRef } from './tree/refs';
 
 /** The five entries of the **Script as** submenu; only a table has INSERT. */
@@ -143,16 +145,19 @@ export const SCRIPTS: { readonly [K in ScriptKind]: Verbs<Refs[K]> } = {
         tableMacroBlock(ref.schema.name),
       ]),
     // The menu shows the entry disabled on main; a call by command still gets no DROP of it.
-    drop: (tree, ref) =>
-      isMainSchema(ref.schema.name)
-        ? `-- ${MAIN_STAYS}`
-        : [
-            `-- Drops the schema. It must be empty: DuckLake refuses otherwise. ${RUN}`,
-            ...newestNote(tree, ref.connectionId, { several: true }),
-            dropStatement('SCHEMA', ref.schema.name),
-            '-- Drops the schema and everything in it',
-            commented(`DROP SCHEMA ${qualifiedName(ref.schema.name)} CASCADE;`),
-          ].join('\n'),
+    drop(tree, ref) {
+      if (isMainSchema(ref.schema.name)) {
+        return `-- ${MAIN_STAYS}`;
+      }
+      const drops = dropsAt(tree, ref.connectionId);
+      return [
+        `-- Drops the schema. It must be empty: DuckLake refuses otherwise. ${RUN}`,
+        ...drops.note,
+        drops.statement(dropStatement('SCHEMA', ref.schema.name)),
+        '-- Drops the schema and everything in it',
+        commented(`DROP SCHEMA ${qualifiedName(ref.schema.name)} CASCADE;`),
+      ].join('\n');
+    },
   },
   'folder.tables': {
     select: (tree, ref) =>
@@ -211,7 +216,7 @@ export const SCRIPTS: { readonly [K in ScriptKind]: Verbs<Refs[K]> } = {
     select: (tree, ref) =>
       selectStatement(ref.schema.name, ref.view.name, undefined, pinnedOf(tree, ref.connectionId)),
     create(tree, ref) {
-      const { notes, statement } = viewScript(ref.schema.name, ref.view, 'create');
+      const { notes, statement } = viewScript(ref.schema.name, ref.view, { head: 'create' });
       return withDrop(
         [...notes, ...newestNote(tree, ref.connectionId)],
         dropStatement('VIEW', ref.schema.name, ref.view.name),
@@ -220,7 +225,7 @@ export const SCRIPTS: { readonly [K in ScriptKind]: Verbs<Refs[K]> } = {
     },
     alter(tree, ref) {
       const view = qualifiedName(ref.schema.name, ref.view.name);
-      const { notes, statement } = viewScript(ref.schema.name, ref.view, 'alter');
+      const { notes, statement } = viewScript(ref.schema.name, ref.view, { head: 'replace' });
       return [
         '-- Edit the query, then run the statement in a read/write SQL session to replace the view.',
         ...notes,
@@ -229,7 +234,7 @@ export const SCRIPTS: { readonly [K in ScriptKind]: Verbs<Refs[K]> } = {
         '-- Rename the view',
         commented(`ALTER VIEW ${view} RENAME TO <new_name>;`),
         '-- Comment on the view',
-        commented(`COMMENT ON VIEW ${view} IS '<comment>';`),
+        commented(commentStatement('VIEW', [ref.schema.name, ref.view.name], '<comment>')),
         '-- Drop the view',
         commented(dropStatement('VIEW', ref.schema.name, ref.view.name)),
       ].join('\n');
@@ -240,7 +245,7 @@ export const SCRIPTS: { readonly [K in ScriptKind]: Verbs<Refs[K]> } = {
   macro: {
     select: selectMacro,
     create(tree, ref) {
-      const { notes, statement } = macroScript(ref.schema.name, ref.macro);
+      const { notes, statement } = macroScript(ref.schema.name, ref.macro, { head: 'replace' });
       return withDrop(
         [...notes, ...newestNote(tree, ref.connectionId)],
         dropMacroDdl(ref.schema.name, ref.macro),
@@ -248,7 +253,7 @@ export const SCRIPTS: { readonly [K in ScriptKind]: Verbs<Refs[K]> } = {
       );
     },
     alter(tree, ref) {
-      const { notes, statement } = macroScript(ref.schema.name, ref.macro);
+      const { notes, statement } = macroScript(ref.schema.name, ref.macro, { head: 'replace' });
       return [
         '-- Edit the macro, then run the statement in a read/write SQL session to replace it. The statement holds all its overloads.',
         ...notes,
@@ -329,9 +334,11 @@ export function scriptKindOf(ref: NodeRef): ScriptKind | undefined {
     case 'column':
       return ref.member ? 'column.member' : 'column';
     case 'folder':
-      return `folder.${ref.folder}`;
+      // The Query History holds statements, not catalog objects: no Script as.
+      return ref.folder === 'queryHistory' ? undefined : `folder.${ref.folder}`;
     case 'detail':
       return ref.change ? 'detail.table' : undefined;
+    case 'query':
     case 'message':
       return undefined;
     default:

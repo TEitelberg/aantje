@@ -30,9 +30,9 @@ export function modeOf(classNames: string): ColorMode {
   return CLASS_TO_MODE.find(([name]) => classes.includes(name))?.[1] ?? 'dark';
 }
 
-type Rgb = readonly [number, number, number];
+export type Rgb = readonly [number, number, number];
 
-const toHex = ([r, g, b]: Rgb): string =>
+export const toHex = ([r, g, b]: Rgb): string =>
   `#${[r, g, b].map((channel) => Math.round(channel).toString(16).padStart(2, '0')).join('')}`;
 
 /** Parses `#rgb`, `#rrggbb`, `#rrggbbaa`, `rgb()` and `rgba()` into an opaque colour (laid over `background`); else undefined. */

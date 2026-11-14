@@ -1,4 +1,5 @@
-import type { Diagnostic } from './session';
+import { compareText } from '../order';
+import type { Diagnostic } from './syntax';
 
 /** A mark of the check while typing: a syntax error, or a warning about a name that the lake certainly lacks. */
 export interface Problem extends Diagnostic {
@@ -40,12 +41,10 @@ export function nearestNames(name: string, known: Iterable<string>): string[] {
     if (distance <= most) close.push({ name: candidate, distance });
   }
   return close
-    .sort((a, b) => a.distance - b.distance || compare(a.name.toLowerCase(), b.name.toLowerCase()))
+    .sort((a, b) => a.distance - b.distance || compareText(a.name.toLowerCase(), b.name.toLowerCase()))
     .slice(0, MAX_REPLACEMENTS)
     .map((found) => found.name);
 }
-
-const compare = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
 /** Insertions, deletions, substitutions and swaps of two neighbours count one each (optimal string alignment). */
 function editDistance(a: string, b: string): number {

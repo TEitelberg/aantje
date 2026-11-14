@@ -1,7 +1,9 @@
 import { AantjeError } from '../errors';
+import type { StorageConfig } from '../storage/config';
 import { newestSnapshotQuery } from './attach';
 import { foreignOrigins, listOrigins, storedDataPath } from './guard/file-origins';
-import { relationsQuery, sameName, tablesQuery } from './guard/queries';
+import { sameIdentifier } from '../catalog/ddl';
+import { relationsQuery, tablesQuery } from './guard/queries';
 import type { Rows } from './guard/queries';
 import { closureOf, maintenanceFunctions } from './guard/view-closure';
 import type { TableRef } from './types';
@@ -22,6 +24,7 @@ async function assertViewIsReadOnly(
   table: TableRef,
   snapshot: number | undefined,
   at: string,
+  storage: StorageConfig | undefined,
 ): Promise<void> {
   const { problem, relations } = await closureOf(
     rows,
@@ -33,7 +36,7 @@ async function assertViewIsReadOnly(
     const { definition, reason } = problem;
     const which = definition.kind === 'view' ? 'view' : 'macro';
     const through =
-      sameName(definition.name, table.table) && definition.kind === 'view'
+      sameIdentifier(definition.name, table.table) && definition.kind === 'view'
         ? ''
         : ` (through the ${which} ${JSON.stringify(definition.name)})`;
     throw viewRefused(table, `${reason}${through}`, `view refused: ${reason}`);
@@ -50,11 +53,11 @@ async function assertViewIsReadOnly(
   }
   const base = await storedDataPath(rows);
   for (const read of tables) {
-    const foreign = await foreignOrigins(rows, read, snapshot, at, undefined, base);
+    const foreign = await foreignOrigins(rows, read, snapshot, at, undefined, base, storage);
     if (foreign.length > 0) {
       throw viewRefused(
         table,
-        `it reads "${read.schema}.${read.table}", whose catalog lists data files on ${listOrigins(foreign)}, which is neither the data path of the catalog nor the S3 endpoint of the settings. aantje sends no request to a server that a catalog names`,
+        `it reads "${read.schema}.${read.table}", whose catalog lists data files on ${listOrigins(foreign)}, which is neither the data path of the catalog nor the storage of this connection. aantje sends no request to a server that a catalog names`,
         'files on a foreign server refused',
       );
     }
@@ -69,12 +72,13 @@ async function assertFilesStayHome(
   snapshot: number | undefined,
   at: string,
   range: { readonly from: number; readonly to: number } | undefined,
+  storage: StorageConfig | undefined,
 ): Promise<void> {
-  const foreign = await foreignOrigins(rows, table, snapshot, at, range, await storedDataPath(rows));
+  const foreign = await foreignOrigins(rows, table, snapshot, at, range, await storedDataPath(rows), storage);
   if (foreign.length > 0) {
     throw new AantjeError(
       'QUERY_FAILED',
-      `"${table.schema}.${table.table}" is not read: the catalog lists data files on ${listOrigins(foreign)}, which is neither the data path of the catalog nor the S3 endpoint of the settings. aantje sends no request to a server that a catalog names.`,
+      `"${table.schema}.${table.table}" is not read: the catalog lists data files on ${listOrigins(foreign)}, which is neither the data path of the catalog nor the storage of this connection. aantje sends no request to a server that a catalog names.`,
       { table, cause: new Error('files on a foreign server refused') },
     );
   }
@@ -92,6 +96,8 @@ export interface GuardOptions {
    * are those the range `[from, to]` can read, not one snapshot's.
    */
   readonly range?: { readonly from: number; readonly to: number };
+  /** The storage of the connection: its service is where files are at home besides the data path. */
+  readonly storage?: StorageConfig;
 }
 
 /**
@@ -130,8 +136,8 @@ export async function guardRelation(
         { table, cause: new Error('view read before the connection is trusted') },
       );
     }
-    await assertViewIsReadOnly(rows, table, snapshot, at);
+    await assertViewIsReadOnly(rows, table, snapshot, at, options.storage);
   } else if (found[0] === 'table') {
-    await assertFilesStayHome(rows, table, snapshot, at, options.range);
+    await assertFilesStayHome(rows, table, snapshot, at, options.range, options.storage);
   }
 }

@@ -88,6 +88,16 @@ export interface CatalogEntry {
   readonly schemaName: string;
 }
 
+/** A column or nested field of a table, for the catalog-wide search. */
+export interface CatalogColumnEntry {
+  /** Column ids from the top-level column down to this one; the tree builds the node id from them. */
+  readonly ids: readonly number[];
+  /** Names from the top-level column down, e.g. `['customer', 'name']`. */
+  readonly path: readonly string[];
+  /** DuckLake type name, e.g. "int32" or "struct". */
+  readonly type: string;
+}
+
 /** One row of `ducklake_metadata`; `scope` is null for a global entry, else e.g. "table" with its `scopeId`. */
 export interface MetadataEntry {
   readonly key: string;
@@ -234,6 +244,20 @@ export interface Lifetime {
   readonly end: SnapshotId | null;
 }
 
+/** A table, view or macro that was dropped and that a snapshot which still exists can read. */
+export interface DroppedObject {
+  readonly kind: 'table' | 'view' | 'macro';
+  readonly id: number;
+  /** The name when it was dropped. */
+  readonly name: string;
+  /** The snapshot that dropped it. */
+  readonly droppedAt: SnapshotId;
+  /** ISO 8601, UTC; null when that snapshot expired. */
+  readonly droppedTime: string | null;
+  /** The newest snapshot that still exists at which the object existed: the one a restore reads. */
+  readonly lastSnapshot: SnapshotId;
+}
+
 /** `renamed` is a `created_*` entry for an id that has an earlier version (DuckLake writes a rename as a creation). */
 export type ResolvedAction = ChangeAction | 'renamed';
 
@@ -344,6 +368,8 @@ export interface PartitionStatistics {
   readonly partial?: true;
   /** Partition keys left out beyond `MAX_PARTITION_KEYS`; partitions then group by the first keys only. */
   readonly keysLeftOut?: number;
+  /** True when the partition values could not be read; `partitions` is then empty. */
+  readonly unread?: true;
 }
 
 export interface ColumnStatistics {
@@ -404,7 +430,7 @@ export interface GrowthChanges {
   readonly changes: readonly GrowthChange[];
   /** True when the catalog has more inlined tables than were read; their rows are not counted. */
   readonly inlinedMore?: true;
-  /** True when the statement that reads the inlined rows failed; none are counted. */
+  /** True when the list of the inlined tables or the statement that reads their rows failed; none are counted. */
   readonly inlinedFailed?: true;
 }
 
@@ -429,6 +455,8 @@ export interface TableStatistics {
   readonly columns: readonly ColumnStatistics[];
   /** True when min and max come from only part of the file statistics because there are too many. */
   readonly columnsPartial?: true;
+  /** True when the null counts or the ranges of the columns could not be read; the columns show without them. */
+  readonly columnsUnread?: true;
   /** Oldest first. */
   readonly growth: readonly GrowthPoint[];
   /**
@@ -497,9 +525,30 @@ export interface SmallFileTable {
   readonly small: number;
 }
 
-// SmallFileTable plus the bytes of the small files.
+/**
+ * The data files of a table that have a delete file at the newest state. A merge leaves such a file alone, and a
+ * rewrite with `delete_threshold => 0` rewrites every one of them, small or not.
+ */
+export interface DeletedFiles {
+  /** Those below `SMALL_FILE_BYTES`. */
+  readonly small: number;
+  /** All of them. */
+  readonly files: number;
+  /** The size of `files`. */
+  readonly bytes: number;
+}
+
+/** A table with small data files that have a delete file, with its names at the newest state. */
+export interface TableDeletedFiles extends DeletedFiles {
+  readonly tableId: number;
+  readonly schema: string;
+  readonly table: string;
+}
+
+// SmallFileTable plus the bytes of the small files and the files with a delete file (null: not readable).
 interface SmallFileBytes extends SmallFileTable {
   readonly smallBytes: number;
+  readonly deleted: DeletedFiles | null;
 }
 
 /** A table whose data files with a delete file have lost a large share of their rows (newest state). */
@@ -532,6 +581,8 @@ export interface MaintenanceFacts {
   readonly inlined: readonly { readonly tableId: number; readonly rows: number }[];
   /** True when more tables hold inlined data than the limit lets `inlined` count. */
   readonly inlinedMore?: true;
+  /** True when the inlined rows of some tables could not be read; `inlined` leaves those tables out. */
+  readonly inlinedFailed?: true;
 }
 
 /** A data file or delete file of the catalog, with the place where it should be. */
@@ -592,6 +643,11 @@ export interface CatalogReader {
   columns(tableId: number, snapshot: SnapshotId): Promise<ColumnInfo[]>;
   /** Every table and view of every schema. */
   entries(snapshot: SnapshotId): Promise<CatalogEntry[]>;
+  /**
+   * The columns and nested fields of every table by table id, read in one statement; each table's in the order of
+   * `columns()`, a column before its fields.
+   */
+  columnEntries(snapshot: SnapshotId): Promise<Map<number, CatalogColumnEntry[]>>;
   /** Every row of `ducklake_metadata`, ordered as in `properties()`. */
   metadata(): Promise<MetadataEntry[]>;
   /** The number of snapshots, as in `properties()`. */
@@ -654,6 +710,11 @@ export interface CatalogReader {
    */
   lifetime(kind: 'table' | 'view', id: number): Promise<Lifetime | undefined>;
   /**
+   * The tables, views and macros whose last version was in the schema and ended, newest drop first; only those with a
+   * snapshot left at which they existed (a name dropped twice is two objects).
+   */
+  droppedObjects(schemaId: number): Promise<DroppedObject[]>;
+  /**
    * Files, sizes, partitions, column statistics and growth of a table at a snapshot. The signal stops PostgreSQL,
    * DuckDB and Quack queries, not SQLite's.
    */
@@ -670,6 +731,11 @@ export interface CatalogReader {
   ): Promise<ConsistencyReport>;
   /** Snapshot numbering gaps, tables with small files and inlined rows, at most `limit` entries per list. */
   maintenanceFacts(scope: HealthScopeRef, limit: number, signal?: AbortSignal): Promise<MaintenanceFacts>;
+  /**
+   * The tables of the scope with small data files that have a delete file at the newest state, at most `limit`, by
+   * table id. A merge leaves these files alone, so the Merge script rewrites them first.
+   */
+  deletedSmallFiles(scope: HealthScopeRef, limit: number, signal?: AbortSignal): Promise<TableDeletedFiles[]>;
   /**
    * Tables with data files that have at least `floor` of their rows deleted (newest state), most first. `floor` and
    * `threshold` are shares 0 to 1; `threshold` is the one `ducklake_rewrite_data_files` applies.

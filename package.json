@@ -56,6 +56,15 @@
     }
   },
   "contributes": {
+    "icons": {
+      "aantje-duck": {
+        "description": "The duck of aantje, shown on a connected DuckLake catalog.",
+        "default": {
+          "fontPath": "media/aantje-icons.woff",
+          "fontCharacter": "\\E001"
+        }
+      }
+    },
     "viewsContainers": {
       "activitybar": [
         {
@@ -93,6 +102,11 @@
         "icon": "$(edit)"
       },
       {
+        "command": "aantje.setStorageSignIn",
+        "title": "Set Storage Sign-in...",
+        "category": "aantje"
+      },
+      {
         "command": "aantje.removeConnection",
         "title": "Remove Connection",
         "category": "aantje",
@@ -103,6 +117,12 @@
         "title": "Create Azure DuckLake...",
         "category": "aantje",
         "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "aantje.showInfo",
+        "title": "Info",
+        "category": "aantje",
+        "icon": "$(info)"
       },
       {
         "command": "aantje.finishAzureLake",
@@ -188,6 +208,11 @@
         "title": "Script as DROP",
         "category": "aantje",
         "enablement": "viewItem != schema.main"
+      },
+      {
+        "command": "aantje.generateScripts",
+        "title": "Generate Scripts...",
+        "category": "aantje"
       },
       {
         "command": "aantje.maintenanceCheckpoint",
@@ -287,7 +312,7 @@
       },
       {
         "command": "aantje.compareSchema",
-        "title": "Compare Schema...",
+        "title": "Compare Table at Two Snapshots...",
         "category": "aantje"
       },
       {
@@ -296,8 +321,23 @@
         "category": "aantje"
       },
       {
+        "command": "aantje.schemaCompare",
+        "title": "Schema Compare...",
+        "category": "aantje"
+      },
+      {
         "command": "aantje.showChanges",
         "title": "Show Changes...",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.restoreTableToSnapshot",
+        "title": "Restore Table to Snapshot...",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.restoreDroppedObject",
+        "title": "Restore Dropped Object...",
         "category": "aantje"
       },
       {
@@ -383,6 +423,26 @@
         "category": "aantje"
       },
       {
+        "command": "aantje.explainStatement",
+        "title": "Explain Statement",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.analyzeStatement",
+        "title": "Explain Analyze Statement (Analysis)",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.profileStatement",
+        "title": "Run with Profiler (Statistics)",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.runCteWithLimit",
+        "title": "Run CTE with Limit...",
+        "category": "aantje"
+      },
+      {
         "command": "aantje.cancelQuery",
         "title": "Cancel Query",
         "category": "aantje",
@@ -413,6 +473,21 @@
       {
         "command": "aantje.queryMenu",
         "title": "Query Session...",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.openQueryHistoryEntry",
+        "title": "Open as New Query",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.copyQueryHistorySql",
+        "title": "Copy SQL",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.clearQueryHistory",
+        "title": "Clear Query History",
         "category": "aantje"
       }
     ],
@@ -483,6 +558,11 @@
           "command": "aantje.scriptDrop",
           "when": "viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?|table(\\.azure)?|view(\\.azure)?|macro|column|folder\\.(tables|views|macros|columns|partitioning|sortOrder|tags))$/",
           "group": "3_drop"
+        },
+        {
+          "command": "aantje.generateScripts",
+          "when": "viewItem =~ /^(connection\\.connected(\\.azure)?|schema(\\.main)?)$/",
+          "group": "4_generate"
         }
       ],
       "aantje.maintenance": [
@@ -547,6 +627,16 @@
           "command": "aantje.createAzureLake",
           "when": "view == aantje.catalogs",
           "group": "1_azure@1"
+        },
+        {
+          "command": "aantje.schemaCompare",
+          "when": "view == aantje.catalogs",
+          "group": "8_compare@1"
+        },
+        {
+          "command": "aantje.showInfo",
+          "when": "view == aantje.catalogs",
+          "group": "9_info@1"
         }
       ],
       "view/item/context": [
@@ -586,6 +676,21 @@
           "group": "1_changes@1"
         },
         {
+          "command": "aantje.openQueryHistoryEntry",
+          "when": "view == aantje.catalogs && viewItem == query",
+          "group": "1_query@1"
+        },
+        {
+          "command": "aantje.copyQueryHistorySql",
+          "when": "view == aantje.catalogs && viewItem == query",
+          "group": "1_query@2"
+        },
+        {
+          "command": "aantje.clearQueryHistory",
+          "when": "view == aantje.catalogs && viewItem == folder.queryHistory",
+          "group": "1_history@1"
+        },
+        {
           "command": "aantje.testConnection",
           "when": "view == aantje.catalogs && viewItem =~ /^connection\\./",
           "group": "1_connection@1"
@@ -596,9 +701,14 @@
           "group": "1_connection@2"
         },
         {
-          "command": "aantje.removeConnection",
+          "command": "aantje.setStorageSignIn",
           "when": "view == aantje.catalogs && viewItem =~ /^connection\\./",
           "group": "1_connection@3"
+        },
+        {
+          "command": "aantje.removeConnection",
+          "when": "view == aantje.catalogs && viewItem =~ /^connection\\./",
+          "group": "1_connection@4"
         },
         {
           "command": "aantje.copyName",
@@ -629,6 +739,11 @@
           "submenu": "aantje.timeTravel",
           "when": "view == aantje.catalogs && viewItem =~ /^(table(\\.azure)?|view(\\.azure)?)$/",
           "group": "2_travel"
+        },
+        {
+          "command": "aantje.restoreDroppedObject",
+          "when": "view == aantje.catalogs && viewItem =~ /^schema(\\.main)?$/",
+          "group": "2_travel@4"
         },
         {
           "command": "aantje.compareSnapshots",
@@ -708,6 +823,10 @@
           "when": "false"
         },
         {
+          "command": "aantje.setStorageSignIn",
+          "when": "false"
+        },
+        {
           "command": "aantje.removeConnection",
           "when": "false"
         },
@@ -749,6 +868,10 @@
         },
         {
           "command": "aantje.scriptDrop",
+          "when": "false"
+        },
+        {
+          "command": "aantje.generateScripts",
           "when": "false"
         },
         {
@@ -812,6 +935,14 @@
           "when": "false"
         },
         {
+          "command": "aantje.restoreTableToSnapshot",
+          "when": "false"
+        },
+        {
+          "command": "aantje.restoreDroppedObject",
+          "when": "false"
+        },
+        {
           "command": "aantje.showSnapshotChanges",
           "when": "false"
         },
@@ -860,6 +991,22 @@
           "when": "editorLangId == sql"
         },
         {
+          "command": "aantje.explainStatement",
+          "when": "editorLangId == sql"
+        },
+        {
+          "command": "aantje.analyzeStatement",
+          "when": "editorLangId == sql"
+        },
+        {
+          "command": "aantje.profileStatement",
+          "when": "editorLangId == sql"
+        },
+        {
+          "command": "aantje.runCteWithLimit",
+          "when": "editorLangId == sql"
+        },
+        {
           "command": "aantje.cancelQuery",
           "when": "aantje.queryEditor && aantje.queryRunning"
         },
@@ -882,6 +1029,18 @@
         {
           "command": "aantje.queryMenu",
           "when": "aantje.queryEditor"
+        },
+        {
+          "command": "aantje.openQueryHistoryEntry",
+          "when": "false"
+        },
+        {
+          "command": "aantje.copyQueryHistorySql",
+          "when": "false"
+        },
+        {
+          "command": "aantje.clearQueryHistory",
+          "when": "false"
         },
         {
           "command": "aantje.allowMyIp",
@@ -910,6 +1069,11 @@
           "command": "aantje.showChanges",
           "when": "viewItem =~ /^table(\\.azure)?$/",
           "group": "travel@3"
+        },
+        {
+          "command": "aantje.restoreTableToSnapshot",
+          "when": "viewItem =~ /^table(\\.azure)?$/",
+          "group": "travel@4"
         }
       ],
       "editor/title": [
@@ -932,6 +1096,58 @@
           "command": "aantje.showResults",
           "when": "aantje.queryEditor && aantje.queryResultsCollapsed",
           "group": "navigation@2"
+        },
+        {
+          "command": "aantje.runStatement",
+          "when": "aantje.queryEditor && !aantje.queryRunning",
+          "group": "1_aantje@1"
+        },
+        {
+          "command": "aantje.explainStatement",
+          "when": "aantje.queryEditor && !aantje.queryRunning",
+          "group": "1_aantje@2"
+        },
+        {
+          "command": "aantje.analyzeStatement",
+          "when": "aantje.queryEditor && !aantje.queryRunning",
+          "group": "1_aantje@3"
+        },
+        {
+          "command": "aantje.profileStatement",
+          "when": "aantje.queryEditor && !aantje.queryRunning",
+          "group": "1_aantje@4"
+        },
+        {
+          "command": "aantje.runCteWithLimit",
+          "when": "aantje.queryEditor && !aantje.queryRunning",
+          "group": "1_aantje@5"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "aantje.runStatement",
+          "when": "editorLangId == sql && aantje.queryEditor && !aantje.queryRunning",
+          "group": "1_aantje@1"
+        },
+        {
+          "command": "aantje.explainStatement",
+          "when": "editorLangId == sql && aantje.queryEditor && !aantje.queryRunning",
+          "group": "1_aantje@2"
+        },
+        {
+          "command": "aantje.analyzeStatement",
+          "when": "editorLangId == sql && aantje.queryEditor && !aantje.queryRunning",
+          "group": "1_aantje@3"
+        },
+        {
+          "command": "aantje.profileStatement",
+          "when": "editorLangId == sql && aantje.queryEditor && !aantje.queryRunning",
+          "group": "1_aantje@4"
+        },
+        {
+          "command": "aantje.runCteWithLimit",
+          "when": "editorLangId == sql && aantje.queryEditor && !aantje.queryRunning",
+          "group": "1_aantje@5"
         }
       ],
       "aantje.reports": [
@@ -1116,6 +1332,176 @@
                 "type": "string",
                 "description": "Microsoft Entra tenant (ID) to sign in to for the storage account of an Azure lake. Without it the sign-in uses the home tenant of the account."
               },
+              "storage": {
+                "description": "Where the data files of the lake live and how aantje signs in there: one storage per connection. No secret is stored here: keys, tokens, connection strings, SAS tokens and client secrets are kept in the VS Code secret storage, per connection. Without storage the connection uses aantje.s3.* and the S3 credentials (or, for the legacy azureAccount, the Microsoft account). Not for quack, and not together with azureAccount.",
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "signIn"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "const": "aws"
+                      },
+                      "region": {
+                        "type": "string",
+                        "description": "AWS region of the bucket, for example eu-central-1."
+                      },
+                      "signIn": {
+                        "enum": [
+                          "keys",
+                          "chain"
+                        ],
+                        "description": "keys: access key, secret and an optional session token from the secret storage. chain: the AWS credential chain (environment, SSO, profile, instance role)."
+                      },
+                      "chain": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_]+(;[A-Za-z0-9_]+)*$",
+                        "description": "Credential chain: the providers to try, separated by semicolons (for example sso;env). Absent: the default order."
+                      },
+                      "awsProfile": {
+                        "type": "string",
+                        "description": "Credential chain: the profile of the AWS configuration to use."
+                      }
+                    },
+                    "description": "Amazon S3."
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "signIn"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "const": "s3"
+                      },
+                      "endpoint": {
+                        "type": "string",
+                        "description": "S3 API of the store as host:port or http(s)://host:port, without a path (MinIO, RustFS, Wasabi). Give this or accountId."
+                      },
+                      "accountId": {
+                        "type": "string",
+                        "pattern": "^[0-9A-Fa-f]{32}$",
+                        "description": "Cloudflare account ID (32 hexadecimal digits) of an R2 store. Give this or endpoint."
+                      },
+                      "region": {
+                        "type": "string",
+                        "description": "Region of the store."
+                      },
+                      "urlStyle": {
+                        "enum": [
+                          "path",
+                          "vhost"
+                        ],
+                        "description": "How bucket names are put into URLs; only with endpoint. Most S3-compatible servers need path."
+                      },
+                      "signIn": {
+                        "enum": [
+                          "keys"
+                        ],
+                        "description": "Access key and secret from the secret storage."
+                      }
+                    },
+                    "description": "An S3-compatible store or Cloudflare R2."
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "account",
+                      "signIn"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "const": "azure"
+                      },
+                      "account": {
+                        "type": "string",
+                        "pattern": "^[a-z0-9]{3,24}$",
+                        "description": "Azure storage account (ADLS Gen2 or Blob)."
+                      },
+                      "tenant": {
+                        "type": "string",
+                        "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$",
+                        "description": "Microsoft Entra tenant (ID). Absent: the home tenant of the account."
+                      },
+                      "signIn": {
+                        "enum": [
+                          "entra",
+                          "connectionString",
+                          "accountKey",
+                          "sas",
+                          "servicePrincipal",
+                          "chain"
+                        ],
+                        "description": "entra: the Microsoft account VS Code is signed in with. connectionString, accountKey, sas: the secret from the secret storage. servicePrincipal: an app registration (tenant, clientId and a client secret or certificatePath). chain: the Azure credential chain (for example the Azure CLI)."
+                      },
+                      "clientId": {
+                        "type": "string",
+                        "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$",
+                        "description": "Service principal: client ID of the app registration."
+                      },
+                      "certificatePath": {
+                        "type": "string",
+                        "description": "Service principal: path of a certificate file, instead of a client secret."
+                      },
+                      "chain": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_]+(;[A-Za-z0-9_]+)*$",
+                        "description": "Credential chain: the providers to try, separated by semicolons (for example sso;env). Absent: the default order."
+                      }
+                    },
+                    "description": "An Azure storage account."
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "kind",
+                      "signIn"
+                    ],
+                    "properties": {
+                      "kind": {
+                        "const": "onelake"
+                      },
+                      "tenant": {
+                        "type": "string",
+                        "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$",
+                        "description": "Microsoft Entra tenant (ID). Absent: the home tenant of the account."
+                      },
+                      "signIn": {
+                        "enum": [
+                          "entra",
+                          "servicePrincipal",
+                          "chain"
+                        ],
+                        "description": "entra: the Microsoft account VS Code is signed in with. servicePrincipal: an app registration. chain: the Azure credential chain."
+                      },
+                      "clientId": {
+                        "type": "string",
+                        "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$",
+                        "description": "Service principal: client ID of the app registration."
+                      },
+                      "certificatePath": {
+                        "type": "string",
+                        "description": "Service principal: path of a certificate file, instead of a client secret."
+                      },
+                      "chain": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_]+(;[A-Za-z0-9_]+)*$",
+                        "description": "Credential chain: the providers to try, separated by semicolons (for example sso;env). Absent: the default order."
+                      }
+                    },
+                    "description": "Microsoft Fabric OneLake."
+                  }
+                ]
+              },
               "ssl": {
                 "type": "boolean",
                 "description": "Use TLS for the PostgreSQL or Quack connection. Absent: TLS for every host but the local machine."
@@ -1179,6 +1565,39 @@
           "minimum": 1,
           "maximum": 1000000,
           "markdownDescription": "The most rows that the SQL editor keeps of one result. A longer result is cut and marked as partial; the rest is not read."
+        },
+        "aantje.sql.codeLens": {
+          "type": "boolean",
+          "scope": "machine",
+          "default": true,
+          "markdownDescription": "Shows Execute | Explain | Analysis | Statistics above each query of a SQL editor that has a connection, and above each CTE of its outermost `WITH`."
+        },
+        "aantje.sql.cteRowLimit": {
+          "type": "integer",
+          "scope": "machine",
+          "default": 100,
+          "minimum": 1,
+          "maximum": 1000000,
+          "markdownDescription": "The `LIMIT` that Execute of a CTE on its own adds. **Run CTE with Limit...** asks for another number, or none."
+        },
+        "aantje.sql.formatKeywordCase": {
+          "type": "string",
+          "scope": "machine",
+          "enum": [
+            "upper",
+            "lower",
+            "preserve"
+          ],
+          "default": "upper",
+          "markdownDescription": "How **Format Document** writes SQL keywords in the SQL editor: in upper case, in lower case, or as written. Names, strings and comments are never changed."
+        },
+        "aantje.queryHistory.size": {
+          "type": "integer",
+          "scope": "machine",
+          "default": 25,
+          "minimum": 0,
+          "maximum": 1000,
+          "markdownDescription": "How many statements the **Query History** of a connection keeps: the statements that the SQL editor ran on it with Run Query, Run Statement or Execute, newest first. They are kept in the global state of VS Code on this machine, with the SQL text and its literals. `0` records nothing, hides the folder and deletes the stored statements."
         }
       }
     }
@@ -1220,7 +1639,7 @@
     "eslint": "^10.14.0",
     "pg": "^8.23.1",
     "prettier": "^3.9.10",
-    "sharp": "^0.35.5",
+    "sql-formatter": "15.9.0",
     "sql.js": "^1.15.2",
     "typescript": "~6.0.3",
     "typescript-eslint": "^8.72.1",

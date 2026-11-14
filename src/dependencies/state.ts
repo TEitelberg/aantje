@@ -1,5 +1,6 @@
 import { isNullOr, isOneOf, isOptional, isShape, isString } from '../guards';
-import { DEPTHS, DIRECTIONS, nodeKey } from './model';
+import { nodeKey } from './graph';
+import { DEPTHS, DIRECTIONS } from './model';
 import type { DependenciesData, Direction } from './model';
 import { GRAPH_REACHES } from './picture';
 import type { GraphReach } from './picture';

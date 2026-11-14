@@ -3,6 +3,8 @@ import type { ColumnInfo, MacroInfo, SchemaInfo, SnapshotInfo, TableInfo, ViewIn
 import { isAzureLake } from '../connections/profile';
 import type { ConnectionProfile } from '../connections/profile';
 import type { RelationColumn } from '../data/types';
+import { visibleLine as shown } from '../markdown';
+import type { HistoryEntry, HistoryStatus } from '../sql/history';
 import {
   columnDescription,
   columnTooltip,
@@ -11,6 +13,10 @@ import {
   macroDescription,
   macroTooltip,
   partitioningTooltip,
+  QUERY_HISTORY_TOOLTIP,
+  queryDescription,
+  queryLabel,
+  queryTooltip,
   schemaTooltip,
   snapshotDescription,
   snapshotsFolderTooltip,
@@ -23,6 +29,8 @@ import {
 import type { TreeDetail } from './format';
 import type { ChangedTable, ConnectionState, FolderRef, TreeNode } from './refs';
 
+// Labels and descriptions from the catalog go through `shown`: no control or format character can reorder the tree.
+
 /** The most snapshots the Snapshots folder lists. */
 export const SNAPSHOT_LIMIT = 50;
 
@@ -30,7 +38,8 @@ export const SNAPSHOT_LIMIT = 50;
 const STATUS = {
   disconnected: { icon: 'plug', iconColor: undefined, contextValue: 'connection.disconnected' },
   connecting: { icon: 'sync~spin', iconColor: undefined, contextValue: 'connection.disconnected' },
-  connected: { icon: 'database', iconColor: 'charts.green', contextValue: 'connection.connected' },
+  // aantje-duck is contributed in package.json (contributes.icons), drawn from media/aantje-icons.woff.
+  connected: { icon: 'aantje-duck', iconColor: 'charts.green', contextValue: 'connection.connected' },
   error: { icon: 'error', iconColor: undefined, contextValue: 'connection.error' },
 } as const;
 
@@ -41,6 +50,13 @@ const AZURE_STATUS = {
   connected: { contextValue: 'connection.connected.azure' },
   error: { contextValue: 'connection.error.azure' },
 } as const;
+
+// Create Notebook cannot sign in to an Azure DuckLake: its tables and views have context values of their own, so that
+// the menus offer everything else there and leave Create Notebook out.
+const TABLE = { contextValue: 'table' } as const;
+const AZURE_TABLE = { contextValue: 'table.azure' } as const;
+const VIEW = { contextValue: 'view' } as const;
+const AZURE_VIEW = { contextValue: 'view.azure' } as const;
 
 // The schema main has its own context value, so that its Script as DROP is shown disabled (`isMainSchema`).
 const SCHEMA = { contextValue: 'schema' } as const;
@@ -59,7 +75,15 @@ const FOLDERS = {
   history: { label: 'History', segment: 'history', contextValue: 'folder.history' },
   tags: { label: 'Tags', segment: 'tags', contextValue: 'folder.tags' },
   snapshots: { label: 'Snapshots', segment: 'snapshots', contextValue: 'folder.snapshots' },
+  queryHistory: { label: 'Query History', segment: 'queries', contextValue: 'folder.queryHistory' },
 } as const;
+
+// A failed and a cancelled statement have icons of their own.
+const QUERY_ICONS: Readonly<Record<HistoryStatus, string>> = {
+  ok: 'code',
+  failed: 'error',
+  cancelled: 'circle-slash',
+};
 
 /*
  * The ids of the nodes a search or an action has to find again: the URI-encoded connection id, then one segment per level.
@@ -85,6 +109,11 @@ export function viewNodeId(parentId: string, viewId: number): string {
   return `${parentId}/v${viewId}`;
 }
 
+/** Below the Columns folder, or below the column that holds the field. */
+export function columnNodeId(parentId: string, columnId: number): string {
+  return `${parentId}/c${columnId}`;
+}
+
 export function connectionPresentation(
   profile: ConnectionProfile,
   state: ConnectionState,
@@ -104,7 +133,7 @@ export function schemaNode(parent: TreeNode, schema: SchemaInfo): TreeNode {
   return {
     id: schemaNodeId(parent.id, schema.id),
     ref: { kind: 'schema', connectionId: parent.ref.connectionId, schema },
-    label: schema.name,
+    label: shown(schema.name),
     tooltip: schemaTooltip(schema),
     icon: 'symbol-namespace',
     ...(isMainSchema(schema.name) ? MAIN_SCHEMA : SCHEMA),
@@ -143,6 +172,8 @@ function folderPresentation(folder: FolderRef): Pick<TreeNode, 'description' | '
         tooltip: snapshotsFolderTooltip(folder.total !== undefined && folder.total > SNAPSHOT_LIMIT),
         hasChildren: folder.total !== 0,
       };
+    case 'queryHistory':
+      return { tooltip: QUERY_HISTORY_TOOLTIP, hasChildren: true };
     case 'statistics':
     case 'history':
       return { hasChildren: false };
@@ -156,14 +187,15 @@ function folderPresentation(folder: FolderRef): Pick<TreeNode, 'description' | '
   }
 }
 
-export function tableNode(parent: TreeNode, schema: SchemaInfo, table: TableInfo): TreeNode {
+/** `azure`: the connection is an Azure DuckLake. */
+export function tableNode(parent: TreeNode, schema: SchemaInfo, table: TableInfo, azure = false): TreeNode {
   return {
     id: tableNodeId(parent.id, table.id),
     ref: { kind: 'table', connectionId: parent.ref.connectionId, schema, table },
-    label: table.name,
+    label: shown(table.name),
     tooltip: tableTooltip(schema, table),
     icon: 'table',
-    contextValue: 'table',
+    ...(azure ? AZURE_TABLE : TABLE),
     hasChildren: true,
   };
 }
@@ -172,8 +204,8 @@ export function macroNode(parent: TreeNode, schema: SchemaInfo, macro: MacroInfo
   return {
     id: `${parent.id}/m${macro.id}`,
     ref: { kind: 'macro', connectionId: parent.ref.connectionId, schema, macro },
-    label: macro.name,
-    description: macroDescription(macro),
+    label: shown(macro.name),
+    description: shown(macroDescription(macro)),
     tooltip: macroTooltip(schema, macro),
     icon: 'symbol-function',
     contextValue: 'macro',
@@ -203,8 +235,8 @@ export function detailNode(
   const node: TreeNode = {
     id: `${parent.id}/${key}`,
     ref: { kind: 'detail', connectionId: parent.ref.connectionId },
-    label,
-    description,
+    label: shown(label),
+    description: description === undefined ? undefined : shown(description),
     tooltip,
     icon,
     contextValue: 'detail',
@@ -219,20 +251,21 @@ export function detailNode(
     : node;
 }
 
-/** `expandable`: the tree can resolve view columns, the only children of a view. */
+/** `expandable`: the tree can resolve view columns, the only children of a view. `azure` as for `tableNode`. */
 export function viewNode(
   parent: TreeNode,
   schema: SchemaInfo,
   view: ViewInfo,
   expandable: boolean,
+  azure = false,
 ): TreeNode {
   return {
     id: viewNodeId(parent.id, view.id),
     ref: { kind: 'view', connectionId: parent.ref.connectionId, schema, view },
-    label: view.name,
+    label: shown(view.name),
     tooltip: viewTooltip(schema, view),
     icon: 'eye',
-    contextValue: 'view',
+    ...(azure ? AZURE_VIEW : VIEW),
     hasChildren: expandable,
   };
 }
@@ -248,8 +281,8 @@ export function viewColumnNode(
   return {
     id: `${parent.id}/c${index}`,
     ref: { kind: 'viewColumn', connectionId: parent.ref.connectionId, schema, view, column },
-    label: column.name,
-    description: columnDescription(column),
+    label: shown(column.name),
+    description: shown(columnDescription(column)),
     tooltip: viewColumnTooltip(schema, view, column),
     icon: 'symbol-field',
     contextValue: 'viewColumn',
@@ -267,7 +300,7 @@ export function columnNode(
 ): TreeNode {
   const member = parent.ref.kind === 'column' && ['list', 'map'].includes(parent.ref.column.type);
   const node: TreeNode = {
-    id: `${parent.id}/c${column.id}`,
+    id: columnNodeId(parent.id, column.id),
     ref: {
       kind: 'column',
       connectionId: parent.ref.connectionId,
@@ -277,14 +310,30 @@ export function columnNode(
       path,
       ...(member ? { member } : {}),
     },
-    label: column.name,
-    description: columnDescription(column),
+    label: shown(column.name),
+    description: shown(columnDescription(column)),
     tooltip: columnTooltip(schema, table, path, column),
     icon: 'symbol-field',
     contextValue: 'column',
     hasChildren: column.children.length > 0,
   };
   return member ? { ...node, contextValue: 'column.member' } : node;
+}
+
+/** The statements below the folder Query History, newest first; a click opens one as a new query. */
+export function queryNodes(parent: TreeNode, entries: readonly HistoryEntry[], now: number): TreeNode[] {
+  if (entries.length === 0) return [messageNode(parent, 'No queries yet.', 'info')];
+  return entries.map((entry) => ({
+    id: `${parent.id}/q${entry.seq}`,
+    ref: { kind: 'query', connectionId: parent.ref.connectionId, entry },
+    label: queryLabel(entry.sql),
+    description: queryDescription(entry, now),
+    tooltip: queryTooltip(entry),
+    icon: QUERY_ICONS[entry.status],
+    contextValue: 'query',
+    command: { id: 'aantje.openQueryHistoryEntry', title: 'Open as New Query' },
+    hasChildren: false,
+  }));
 }
 
 export function messageNode(parent: TreeNode, text: string, icon: 'info' | 'error'): TreeNode {

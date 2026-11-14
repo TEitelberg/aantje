@@ -10,9 +10,9 @@ Every read opens a fresh DuckDB instance. Nothing survives between two reads, an
 2. Create the in-memory instance with the options from `instance.ts`.
 3. Run `setupStatements(access)`:
    - `INSTALL` and `LOAD` of `ducklake` and of `postgres`, `sqlite` or `quack` (a DuckDB-file catalog needs none).
-   - `azure` and the secret `aantje_azure` (`PROVIDER access_token`), only for a profile with `azureAccount` ([Azure DuckLake](azure-lake.md)). On Linux `azure_transport_option_type` is `curl`. A session replaces the token every ten minutes.
+   - The extensions of the storage of the connection ([below](#storage-of-a-connection)): `httpfs` for S3 and R2, `aws` only for the AWS credential chain, `azure` for Azure and OneLake (on Linux `azure_transport_option_type` is `curl`). A local lake loads none of them. A Quack catalog always loads `httpfs`, because the quack extension sends its requests through it.
+   - The storage secret, one `CREATE OR REPLACE SECRET` per connection (`aantje_storage`; a connection without `storage` keeps the names `aantje_s3` and `aantje_azure`). An Entra token is fetched first, and a session replaces the secret every ten minutes ([Azure DuckLake](azure-lake.md)).
    - With `azureAuth: "entra"` the secret `aantje_pg` carries a token of the Microsoft account as `PASSWORD`, and a session replaces it every ten minutes too.
-   - `httpfs` and the secret `aantje_s3`, only when an S3 endpoint is set or S3 keys exist. A region or URL style alone does not count, so a local lake never loads `httpfs`. A Quack catalog always loads `httpfs`, because the quack extension sends its requests through it.
    - For PostgreSQL the secret `aantje_pg` with the password. The password is never in the `ATTACH` string. TLS on means `SSLMODE 'verify-full'` with the system roots, TLS off means `SSLMODE 'disable'`, so DuckDB never falls back to cleartext on its own.
    - For Quack the secret `aantje_quack` (`TYPE quack`, `SCOPE 'quack:<host>:<port>'`) with the token, and the target `ducklake:quack:<host>:<port>` with `META_DISABLE_SSL` from the TLS flag and, for a pinned certificate with TLS on, `META_SSL_FINGERPRINT`. A Quack attach never has `READ_ONLY`; a read uses `CREATE_IF_NOT_EXISTS false` instead, so that the attach cannot create a lake. No `ca_cert_file` is set, because it would replace the trust store for every HTTPS request of the engine ([Security](security.md#tls-for-quack)).
    - `ATTACH ... AS lake (READ_ONLY ...)`, with `SNAPSHOT_VERSION n` when a snapshot is pinned (`access.snapshot`; unset means the newest).
@@ -47,9 +47,45 @@ DuckLake stores only the SQL of a view. DuckDB can name its columns only by bind
 
 - `describeRelation` binds the relation (`LIMIT 0`, `DESCRIBE`) and reads no rows. Types are written like the grid header; `DESCRIBE` only supplies `nullable`. A view that cannot be bound fails with `QUERY_FAILED` and the first line of the engine message; the tree shows it below `Columns`.
 - `guardRelation` decides from the relation that the read binds at the snapshot, not from the tree node. A view without `viewsTrusted` fails with `VIEW_UNTRUSTED` before any SQL is bound. This also covers a name that is a table now and a view at an older snapshot. The command layer passes `ViewTrustStore.isTrusted(profile)` into the access, asks in a modal on `VIEW_UNTRUSTED` and retries once. The tree button "Trust and Resolve Views" does the same through `resolveViewColumns`. Completion in the SQL editor uses `resolveViewColumns` too, with a check instead of the question: it binds a view only of a trusted connection ([SQL IntelliSense](sql-intellisense.md#columns-of-views)). Tables are never subject to this.
-- `ViewTrustStore` keeps the trusted connections in the extension's `Memento`. The key is the profile id plus the connection target (PostgreSQL host, port, database, user, metadata schema, TLS flag; for SQLite and DuckDB the kind and path; for Quack the kind, host and port). Name, password or token, and for Quack the TLS flag and fingerprint are not part of it and nothing secret is stored. Editing the target asks again. `revoke(profile)` forgets one connection, `revokeAll()` all.
+- `ViewTrustStore` keeps the trusted connections in the extension's `Memento`. The key is the profile id plus the connection target (PostgreSQL host, port, database, user, metadata schema, TLS flag; for SQLite and DuckDB the kind and path; for Quack the kind, host, port, TLS flag and, with TLS on, the pinned fingerprint). Name, password or token are not part of it and nothing secret is stored. Editing the target asks again. `revoke(profile)` forgets one connection, `revokeAll()` all.
 
-## Settings and S3 credentials
+## Storage of a connection
+
+One connection is one lake, one storage and one sign-in. The profile field `storage` says where the data files are and how aantje signs in there. The same access serves every reader of the connection: the preview, Show Changes, the SQL editor, the health check, the advisor and the notebook check. A lake on another storage is another connection. Any catalog kind (DuckDB, SQLite, PostgreSQL) can use any storage. A Quack catalog has no `storage`, because the server reads the files.
+
+| Kind      | Where                                                                                 | Sign-in                                                                                                                                                                                            |
+| --------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `aws`     | Amazon S3; the endpoint follows from the region                                       | Access keys (key id, secret, optional session token), or the credential chain of DuckDB's `aws` extension (environment, configuration, profile, SSO, instance)                                     |
+| `s3`      | An S3-compatible store: MinIO, Wasabi (an `endpoint`), Cloudflare R2 (an `accountId`) | Access keys                                                                                                                                                                                        |
+| `azure`   | ADLS Gen2 or Blob storage of one storage account (`account`)                          | Microsoft Entra (the account of VS Code), connection string, account key, SAS token, service principal (secret or certificate), or the credential chain (Azure CLI, managed identity, environment) |
+| `onelake` | Microsoft Fabric OneLake (`abfss://<workspace>@onelake.dfs.fabric.microsoft.com/...`) | Microsoft Entra, service principal, or the credential chain                                                                                                                                        |
+
+```jsonc
+{
+  "name": "Lake on MinIO",
+  "kind": "duckdb",
+  "path": "/data/lake.duckdb",
+  "storage": {
+    "kind": "s3",
+    "endpoint": "http://minio:9000",
+    "region": "us-east-1",
+    "urlStyle": "path",
+    "signIn": "keys",
+  },
+}
+```
+
+- **S3-compatible stores** name exactly one of `endpoint` (`host:port` or `http(s)://host:port`, no path) and `accountId` (R2: the endpoint is built from it, with path style). `region` and `urlStyle` (`path` or `vhost`) are optional. TLS follows the scheme of the endpoint: `http://` turns it off, `https://` or no scheme leaves it on.
+- **Secrets are never in the settings.** Keys, session token, connection string, account key, SAS token and client secret are kept in the secret storage, one entry per connection (`aantje.connection.<id>.storage`), together with the service they were entered for (endpoint, account, tenant, sign-in). When one of those changes, the values count as not stored and are never sent elsewhere; aantje asks again. Every value is registered for log redaction. **Set Storage Sign-in...** on the connection replaces them ([Connections](connections.md#set-storage-sign-in)). A Microsoft Entra token is not stored: aantje asks VS Code for it when it is used.
+- **Account key and SAS token** have no secret parameter in DuckDB, so aantje puts them into a connection string. A value that contains `;` is refused, because it would add a part to the string.
+- **No scope.** In the engines of aantje the secret has no scope. An engine belongs to one connection, and what that connection's account may read at the service is the decision of the storage; aantje adds no permission check. Another bucket of the same S3 endpoint, or another container of the same account, reads like the first one, also with `read_parquet` in the SQL editor. The file guard still refuses files that a catalog names on other servers ([Security](security.md#reading-data-tables-and-views)).
+- **The AWS credential chain** is checked when the connection opens, so an expired SSO sign-in fails there with the message of the engine. `chain` (for example `sso;env`) and `awsProfile` narrow it; without them DuckDB's default order applies.
+- **OneLake.** Creating the secret and parsing the paths are verified; reading from a real workspace is tested by hand.
+- **Google Cloud Storage is not supported.** `gs://` stays a foreign server for the file guard.
+
+### Connections without `storage`
+
+A profile without `storage` works as before. It uses the machine settings and the global keys:
 
 | Setting                            | Meaning                                                                                               |
 | ---------------------------------- | ----------------------------------------------------------------------------------------------------- |
@@ -59,32 +95,33 @@ DuckLake stores only the SQL of a view. DuckDB can name its columns only by bind
 | `aantje.s3.urlStyle`               | `path` (MinIO, most self-hosted stores) or `vhost`                                                    |
 | `aantje.duckdb.extensionDirectory` | Directory for the DuckDB extensions, see below                                                        |
 
-The key id and secret are never settings. `S3CredentialStore` keeps them in the editor's secret storage; "aantje: Set S3 Credentials..." and "aantje: Clear S3 Credentials" write them. With nothing stored it falls back to `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` (a half pair counts as nothing). Every key it handles is registered for log redaction. Temporary credentials with a session token are not supported.
+The key id and secret are never settings. `S3CredentialStore` keeps them in the editor's secret storage; "aantje: Set S3 Credentials..." and "aantje: Clear S3 Credentials" write them. With nothing stored it falls back to `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` (a half pair counts as nothing). Every key it handles is registered for log redaction. These global keys have no session token; use a connection with `storage` of kind `aws` for temporary credentials.
 
-- The keys sign every request to `aantje.s3.endpoint`. With a plain `http://` endpoint on another machine, data and key id are readable on the way. The [health check](health-check.md#connection-and-configuration) warns; nothing is blocked.
+- The keys sign every request to `aantje.s3.endpoint`, the same for all connections without `storage` in the window. With a plain `http://` endpoint on another machine, data and key id are readable on the way. The [health check](health-check.md#connection-and-configuration) warns; nothing is blocked.
 - A lake on S3 with an empty endpoint sends every request to AWS. For MinIO or RustFS that gives `NoSuchBucket` or `403`. The health check reports it as `connection.endpoint-not-set`. The data features read only the settings and the secret storage, never `AWS_ENDPOINT_URL*`.
 - A lake with an `s3://` data path and nothing configured (public bucket, default credential chain) relies on the `ATTACH`, which loads `httpfs` itself with DuckDB's own defaults (region `us-east-1`). That download counts against the attach limit.
+- The legacy `azureAccount` (with `azureTenant`) still works and means `azure` with Microsoft Entra. aantje does not rewrite such a profile; a new Azure lake writes `storage` ([Azure DuckLake](azure-lake.md)). `azureAuth` and `azureTenant` describe the sign-in to PostgreSQL and stay.
 
 ## Extension directory and offline use
 
-DuckDB downloads `ducklake`, `postgres`, `sqlite` or `quack`, and `httpfs` from `extensions.duckdb.org` on first use (about 40 MB). Without internet access, install them elsewhere, copy them and point `aantje.duckdb.extensionDirectory` to the copy. The layout is `v<version>/<platform>/<name>.duckdb_extension`; version and platform must match the DuckDB of `@duckdb/node-api`. A local lake needs only `ducklake` and the metadata extension; a Quack catalog needs `quack` and `httpfs`; an Azure lake needs `azure` as well.
+DuckDB downloads `ducklake`, `postgres`, `sqlite` or `quack`, and the extensions of the storage (`httpfs`, `aws`, `azure`) from `extensions.duckdb.org` on first use (about 40 MB). Without internet access, install them elsewhere, copy them and point `aantje.duckdb.extensionDirectory` to the copy. The layout is `v<version>/<platform>/<name>.duckdb_extension`; version and platform must match the DuckDB of `@duckdb/node-api`. A local lake needs only `ducklake` and the metadata extension; a Quack catalog needs `quack` and `httpfs`. The storage adds to that: S3 and R2 need `httpfs`, the AWS credential chain `aws` as well, Azure and OneLake `azure`. An offline directory for all three kinds holds `httpfs`, `aws` and `azure`.
 
 ## Errors
 
-| Code                | When                                                                                                                                                                                                                      |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CONNECTION_FAILED` | Engine or an extension cannot load, or the lake cannot be attached (server unreachable, TLS check failed, file missing, unknown snapshot, catalog of another DuckLake version; aantje opens read-only and cannot migrate) |
-| `AUTH_FAILED`       | PostgreSQL rejects the login, or a Quack server the token (or none is stored)                                                                                                                                             |
-| `QUERY_FAILED`      | The query fails, a view cannot be bound, the guard refuses a file location or a view. File and network failures name the `aantje.s3.*` settings.                                                                          |
-| `VIEW_UNTRUSTED`    | A view is read on a connection that is not trusted                                                                                                                                                                        |
-| `TIMEOUT`           | `aantje.queryTimeoutSeconds` or the 5 minutes for the extensions exceeded                                                                                                                                                 |
-| `ABORTED`           | The signal fired                                                                                                                                                                                                          |
+| Code                | When                                                                                                                                                                                                                        |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CONNECTION_FAILED` | Engine or an extension cannot load, or the lake cannot be attached (server unreachable, TLS check failed, file missing, unknown snapshot, catalog of another DuckLake version; aantje opens read-only and cannot migrate)   |
+| `AUTH_FAILED`       | PostgreSQL rejects the login, or a Quack server the token (or none is stored)                                                                                                                                               |
+| `QUERY_FAILED`      | The query fails, a view cannot be bound, the guard refuses a file location or a view. File and network failures name the storage sign-in of the connection (the `aantje.s3.*` settings for a connection without `storage`). |
+| `VIEW_UNTRUSTED`    | A view is read on a connection that is not trusted                                                                                                                                                                          |
+| `TIMEOUT`           | `aantje.queryTimeoutSeconds` or the 5 minutes for the extensions exceeded                                                                                                                                                   |
+| `ABORTED`           | The signal fired                                                                                                                                                                                                            |
 
-Only the first line of the engine message is used. Every message and `cause` goes through `maskSecrets` (`src/secrets.ts`): PostgreSQL password, Quack token and S3 keys become `***`, also inside SQL string literals and across line breaks. On a Quack catalog the messages of the quack extension are explained by the table of `quackProblem`; a refusal by the server's authorization function while attaching counts as `CONNECTION_FAILED`.
+Only the first line of the engine message is used. Every message and `cause` goes through `scrubbed` (`src/duckdb/messages.ts`), which masks with `maskSecrets` (`src/secrets.ts`): PostgreSQL password, Quack token and S3 keys become `***`, also inside SQL string literals and across line breaks. On a Quack catalog the messages of the quack extension are explained by the table of `quackProblem` (`src/duckdb/quack.ts`); a refusal by the server's authorization function while attaching counts as `CONNECTION_FAILED`.
 
 A failed read carries `AantjeError.table` and `connectionId`. For a missing file (HTTP 404, or a local file that is gone), a 403 or a broken connection, the message gets a button, **Check Table Health** or **Check Health**, that starts the quick [health check](health-check.md#the-button-in-error-messages).
 
-A data file that the catalog lists but the store or disk does not have is explained, not repeated. The message names the file, says that the catalog lists it (only when it lies below the catalog's `data_path`), and names the likely causes: file removed or moved, `data_path` or endpoint pointing to another store, only the catalog copied here. A pinned read also says whether a newer snapshot exists. A 403 keeps its text with advice about the S3 settings.
+A data file that the catalog lists but the store or disk does not have is explained, not repeated. The message names the file, says that the catalog lists it (only when it lies below the catalog's `data_path`), and names the likely causes: file removed or moved, `data_path` or endpoint pointing to another store, only the catalog copied here. A pinned read also says whether a newer snapshot exists. A 403 keeps its text with advice about the storage sign-in of the connection.
 
 ## Missing data files
 
@@ -101,12 +138,12 @@ The tree also lists tables whose files are gone. To find out why, read `ducklake
 
 The full model is in [Security](security.md). In short:
 
-- Tables never execute catalog SQL. Reading a table reads only the Parquet files the catalog names, and only on the S3 endpoint, on this machine or below the data path.
+- Tables never execute catalog SQL. Reading a table reads only the Parquet files the catalog names, and only at the storage service of the connection, on this machine or below the data path.
 - Views execute catalog SQL, so only after trust. A trusted view must not call DuckLake maintenance functions (the names come from the engine's `duckdb_functions()`), `checkpoint`, functions that run assembled SQL or `quack_*` functions (`quack_query` runs any SQL on a Quack server with your token). Its definition is parsed with `json_serialize_sql` and nothing of it runs. A view that reaches another catalog (`memory`, `temp`, the metadata database) is refused. Names that differ only in ASCII case are refused as ambiguous.
 - Read-only: `READ_ONLY` attach, locked configuration, SQL built from quoted names. No user-typed SQL runs here. On a Quack catalog the attach is not read-only: DuckDB 2.0.0 accepts `READ_ONLY` on a Quack attach without enforcing it, and newer quack builds refuse it (`READ_ONLY is not currently supported for Quack databases`), so aantje attaches a Quack catalog without it. Only the server can refuse a write. DuckLake's maintenance functions can still delete files, which is why the guard refuses views that call them.
 - Secrets exist only in `CREATE SECRET` statements in the memory of the private instance. They are not in the `ATTACH` string, in messages, in the webview data or in the notebook.
 - PostgreSQL TLS uses `verify-full`; there is no switch to accept an untrusted certificate. The engine ignores `NODE_EXTRA_CA_CERTS`. For a private CA, or a CA only in the Windows trust store, set `SSL_CERT_FILE` or `SSL_CERT_DIR` in the extension host environment. Quack TLS checks the system trust store or a pinned fingerprint ([Security](security.md#tls-for-quack)).
-- A catalog names its data files. A file on another server (`http(s)://`, `hf://`, `gs://`, `\\host\share`, a `file://` URL with a real host) that is not the origin of the data path is refused before any request (`assertFilesStayHome`). Show Changes checks the files of the whole range. A trusted view is refused when a lake table it reads has such a file. A catalog from an untrusted source can still make a read open any Parquet file on this machine or in a bucket the keys reach, and the catalog's own `data_path` is followed. Use catalogs you trust.
+- A catalog names its data files. A file on another server (`http(s)://`, `hf://`, `gs://`, `\\host\share`, a `file://` URL with a real host) that is not the origin of the data path or the storage service of the connection is refused before any request (`assertFilesStayHome`). Show Changes checks the files of the whole range. A trusted view is refused when a lake table it reads has such a file. A catalog from an untrusted source can still make a read open any Parquet file on this machine or in a bucket the sign-in reaches, and the catalog's own `data_path` is followed. Use catalogs you trust.
 
 ## Limits
 

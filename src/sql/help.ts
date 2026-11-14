@@ -1,16 +1,17 @@
+import { DEFAULT_SCHEMA } from './catalog';
+import { sameIdentifier } from '../catalog/ddl';
 import type { MacroInfo, SchemaInfo, TableInfo } from '../catalog/model';
 import type { TableLayout } from './catalog';
-import { callAt, contextAt, DEFAULT_SCHEMA } from './context';
+import { callAt, contextAt } from './context';
 import { isWord } from './tokens';
 import type { SqlToken } from './tokens';
-import { columnInScope, namedBy, same } from './lookup';
+import { columnInScope, namedBy } from './lookup';
 import type { Lookup, Named, ScopeColumn } from './lookup';
 import type { Range } from './script';
+import { inlineCode, markdownText } from '../markdown';
 import {
   columnTooltip,
-  inlineCode,
   macroTooltip,
-  markdownText,
   schemaTooltip,
   tableTooltip,
   viewColumnTooltip,
@@ -62,7 +63,9 @@ type Callee =
 async function macroIn(schemaName: string, name: string, lookup: Lookup): Promise<Callee | undefined> {
   const schema = lookup.schema(schemaName);
   if (!schema) return undefined;
-  const macro = (await lookup.catalog.macros(schema.name)).find((candidate) => same(candidate.name, name));
+  const macro = (await lookup.catalog.macros(schema.name)).find((candidate) =>
+    sameIdentifier(candidate.name, name),
+  );
   return macro && { kind: 'macro', schema, macro };
 }
 
@@ -76,7 +79,7 @@ async function calleeOf(
   if (head === undefined) {
     return (await macroIn(DEFAULT_SCHEMA, name, lookup)) ?? functionNamed(vocabulary.functions, name);
   }
-  if (same(head, lookup.lake)) {
+  if (sameIdentifier(head, lookup.lake)) {
     if (second === undefined) return functionNamed(vocabulary.lakeFunctions, name);
     return qualifier.length === 2 ? macroIn(second, name, lookup) : undefined;
   }
@@ -125,7 +128,7 @@ export async function signatureAt(
   const byName = (overload: Overload): number =>
     call.argumentName === undefined
       ? -1
-      : overload.parameters.findIndex(({ name }) => same(name, call.argumentName ?? ''));
+      : overload.parameters.findIndex(({ name }) => sameIdentifier(name, call.argumentName ?? ''));
   // A named parameter is never passed by position.
   const positional = (overload: Overload): number => overload.parameters.filter(({ named }) => !named).length;
   const fits = (overload: Overload): boolean =>
@@ -175,7 +178,7 @@ export async function hoverAt(
   const relationLike = ['relation', 'from', 'new-relation', 'column-path'].includes(context.position);
   const path = [...context.qualifier, name];
   // A lambda parameter hides the column or relation of the same name.
-  if (context.locals.some((local) => same(local, path[0] ?? ''))) return undefined;
+  if (context.locals.some((local) => sameIdentifier(local, path[0] ?? ''))) return undefined;
   const named = await namedBy(
     path,
     context.scope,

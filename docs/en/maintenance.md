@@ -1,6 +1,6 @@
 # Maintenance scripts
 
-DuckLake has no `VACUUM` or `OPTIMIZE` for a lake. Functions called with `CALL`, and `CHECKPOINT`, do that work. The **Maintenance** submenu opens a SQL document with the call, written for the node you clicked, and the user runs it (F5). Opening a document never runs it. The module is `src/maintenance.ts` (`maintenanceOf`): pure functions, no I/O, no `vscode` import, like the [Script as](ddl.md#the-script-as-submenu) texts.
+DuckLake has no `VACUUM` or `OPTIMIZE` for a lake. Functions called with `CALL`, and `CHECKPOINT`, do that work. The **Maintenance** submenu opens a SQL document with the call, written for the node you clicked, and the user runs it (F5). Opening a document never runs it. The module is `src/maintenance/scripts.ts` (`maintenanceOf`): pure functions, no I/O, no `vscode` import, like the [Script as](ddl.md#the-script-as-submenu) texts.
 
 ## What replaces VACUUM and OPTIMIZE
 
@@ -38,16 +38,35 @@ The submenu is in the context menu of an open connection, a schema and a table (
 - **Table names are string literals**, never identifiers: schema and table go into `'...'` with single quotes doubled, always together (a bare table name is looked up in `main`). Names never appear in a comment, so quotes, line breaks, `--` and `;` stay inside the literal.
 - **When the tree shows an older snapshot**, a table script notes that it acts on the newest state.
 - Merge, rewrite and flush change files, not table content. DuckLake keeps the old files until a cleanup removes them.
-- Merge and rewrite take the table as the second positional argument and the schema as the named parameter `schema`; `table_name` is not valid there. Flush names both (`schema_name => 's', table_name => 't'`). A file with a delete file is not merged with others; **Rewrite Data Files** removes delete files when the deleted share reaches `rewrite_delete_threshold`.
+- Merge and rewrite take the table as the second positional argument and the schema as the named parameter `schema`; `table_name` is not valid there. Flush names both (`schema_name => 's', table_name => 't'`). A file with a delete file is not merged with others; **Rewrite Data Files** removes delete files when the deleted share reaches `rewrite_delete_threshold`. So the Merge script rewrites small files with deleted rows first, see [below](#merge-adjacent-files-small-files-with-deleted-rows).
+
+## Merge Adjacent Files: small files with deleted rows
+
+`ducklake_merge_adjacent_files` skips every data file that has a delete file. `ducklake_rewrite_data_files` rewrites a file only from `delete_threshold` of its rows deleted (the lake option `rewrite_delete_threshold`, else 0.95). A table that loses a few rows after each insert keeps all its small files: neither call touches them. Checked with DuckDB 2.0.0 on a test lake with 6 small files, each with a delete file: the merge left 6 files, the rewrite with the default threshold 6, and the rewrite with `delete_threshold => 0` wrote 1 file without deletes.
+
+So the Merge script of a table, a schema and the lake reads, at the newest state, which of its tables have small files (below 16 MiB) with a delete file. Before the merge of each such table it puts:
+
+```sql
+-- 29 of the small files of this table have deleted rows, and the merge leaves such files alone.
+-- This rewrite drops the deleted rows and writes the files anew: it rewrites every file of the table with a deleted row (29 files, 623 KB).
+CALL ducklake_rewrite_data_files('lake', 'fact_payment', schema => 'gold', delete_threshold => 0);
+```
+
+- `delete_threshold => 0` rewrites every file of the table that has a deleted row, large ones too. The comment says how many files that is and how large they are, so a table of large files is not rewritten blindly. A lower threshold for all tables would be wrong: a table of large files would rewrite a file for a single deleted row.
+- Tables without small files with deleted rows keep the plain merge. In the script of the lake the rewrites come before the one merge call, by schema and table name.
+- One statement reads it for the whole script (`deletedSmallFiles` of the catalog reader), the same on SQLite, DuckDB, PostgreSQL and Quack catalogs. It counts a delete file only through a data file that is valid at the newest state. A size below 1 byte adds nothing to the size in the comment.
+- The read takes at most 1000 tables, by table id. When more tables have such files, the script of the lake lists 1000 rewrites, and the script of a schema can miss the rewrite of a table it lists. Both scripts then say so: run the script, then make it again for the others.
+- When the read fails or the explorer is not connected (for example while a read/write session holds a DuckDB file), the script says that it could not tell which files have deleted rows, and the merge stays plain.
+- `maintenanceScript` reads it; `maintenanceOf` takes it as the argument `deleted`, so the texts stay testable without a catalog. A report that counted the files already passes its counts to `maintenanceScript`, which then reads nothing. `src/maintenance/deletes.ts` writes the lines. `test/unit/maintenance-lake.test.ts` and `test/unit/maintenance-schema-lake.test.ts` run the scripts on real lakes: the table ends with one file and no delete file.
 
 ## Scripts for a schema
 
-On a schema node, **Merge Adjacent Files**, **Rewrite Data Files**, **Flush Inlined Data** and **Set Option** write one script for all tables of the schema (`schemaScript` in `src/maintenance.ts`). Checkpoint and the three destructive scripts act on the whole lake and are not offered there.
+On a schema node, **Merge Adjacent Files**, **Rewrite Data Files**, **Flush Inlined Data** and **Set Option** write one script for all tables of the schema (`schemaScript` in `src/maintenance/scripts.ts`). Checkpoint and the three destructive scripts act on the whole lake and are not offered there.
 
 - **Merge and rewrite: one call per table.** Checked with DuckDB 2.0.0 and DuckLake 1.1 (`duckdb_functions()` and a real lake): the `schema` parameter exists only in the overload that has `table_name`, so `ducklake_merge_adjacent_files('lake', schema => 's')` and `ducklake_rewrite_data_files('lake', schema => 's')` fail with `Invalid named parameter "schema"`, and `schema_name` is no parameter of either. The script lists `CALL ducklake_merge_adjacent_files('lake', 'events', schema => 's');` for each table the schema has at the newest snapshot, in the order of the tree. A schema with more than 1000 tables lists the first 1000 and says how many are left out; a schema without tables says so.
 - **Flush: one call.** `ducklake_flush_inlined_data('lake', schema_name => 's')` flushes every table of the schema and no other.
 - **Set Option** lists the options that DuckLake accepts for a schema, each as `set_option('name', value, schema => 's')` in a comment: all but `expire_older_than`, `delete_older_than` and `require_commit_message` (global only) and `skip_stats_columns` (table only). An option of the schema overrides the lake's for its tables, and one of a table overrides both. Each call runs on a real lake in `test/unit/maintenance-schema-lake.test.ts`, which also shows that the other schema keeps its files, delete files, inlined rows and options.
-- **The table list is read when the script opens** (`maintenanceScript` reads `tables` of the catalog at the newest snapshot; a tree that shows an older snapshot says in the script that it acts on the newest state). `maintenanceOf` alone takes the names as an argument, so the texts stay testable without a catalog. Names appear only in string literals.
+- **The table list is read when the script opens** (`maintenanceScript` reads `tables` of the catalog at the newest snapshot; a tree that shows an older snapshot says in the script that it acts on the newest state). The merge also reads the tables with small files with deleted rows and rewrites them first, [as above](#merge-adjacent-files-small-files-with-deleted-rows). `maintenanceOf` alone takes the names as an argument, so the texts stay testable without a catalog. Names appear only in string literals.
 
 ## Destructive scripts: the dry run is the active one
 
@@ -59,7 +78,7 @@ On a schema node, **Merge Adjacent Files**, **Rewrite Data Files**, **Flush Inli
 
 The age of the dry run follows the lake, see [Expire Snapshots and Delete Orphaned Files](#expire-snapshots-and-delete-orphaned-files-which-age-the-script-uses) below. **Checkpoint** has no dry run and is just as destructive: it follows the lake's options, so with `expire_older_than` set it expires snapshots, and it deletes files nothing needs and orphaned files. Its script says so and points to the three dry runs. It also says what it does with `expire_older_than`, `delete_older_than`, `rewrite_delete_threshold`, `target_file_size` and `auto_compact`, and that the DuckDB setting `ducklake_target_file_size`, when it is set, overrides `target_file_size` for `CHECKPOINT`.
 
-**The header lists the current option values.** The scripts of Expire Snapshots, Clean Up Old Files, Delete Orphaned Files and Checkpoint start with the global values of those five options as the lake has them when the script is made (`not set` for an option without a value; they show as the lake stores them, for example `512000000` for a size). The commands read them once from the catalog (`maintenanceScript`, which wraps `maintenanceOf` and passes `src/maintenance-header.ts` the rows of `ducklake_metadata`); `maintenanceOf` alone writes no values, so scripts stay testable without `vscode`. When the catalog cannot be read (a closed connection), the header says that the values are not available. A value that is not plain words and numbers is shown as `set (not shown)`, because the value comes from the catalog and a comment never holds catalog text.
+**The header lists the current option values.** The scripts of Expire Snapshots, Clean Up Old Files, Delete Orphaned Files and Checkpoint start with the global values of those five options as the lake has them when the script is made (`not set` for an option without a value; they show as the lake stores them, for example `512000000` for a size). The commands read them once from the catalog (`maintenanceScript`, which wraps `maintenanceOf` and passes `src/maintenance/header.ts` the rows of `ducklake_metadata`); `maintenanceOf` alone writes no values, so scripts stay testable without `vscode`. When the catalog cannot be read (a closed connection), the header says that the values are not available. A value that is not plain words and numbers is shown as `set (not shown)`, because the value comes from the catalog and a comment never holds catalog text.
 
 ## Clean Up Old Files: what the script deletes
 
@@ -105,7 +124,7 @@ The pages show what such a script takes: the [Storage report](storage-report.md#
 
 **Set Option** writes a template in which every statement is a comment, so running it changes nothing. The user removes the `-- ` before the options they want and edits the values. `SELECT * FROM ducklake_options('lake')` shows the current values. The scripts call the functions with the lake's name as their first argument: `lake.set_option()` and `lake.options()` are looked up in the schema `main`, which a lake can lack.
 
-The template lists every option that DuckLake documents as settable, one comment with the default above each statement (`src/maintenance-options.ts`). The read-only ones (`created_by`, `data_path`, `encrypted`, `version`) are not offered.
+The template lists every option that DuckLake documents as settable, one comment with the default above each statement (`src/maintenance/options.ts`). The read-only ones (`created_by`, `data_path`, `encrypted`, `version`) are not offered.
 
 - **The lake only:** `expire_older_than` (example `30 days`), `delete_older_than` (`7 days`), `require_commit_message` (`true`).
 - **A table only:** `skip_stats_columns`.
@@ -117,7 +136,7 @@ The table template has every option that can be set for a table (all but the thr
 
 ## Other places that open these scripts
 
-The [Storage report](storage-report.md) opens **Merge Adjacent Files** and **Rewrite Data Files** for the selected table and **Clean Up Old Files** and **Expire Snapshots** from its header. The [Maintenance Advisor](advisor.md) and the [Health check](health-check.md) open the script that fits a recommendation or finding; the Health check can also write [one script for all findings](health-check.md#the-maintenance-script-for-all-findings), and the Advisor [one for all recommendations](advisor.md#the-maintenance-script-for-all-recommendations). All are built by `maintenanceOf`, start destructive ones with a dry run and run nothing when the document opens. The Advisor also runs the dry runs itself in a read-only session.
+The [Storage report](storage-report.md) opens **Merge Adjacent Files** and **Rewrite Data Files** for the selected table and **Clean Up Old Files** and **Expire Snapshots** from its header. The [Maintenance Advisor](advisor.md) and the [Health check](health-check.md) open the script that fits a recommendation or finding; the Health check can also write [one script for all findings](health-check.md#the-maintenance-script-for-all-findings), and the Advisor [one for all recommendations](advisor.md#the-maintenance-script-for-all-recommendations). All are built by `maintenanceOf`, start destructive ones with a dry run and run nothing when the document opens. The Advisor also runs the dry runs itself in a read-only session. The merge of a table that the Advisor opens, the one in its script for all recommendations and the one in the script of a Health finding about small files rewrite the small files with deleted rows first too, from the counts those reports read. When the Health check could not read those counts, the script of its finding says so.
 
 ## Limits
 

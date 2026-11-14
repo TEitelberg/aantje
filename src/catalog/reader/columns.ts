@@ -1,6 +1,7 @@
+import { groupBy } from '../../order';
 import { quoteLiteral } from '../ddl';
 import type { Row } from '../drivers/driver';
-import type { ColumnInfo } from '../model';
+import type { CatalogColumnEntry, ColumnInfo } from '../model';
 import * as queries from '../queries/objects';
 import { toBoolean, toNumber, toText, toTextOrNull } from './rows';
 import type { Run } from './rows';
@@ -20,22 +21,41 @@ export async function readColumns(
   return columnTree(await run(queries.columns(tableId, snapshot), signal));
 }
 
+/** The columns and nested fields of every table at the snapshot by table id, read in one statement. */
+export async function readColumnEntries(
+  run: Run,
+  snapshot: number,
+): Promise<Map<number, CatalogColumnEntry[]>> {
+  const tables = groupBy(await run(queries.columnEntries(snapshot)), (row) => toNumber(row.table_id));
+  return new Map(
+    [...tables].map(([tableId, rows]) => {
+      const childrenOf = groupBy(rows, parentOf);
+      const below = (parent: number | null, ids: number[], path: string[]): CatalogColumnEntry[] =>
+        (childrenOf.get(parent) ?? []).flatMap((row) => {
+          const id = toNumber(row.column_id);
+          // A broken catalog may repeat a column below itself; it is listed once.
+          if (ids.includes(id)) return [];
+          const entry = {
+            ids: [...ids, id],
+            path: [...path, toText(row.column_name)],
+            type: toText(row.column_type),
+          };
+          return [entry, ...below(id, entry.ids, entry.path)];
+        });
+      return [tableId, below(null, [], [])];
+    }),
+  );
+}
+
 /** Builds the column tree from flat `ducklake_column` rows; children point to their parent via `parent_column`. */
 export function columnTree(rows: readonly Row[]): ColumnInfo[] {
-  const childrenOf = new Map<number | null, Row[]>();
-  for (const row of rows) {
-    const parent = row.parent_column === null ? null : toNumber(row.parent_column);
-    const siblings = childrenOf.get(parent);
-    if (siblings) {
-      siblings.push(row);
-    } else {
-      childrenOf.set(parent, [row]);
-    }
-  }
+  const childrenOf = groupBy(rows, parentOf);
 
-  const build = (parent: number | null): ColumnInfo[] =>
-    (childrenOf.get(parent) ?? []).map((row) => {
+  const build = (parent: number | null, above: readonly number[]): ColumnInfo[] =>
+    (childrenOf.get(parent) ?? []).flatMap((row) => {
       const id = toNumber(row.column_id);
+      // A broken catalog may repeat a column below itself; the tree shows it once.
+      if (above.includes(id)) return [];
       const type = toText(row.column_type);
       return {
         id,
@@ -48,11 +68,14 @@ export function columnTree(rows: readonly Row[]): ColumnInfo[] {
           type,
         ),
         comment: toTextOrNull(row.comment_text),
-        children: build(id),
+        children: build(id, [...above, id]),
       };
     });
-  return build(null);
+  return build(null, []);
 }
+
+const parentOf = (row: Row): number | null =>
+  row.parent_column === null ? null : toNumber(row.parent_column);
 
 // DuckLake stores "no default" as the literal `NULL` (nested parents have an empty type), a string literal without
 // quotes (`abc`) and an expression as SQL text. A string that spells `NULL` is stored as the expression `'NULL'`.

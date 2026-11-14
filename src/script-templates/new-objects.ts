@@ -1,8 +1,9 @@
 import { qualifiedName } from '../catalog/ddl';
 import type { SchemaInfo } from '../catalog/model';
-import { commented } from '../script';
-import { byName } from '../tree/model';
-import { blocks, dropColumnStatement, dropStatement } from './common';
+import { commented } from '../ddl-script/check';
+import { dropColumnStatement, dropStatement } from '../ddl-script/statements';
+import { byName } from '../order';
+import { blocks } from './common';
 
 export function schemaBlock(): string[] {
   const name = qualifiedName('new_schema');

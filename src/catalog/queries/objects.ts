@@ -91,6 +91,20 @@ ORDER BY c.column_order`,
   };
 }
 
+/** Name, type and place of every column of every table at the snapshot, grouped by table, in column order. */
+export function columnEntries(snapshot: number): Query {
+  return {
+    sql: `${WITH_SNAPSHOT}
+SELECT c.table_id, c.column_id, c.parent_column, c.column_name, c.column_type
+FROM snap
+CROSS JOIN ducklake_column c
+JOIN ducklake_table t ON t.table_id = c.table_id AND ${visible('t')}
+WHERE ${visible('c')}
+ORDER BY c.table_id, c.column_order`,
+    params: [snapshot],
+  };
+}
+
 export function entries(snapshot: number): Query {
   return {
     sql: `${WITH_SNAPSHOT}
@@ -205,8 +219,7 @@ WHERE g.table_id = ? AND g.key <> 'comment' AND ${visible('g')}`,
   };
 }
 
-/** One row per parameter of each macro implementation (one row if it has none). */
-/** The macros of a schema, or of every schema for `null`, one row per parameter. */
+/** The macros of a schema, or of every schema for `null`: one row per parameter of each implementation, one for none. */
 export function macros(schemaId: number | null, snapshot: number): Query {
   return {
     sql: `${WITH_SNAPSHOT}

@@ -13,6 +13,15 @@ export const groupedPlural = (value: number, one: string, many = `${one}s`): str
 
 export const files = (value: number): string => groupedPlural(value, 'file');
 
+/** `~1,234` when the count is not exact, else `1,234`. */
+export const approximateCount = (value: number, approximate = false): string =>
+  `${approximate ? '~' : ''}${count(value)}`;
+
+/** `12.5 %`, `100 %`, `0 %`; the share has one decimal at most. */
+export function percent(ratio: number): string {
+  return `${Number((ratio * 100).toFixed(1))} %`;
+}
+
 /**
  * How long something has waited, in the largest whole unit: `12 minutes`, `30 hours`, `3 days`; hours up to two days,
  * so that a wait just over one day does not read as one day. Under a minute it says so.
@@ -29,3 +38,24 @@ export function waitText(ms: number): string {
 /** How long something took: `12 ms` below a second, `3.4 s` above. The grid, the results and the health report. */
 export const formatDuration = (ms: number): string =>
   Math.round(ms) < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`;
+
+/** A time in seconds with more detail, for the plans and profiles of the SQL editor: `12 µs`, `3.45 ms`, `1.23 s`. */
+export function secondsText(seconds: number): string {
+  if (seconds < 0.001) return `${Math.round(seconds * 1_000_000)} µs`;
+  if (seconds < 1) return `${(seconds * 1000).toFixed(2)} ms`;
+  return `${seconds.toFixed(2)} s`;
+}
+
+/** Binary units (1 KB = 1024 B), one decimal at most. */
+export function formatBytes(bytes: number): string {
+  let value = bytes;
+  for (const unit of ['B', 'KB', 'MB', 'GB']) {
+    // Compare the rounded value: 1023.96 KB must become 1 MB, not "1024 KB".
+    const rounded = Number(value.toFixed(1));
+    if (rounded < 1024) {
+      return `${rounded} ${unit}`;
+    }
+    value /= 1024;
+  }
+  return `${Number(value.toFixed(1))} TB`;
+}

@@ -11,6 +11,7 @@ import type {
   ViewInfo,
 } from '../catalog/model';
 import type { RelationColumn, TableRef } from '../data/types';
+import type { HistoryEntry } from '../sql/history';
 
 /** Payload of a node: everything the commands need to act on it. */
 export type NodeRef =
@@ -56,6 +57,8 @@ export type NodeRef =
   | { readonly kind: 'snapshot'; readonly connectionId: string; readonly snapshot: SnapshotInfo }
   /** A leaf that shows a fact; only a table change (`change`) has a command. */
   | { readonly kind: 'detail'; readonly connectionId: string; readonly change?: ChangedTable }
+  /** A statement of the Query History. */
+  | { readonly kind: 'query'; readonly connectionId: string; readonly entry: HistoryEntry }
   | { readonly kind: 'message'; readonly connectionId: string; readonly text: string };
 
 /** A table a snapshot changed, as it is at that snapshot. */
@@ -64,7 +67,10 @@ export interface ChangedTable {
   readonly table: TableRef;
 }
 
-/** What a folder groups; it carries what was read to show it, so only `snapshots` needs a query on expansion. */
+/**
+ * What a folder groups; it carries what was read to show it, so only `snapshots` needs a query on expansion.
+ * `queryHistory` reads aantje's own record of the statements it ran, not the catalog.
+ */
 export type FolderRef =
   | { readonly folder: 'tables'; readonly schema: SchemaInfo; readonly tables: readonly TableInfo[] }
   | { readonly folder: 'views'; readonly schema: SchemaInfo; readonly views: readonly ViewInfo[] }
@@ -96,7 +102,8 @@ export type FolderRef =
       readonly table: TableInfo;
       readonly tags: TagsInfo;
     }
-  | { readonly folder: 'snapshots'; readonly total?: number };
+  | { readonly folder: 'snapshots'; readonly total?: number }
+  | { readonly folder: 'queryHistory' };
 
 /** A node of the explorer; connection nodes update in place because VS Code matches change events by identity. */
 export interface TreeNode {

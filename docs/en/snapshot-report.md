@@ -52,14 +52,14 @@ A note says when the data is cut: `The 500 newest snapshots are shown. Older one
 
 The buttons of the detail pane send an action to the extension, which carries it out with the implementations of the commands of the same name ([Time travel](time-travel.md)) and an explicit target instead of a tree node.
 
-| Button                                  | What happens                                                                                | Offered when                                                               |
-| --------------------------------------- | ------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| Show catalog at @N                      | The tree shows the catalog at snapshot N                                                    | always                                                                     |
-| Show latest snapshot (toolbar)          | The tree follows the latest snapshot again                                                  | always                                                                     |
-| Rows changed                            | The grid of the changes between N-1 and N, as **Show Rows Changed**                         | the snapshot inserted or deleted rows of the table, did not drop it, N > 0 |
-| Query...                                | Top 1000 Rows, Create Notebook or Open as SQL for the table at N, under its name then       | the table exists at N                                                      |
-| Schema vs previous / latest / @M        | Diff editor over the `CREATE TABLE` at two snapshots and the summary, as **Compare Schema** | the table exists at N and at the other snapshot                            |
-| Compare the catalog with previous / ... | The Markdown report of **Compare Snapshots**                                                | the other snapshot exists                                                  |
+| Button                                  | What happens                                                                                                | Offered when                                                               |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Show catalog at @N                      | The tree shows the catalog at snapshot N                                                                    | always                                                                     |
+| Show latest snapshot (toolbar)          | The tree follows the latest snapshot again                                                                  | always                                                                     |
+| Rows changed                            | The grid of the changes between N-1 and N, as **Show Rows Changed**                                         | the snapshot inserted or deleted rows of the table, did not drop it, N > 0 |
+| Query...                                | Top 1000 Rows, Create Notebook or Open as SQL for the table at N, under its name then                       | the table exists at N                                                      |
+| Schema vs previous / latest / @M        | Diff editor over the `CREATE TABLE` at two snapshots and the summary, as **Compare Table at Two Snapshots** | the table exists at N and at the other snapshot                            |
+| Compare the catalog with previous / ... | The Markdown report of **Compare Snapshots**                                                                | the other snapshot exists                                                  |
 
 The other snapshot is `previous` (the next older snapshot that exists, not always N-1; not for the oldest), the latest one (not for itself) or the second snapshot picked with Ctrl-click. The page offers a schema comparison only where the snapshots it read show that the table exists at both. For what they cannot show (a table created before the oldest snapshot read and gone at the other one), the command says that the table does not exist at that snapshot and opens nothing.
 
@@ -80,7 +80,7 @@ Colours come from `--vscode-charts-*` through `readPalette` and `chartTheme` of 
 The page uses the policy of the grid and the statistics report (`default-src 'none'`, nonces for style and script, `base-uri 'none'`, `form-action 'none'`), `localResourceRoots` is `dist`, and data arrives by `postMessage` after the page says `ready`.
 
 - Catalog text is put into the page with `textContent`. Tooltips are HTML without `style` attributes and their text goes through `escapeHtml`.
-- The page asks for an action by id and numbers only: `ready`, `refresh` or one of the six action ids with exactly the fields it needs (`isSnapshotReportAction`). No command id or free text can be part of it; an extra field is rejected. The extension checks the numbers against the data it sent (`planSnapshotReportAction`): the snapshot, the table and the second snapshot must have been sent, and the detail pane must offer the action. A mismatch is ignored and logged as a warning.
+- The page asks for an action by id and numbers only: `ready`, `refresh` or one of the six action ids with exactly the fields it needs (`isSnapshotReportAction`). No command id or free text can be part of it; an extra field is rejected. The extension checks the numbers against the data it sent (`planSnapshotAction` in `src/snapshot-changes/actions.ts`, which Activity and Growth share): the snapshot, the table and the second snapshot must have been sent, and the detail pane must offer the action. A mismatch is ignored and logged as a warning.
 - The page checks what it receives (`isSnapshotReportMessage`) as the extension checks what it sends.
 - The page makes no request. Actions that read table data are the tree's, with their own safeguards (view confirmation, S3 credentials).
 

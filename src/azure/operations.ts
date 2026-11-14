@@ -54,9 +54,6 @@ export function deploymentStatusOf(properties: Record<string, unknown>): Deploym
 /** The states after which a deployment does nothing any more. */
 export const TERMINAL_STATES: ReadonlySet<string> = new Set(['Succeeded', 'Failed', 'Canceled']);
 
-/** A poll survives a few failed requests in a row (see `isPassingPollFailure`); the work itself goes on in Azure. */
-export const TOLERATED_POLL_FAILURES = 3;
-
 /**
  * Whether a URL that Azure handed out stays on Azure Resource Manager, so that the token may go with it. The slash
  * after the base keeps out a host that only starts with it (`management.azure.com.example.org`).

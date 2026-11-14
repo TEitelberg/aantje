@@ -79,13 +79,13 @@ Extension to page: `results-begin`, `results-event`, `results-end` and `results-
 
 ## The page, the policy and why there is no inline data
 
-`gridHtml` returns a page with this policy:
+`webviewHtml` (`src/shell/page-html.ts`) returns a page with this policy:
 
 ```text
 default-src 'none'; style-src 'nonce-<nonce>'; script-src 'nonce-<nonce>'; base-uri 'none'; form-action 'none'
 ```
 
-- Only the one script tag with the nonce runs. There is no `unsafe-inline`, no `unsafe-eval`, no event handler attribute and no `style` attribute. The one exception is the height of the two spacers, which the script sets through the CSSOM; the policy only refuses style attributes in markup.
+- Only the script tags with the nonce run: one on the grid page, and on the results page `plan-client.js` before it. There is no `unsafe-inline`, no `unsafe-eval`, no event handler attribute and no `style` attribute. The one exception is the height of the two spacers, which the script sets through the CSSOM; the policy only refuses style attributes in markup.
 - The panel comes from `createPanel` (`src/shell/host.vscode.ts`), shared by every webview panel of aantje. The nonce is random per panel; `localResourceRoots` is the `dist` directory only; all values that go into the page are HTML-escaped.
 - **The page contains no data.** Rows arrive by `postMessage`, so a table, column or cell value from the catalog can never end up in markup. The client writes everything with `textContent`, never `innerHTML`.
 - There is no `img-src`, `font-src` or `connect-src`: nothing else is loaded. See [Security](security.md#the-data-grid).

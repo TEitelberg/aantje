@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { showConnectFirst } from '../command.vscode';
+import { rootOf } from '../actions';
 import { openReport } from '../shell/host.vscode';
 import { scopeKey, scopeOfNode, scopeSuffix } from '../shell/scope';
 import type { ReportScope } from '../shell/scope';
@@ -15,7 +15,7 @@ const GOAL = 'show its activity';
 
 /** Activity: who committed what and when, for the newest snapshots of a connection or a schema; one panel per scope. */
 export function registerActivityCommand(env: ReportCommandEnv): vscode.Disposable[] {
-  const { tree, store } = env;
+  const { tree } = env;
 
   const report = openReport(env, {
     command: COMMAND,
@@ -31,25 +31,16 @@ export function registerActivityCommand(env: ReportCommandEnv): vscode.Disposabl
     planAction: planActivityAction,
     perform: (plan, profile) =>
       performActivityAction(plan, reportPortOf(env, profile), async () => {
-        const node = tree.roots().find((root) => root.ref.connectionId === profile.id);
+        const node = rootOf(tree, profile.id);
         await vscode.commands.executeCommand('aantje.showSnapshotReport', node);
       }),
   });
 
   return [
     { dispose: () => report.dispose() },
-    env.register(COMMAND, async (node) => {
-      const ref = node?.ref;
-      const scope = ref && scopeOfNode(ref);
-      if (!ref || !scope) {
-        return;
-      }
-      const profile = store.get(ref.connectionId);
-      if (!profile) {
-        showConnectFirst(GOAL);
-        return;
-      }
-      await report.show(profile, { scope });
+    report.command(env.register, (ref) => {
+      const scope = scopeOfNode(ref);
+      return scope && { scope };
     }),
   ];
 }

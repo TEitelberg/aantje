@@ -2,11 +2,13 @@ import { LAKE } from '../data/attach';
 import { waitText } from '../shell/numbers';
 import { CHECKS } from './model';
 import { maintenanceFix } from './fix';
+import type { StoredFile } from '../catalog/model';
+import type { FixStep } from '../maintenance/steps';
 import type {
   CheckId,
+  ConnectionAction,
   EndpointSuggestion,
   FindingScope,
-  FixStep,
   HealthFinding,
   HealthSeverity,
 } from './model';
@@ -27,6 +29,7 @@ interface FindingInit {
   readonly fixSql?: string;
   readonly fixStep?: FixStep;
   readonly settingKey?: string;
+  readonly connectionActions?: readonly ConnectionAction[];
   readonly objectKey?: string;
   readonly suggestion?: EndpointSuggestion;
 }
@@ -61,11 +64,38 @@ export function tableScope(
   };
 }
 
+/** `data:12`: the key of a file that the storage and the deep group share, and the object of its findings. */
+export const fileKey = (file: Pick<StoredFile, 'kind' | 'id'>): string => `${file.kind}:${file.id}`;
+
+/** `data file` or `delete file`. */
+export const kindText = (file: Pick<StoredFile, 'kind'>): string =>
+  file.kind === 'data' ? 'data file' : 'delete file';
+
+/** The scope of a finding of a file: its table, by the name of the catalog or else by the row of the file. */
+export const fileScope = (
+  file: Pick<StoredFile, 'tableId' | 'schema' | 'table'>,
+  names: TableNames,
+): FindingScope => tableScope(file.tableId, names, { schema: file.schema, name: file.table });
+
 /** `shop.events`, or `table #7` for a table without a catalog name; `the schema shop`, `the lake`. */
 export function qualified(scope: FindingScope): string {
   if (scope.kind === 'lake') return 'the lake';
   if (scope.kind === 'schema') return `the schema ${scope.name}`;
   return scope.schema === '' ? `table ${scope.name}` : `${scope.schema}.${scope.name}`;
+}
+
+/**
+ * The first `limit` items of a check and how many more were found. A list that the catalog cut (`cut`: it was asked for
+ * one item more than is reported, or said that it has more) counts none: how many are left is unknown, and the group
+ * says that a limit was reached.
+ */
+export function capFindings<T>(
+  list: readonly T[],
+  limit: number,
+  cut = false,
+): { shown: T[]; omitted: number } {
+  const shown = list.slice(0, limit);
+  return { shown, omitted: cut ? 0 : list.length - shown.length };
 }
 
 /** At most `limit` items as text, plus the count of the rest. */

@@ -50,7 +50,7 @@ Every report has **Open as Markdown** in its header. It opens an untitled Markdo
 
 The page does not send the document. It posts `{ type: 'markdown' }`, with a `view` when the report has filters. The extension checks the view with the guard of the report, fits it to the data it holds and builds the text itself. A request with an undeclared field, a view of the wrong shape or a `markdown` text is ignored.
 
-Each report has a pure `toMarkdown(data, view)` in a module without `vscode`: `src/<report>/markdown.ts` (`statisticsMarkdown`, `snapshotReportMarkdown`, `schemaHistoryMarkdown`, `activityMarkdown`, `storageMarkdown`, `healthMarkdown`, `dependenciesMarkdown`, `advisorMarkdown`, `growthMarkdown`) and `propertiesMarkdown` in `src/properties.ts`. Rules:
+Each report has a pure `toMarkdown(data, view)` in a module without `vscode`: `src/<report>/markdown.ts` (`statisticsMarkdown`, `snapshotReportMarkdown`, `schemaHistoryMarkdown`, `activityMarkdown`, `storageMarkdown`, `healthMarkdown`, `dependenciesMarkdown`, `advisorMarkdown`, `growthMarkdown`, `propertiesMarkdown`). Rules:
 
 - A title, a summary, then tables and details. The filters are named as text.
 - Everything from the catalog (names, authors, messages, the filter text) goes through `code()` in `src/markdown.ts`: a code span on one line with pipes escaped, so nothing renders and no table cell breaks. The connection name in the title goes through `markdownText`.
@@ -111,9 +111,9 @@ interface ReportKind<Data, Action, View> {
 
 `dist/report-client.js` is one script for all reports (ECharts is bundled once). `src/shell/client.ts` waits for the first message and builds the page of the kind whose guard accepts it. A message with a known type that fails its guard shows `This page cannot read the data it was sent. Open it again; if that does not help, update aantje.`
 
-A page is `createXPage(context: PageContext): Page<Data>` with `show(data)`, `redraw()` (theme change) and `resize()`. The building blocks in `src/shell/blocks.ts`: `pageHeader`, `cardGrid` (key figures with a severity), `tabBar` (WAI-ARIA tabs), `toolbar` and `searchBox`, `kindCheckbox` and `rangeField`, `dataTable` and `tableRow`, `findingCard`, `keyList`, `actionButton`, `note`, `empty` and `truncation`.
+A page is built with `reportPage(type, isMessage, build)` (`src/shell/report-page.ts`): `build` gets the page context, the chart set of the page and `mount` (header and main into the page, then Refresh gets the focus back if it asked), and returns `show(data)` and `redraw()` (theme change). The shell resizes the charts and redraws only once data was shown. The charts of a page go through `chartSet()` (`src/shell/chart-set.ts`): a box per chart, drawn once it is in the document, its label written as the ECharts description that assistive technology reads; resized and disposed together. The building blocks in `src/shell/blocks.ts`: `pageHeader`, `cardGrid` (key figures with a severity), `tabBar` (WAI-ARIA tabs), `toolbar` and `searchBox`, `kindBoxes` and `rangeFields`, `modeGroup` (a group of pressed buttons with `role="group"` and a label), `pickCell` and `markPicked` (the rows of a list to pick from), `focusPane` (a pane that takes the focus when it is rebuilt), `whoLine` (the author and message of a snapshot), `dataTable` and `tableRow`, `findingCard`, `keyList`, `actionButton`, `note`, `empty` and `truncation`.
 
-The theme is shared: `readTheme()` reads the VS Code chart colours, checks their contrast against the background and falls back to a palette of the mode; `chartTheme` adds patterns in the high contrast themes. Text formats (`formatBytes`, `count`, `plural`, `formatUtc`) are in `src/shell/model.ts`.
+The theme is shared: `readTheme()` reads the VS Code chart colours, checks their contrast against the background and falls back to a palette of the mode; `chartTheme` adds patterns in the high contrast themes. Text formats (`formatBytes`, `count`, `plural`, `formatUtc`) are in `src/shell/model.ts`, the number formats from `src/shell/numbers.ts`.
 
 ### Layout
 
@@ -140,7 +140,7 @@ The page script creates the container `.app` with `createApp()` and gives it to 
 2. **Protocol** (pure): the guard for the message to the page, the actions with `actionGuard`, the guard for the view of Open as Markdown.
 3. **`toMarkdown`** (pure): use `code`, `markdownTable`, `reportTitle` and `capRows` from `src/markdown.ts`.
 4. **Kind** (`kind.ts`, pure): the `ReportKind` object.
-5. **Page** (`page.ts`, browser): `createXPage` and `export const xPage: PageKind<Data>`, built from the blocks; add it to `pageKinds` in `src/shell/kinds.ts`.
+5. **Page** (`page.ts`, browser): `export const xPage = reportPage<Data>(type, isMessage, build)`, built from the blocks; add it to `pageKinds` in `src/shell/kinds.ts`.
 6. **Command** (`commands.vscode.ts`): a report read per connection calls `openReport(env, spec)` from `host.vscode.ts` (read with progress and Cancel, `panels.show`, Refresh, check of every action against the data; the spec holds key, read, title, `planAction`, `perform`; a read may answer `null` with an `absent` text when its subject does not exist at the snapshot, and `refreshParams` changes the parameters of a Refresh). All reports but the Health check and Statistics use it. A report of another shape uses `reportPanels(env, kind, { onAction, onRefresh })` and `panels.read`.
 7. **Menu:** the command and one entry in `menus["aantje.reports"]`, hidden from the Command Palette.
 8. **Tests and docs:** model, protocol, `toMarkdown`, the page with `test/support/page-harness.ts`, an integration suite; a page in `docs/en` and the module map in `architecture.md`.

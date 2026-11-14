@@ -1,4 +1,5 @@
 // The columns that the text of a query gives: the select list of a CTE or a subquery, the rows of VALUES.
+import { foldIdentifier } from '../catalog/ddl';
 import type { ScopeRelation } from './context';
 import { isDot, isWord, keywordOf, unquote } from './tokens';
 import type { SqlToken } from './tokens';
@@ -181,10 +182,10 @@ function starOf(item: readonly SqlToken[]): TextColumn | undefined {
     const keyword = keywordOf(item[index]);
     const { elements, next } = modifierList(item, index + 1);
     if (keyword === 'EXCLUDE') {
-      exclude.push(...elements.map((element) => lastName(element).toLowerCase()));
+      exclude.push(...elements.map((element) => foldIdentifier(lastName(element))));
     } else if (keyword === 'RENAME' && elements.every((element) => keywordOf(element.at(-2)) === 'AS')) {
       elements.forEach((element) =>
-        rename.set(lastName(element.slice(0, -2)).toLowerCase(), lastName(element)),
+        rename.set(foldIdentifier(lastName(element.slice(0, -2))), lastName(element)),
       );
     } else if (keyword !== 'REPLACE') {
       return UNKNOWN;

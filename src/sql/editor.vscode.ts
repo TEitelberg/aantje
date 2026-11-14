@@ -4,23 +4,20 @@ import type { ConnectionProfile } from '../connections/profile';
 import type { ConnectionStore } from '../connections/store';
 import { userMessageOf } from '../errors';
 import type { Logger } from '../log';
-import { maintenanceScript } from '../maintenance';
-import type { MaintenanceKind } from '../maintenance';
 import { withCancel } from '../progress.vscode';
 import { scriptOf } from '../script-templates';
-import type { ScriptVerb } from '../script-templates';
 import { openScript } from '../script.vscode';
 import type { CatalogTree } from '../tree/model';
-import type { NodeRef } from '../tree/refs';
-import { holdsFileExclusively, queryMenuItems, queryStatusContent, scriptToRun, statementAt } from './editor';
-import type { EditorRef, QueryEditors, QueryUi } from './editor';
-import type { LanguageService } from './language';
+import { holdsFileExclusively } from './editor';
+import type { QueryEditors, QueryUi } from './editor';
+import { queryMenuItems, queryStatusContent } from './editor-status';
+import { activeSqlEditor, documentKey, documentOfKey, editorOf } from './glue.vscode';
+import { scriptToRun } from './script';
 
 interface QueryEnv {
   readonly editors: QueryEditors;
   readonly tree: CatalogTree;
   readonly store: ConnectionStore;
-  readonly service: LanguageService;
   readonly logger: Logger;
   readonly register: Register;
   /** Sets a window context key for `when` clauses. */
@@ -31,46 +28,6 @@ interface QueryEnv {
     collapse(key: string, collapsed: boolean): void;
   };
 }
-
-const maintenance: readonly (readonly [string, MaintenanceKind])[] = [
-  ['aantje.maintenanceCheckpoint', 'checkpoint'],
-  ['aantje.maintenanceMerge', 'merge'],
-  ['aantje.maintenanceRewrite', 'rewrite'],
-  ['aantje.maintenanceFlush', 'flush'],
-  ['aantje.maintenanceExpire', 'expire'],
-  ['aantje.maintenanceCleanup', 'cleanup'],
-  ['aantje.maintenanceOrphans', 'orphans'],
-  ['aantje.maintenanceOption', 'option'],
-];
-
-// Script as and Maintenance commands; the generator gives undefined for a node without such a script.
-const scripts: readonly (readonly [
-  string,
-  (tree: CatalogTree, ref: NodeRef) => Promise<string | undefined> | string | undefined,
-])[] = [
-  ...(
-    [
-      ['aantje.scriptCreate', 'create'],
-      ['aantje.scriptSelect', 'select'],
-      ['aantje.scriptInsert', 'insert'],
-      ['aantje.scriptAlter', 'alter'],
-      ['aantje.scriptDrop', 'drop'],
-    ] as const satisfies readonly (readonly [string, ScriptVerb])[]
-  ).map(([id, verb]) => [id, (tree: CatalogTree, ref: NodeRef) => scriptOf(verb, tree, ref)] as const),
-  ...maintenance.map(
-    ([id, kind]) => [id, (tree: CatalogTree, ref: NodeRef) => maintenanceScript(tree, kind, ref)] as const,
-  ),
-];
-
-export const documentKey = (document: vscode.TextDocument): string => document.uri.toString();
-
-const editorOf = (document: vscode.TextDocument): EditorRef => ({
-  key: documentKey(document),
-  name: document.uri.path.split('/').pop() ?? document.uri.path,
-});
-
-const documentOfKey = (key: string): vscode.TextDocument | undefined =>
-  vscode.workspace.textDocuments.find((document) => documentKey(document) === key);
 
 /** Opens the text in an untitled SQL document bound to the connection, so that F5 runs it there; never runs it. */
 export async function openForConnection(
@@ -137,15 +94,8 @@ const showResults = (results: QueryEnv['results'], shown?: boolean) => (): void 
 
 /** Registers the SQL editor commands, status bar item and context keys; decisions live in `editor.ts`. */
 export function registerQueryEditor(env: QueryEnv): vscode.Disposable[] {
-  const { editors, tree, store, service, logger, register, setContext, results } = env;
+  const { editors, tree, store, logger, register, setContext, results } = env;
   const ui = createQueryUi();
-
-  const activeSql = (): vscode.TextEditor | undefined => {
-    const editor = vscode.window.activeTextEditor;
-    if (editor?.document.languageId === 'sql') return editor;
-    ui.info('Open a SQL editor first.');
-    return undefined;
-  };
 
   // Completion needs the explorer's catalog; skip it while a writable session holds the file.
   const connectExplorer = (key: string): void => {
@@ -183,7 +133,7 @@ export function registerQueryEditor(env: QueryEnv): vscode.Disposable[] {
     editors.associate(editorOf(document), connectionId);
 
   const selectConnection = async (): Promise<void> => {
-    const document = activeSql()?.document;
+    const document = activeSqlEditor()?.document;
     const id = document && (await editors.pickConnection(true));
     if (document && id) await associate(document, id);
   };
@@ -205,16 +155,6 @@ export function registerQueryEditor(env: QueryEnv): vscode.Disposable[] {
       });
     }),
 
-    // A script is bound to its node's connection, so F5 runs it there; opening never runs it.
-    ...scripts.map(([id, scriptFor]) =>
-      register(id, async (node) => {
-        const text = node && (await scriptFor(tree, node.ref));
-        if (node && text !== undefined) {
-          await openForConnection(editors, text, node.ref.connectionId);
-        }
-      }),
-    ),
-
     register('aantje.newQuery', async (node) => {
       const connectionId = node?.ref.connectionId ?? (await editors.pickConnection());
       if (!connectionId) return;
@@ -230,28 +170,17 @@ export function registerQueryEditor(env: QueryEnv): vscode.Disposable[] {
     register('aantje.selectQueryConnection', selectConnection),
 
     register('aantje.runQuery', async () => {
-      const editor = activeSql();
+      const editor = activeSqlEditor();
       if (!editor) return;
       const { document, selection } = editor;
       const script = scriptToRun(document.getText(), {
         start: document.offsetAt(selection.start),
         end: document.offsetAt(selection.end),
       });
-      await editors.run(editorOf(document), script);
+      await editors.run(editorOf(document), { ...script, record: true });
     }),
 
-    register('aantje.runStatement', async () => {
-      const editor = activeSql();
-      if (!editor) return;
-      const { document, selection } = editor;
-      const text = document.getText();
-      const statement = statementAt(text, await service.tokenize(text), document.offsetAt(selection.active));
-      if (!statement) {
-        ui.info('There is no statement at the cursor.');
-        return;
-      }
-      await editors.run(editorOf(document), statement);
-    }),
+    // aantje.runStatement is in lens.vscode.ts: the lens calls it with a statement.
 
     register('aantje.cancelQuery', () => {
       const document = vscode.window.activeTextEditor?.document;
@@ -263,7 +192,7 @@ export function registerQueryEditor(env: QueryEnv): vscode.Disposable[] {
     register('aantje.showResults', showResults(results, true)),
 
     register('aantje.toggleReadOnly', async () => {
-      const document = activeSql()?.document;
+      const document = activeSqlEditor()?.document;
       if (!document) return;
       if (!editors.connectionOf(documentKey(document))) {
         ui.info('This editor has no connection yet. Select one first.');
@@ -274,7 +203,7 @@ export function registerQueryEditor(env: QueryEnv): vscode.Disposable[] {
     }),
 
     register('aantje.queryMenu', async () => {
-      const document = activeSql()?.document;
+      const document = activeSqlEditor()?.document;
       const state = document && editors.state(documentKey(document));
       if (!document || !state) {
         await selectConnection();

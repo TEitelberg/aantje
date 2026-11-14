@@ -1,6 +1,6 @@
 import { describeChange, parseChanges } from './catalog/changes';
 import type { Lifetime, SnapshotId, SnapshotInfo } from './catalog/model';
-import { withoutIcons } from './messages';
+import { pickerLabel } from './messages';
 
 /** One row of the snapshot picker; `value` is the selection when the row is chosen. */
 export interface SnapshotPickItem<Value = SnapshotId | 'latest'> {
@@ -16,8 +16,6 @@ export function describeChanges(changes: string | null): string {
   const entries = parseChanges(changes);
   return entries.length > 0 ? entries.map(describeChange).join('; ') : 'No recorded changes';
 }
-
-export { describeAction } from './catalog/changes';
 
 /** Rows for the "Show Catalog at Snapshot" picker: "Latest", then snapshots newest first; the current selection is `picked`. */
 export function snapshotPickItems(
@@ -61,7 +59,7 @@ export function snapshotChoices(
 function detailOf(snapshot: SnapshotInfo): string {
   const message = snapshot.commitMessage?.replace(/\s+/g, ' ').trim();
   const changes = describeChanges(snapshot.changes);
-  return withoutIcons(message ? `${message} · ${changes}` : changes);
+  return pickerLabel(message ? `${message} · ${changes}` : changes);
 }
 
 /** `SnapshotInfo.time` (ISO 8601, UTC) as `YYYY-MM-DD HH:mm:ss UTC`, truncated at the second. */

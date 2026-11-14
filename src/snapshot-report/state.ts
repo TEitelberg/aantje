@@ -3,8 +3,9 @@ import { boundsOf, isBounds, restoredRange } from '../shell/range-state';
 import type { Bounds } from '../shell/range-state';
 
 import type { SnapshotReportXAxis } from './chart-options';
-import { POINT_KINDS } from './model';
-import type { Model, PointKind, SnapshotReportData } from './model';
+import { POINT_KINDS } from '../snapshot-changes/model';
+import type { Model, PointKind } from '../snapshot-changes/model';
+import type { SnapshotReportData } from './model';
 
 interface ViewState {
   readonly lanes: readonly string[];

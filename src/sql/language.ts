@@ -1,5 +1,4 @@
 import type * as Duckdb from '@duckdb/node-api';
-import { loadEngine } from '../data/open-lake';
 import type { Logger } from '../log';
 import { failureLog } from '../log-once';
 import type { FailureLog } from '../log-once';
@@ -13,9 +12,10 @@ import type { Hover, SignatureHelp } from './help';
 import { openLookup } from './lookup';
 import { parseText } from './parse';
 import type { ParsedText } from './parse';
+import { closeParserDuckdb, OnFirstUse, openParserDuckdb, serializeSql, tokenRows } from './parser-engine';
+import type { ParserDuckdb } from './parser-engine';
 import type { Problem } from './problems';
 import { utf16Offsets, withoutBom } from './script';
-import { serializeSql } from './session';
 import { tokenWindow } from './token-window';
 import { unknownNames } from './unknown-names';
 import { loadVocabulary } from './vocabulary';
@@ -74,9 +74,7 @@ export function openLanguageService(options: LanguageServiceOptions = {}): Langu
   return new DuckdbLanguageService(options);
 }
 
-interface Ready {
-  readonly instance: Duckdb.DuckDBInstance;
-  readonly connection: Duckdb.DuckDBConnection;
+interface Ready extends ParserDuckdb {
   readonly vocabulary: Vocabulary;
   /** DuckDB's own views in lower case, which a name without schema may read (`duckdb_tables`, `pg_tables`). */
   readonly system: ReadonlySet<string>;
@@ -89,7 +87,7 @@ interface Job {
 }
 
 class DuckdbLanguageService implements LanguageService {
-  private ready: Promise<Ready> | undefined;
+  private readonly ready: OnFirstUse<Ready>;
   private disposed = false;
   private draining = false;
   // The newest text per source.
@@ -101,6 +99,10 @@ class DuckdbLanguageService implements LanguageService {
 
   constructor(private readonly options: LanguageServiceOptions) {
     this.failed = options.logger && failureLog(options.logger);
+    this.ready = new OnFirstUse(
+      () => this.create(),
+      (cause) => this.failed?.('Starting the DuckDB of the language service', cause),
+    );
   }
 
   tokenize(text: string): Promise<SqlToken[]> {
@@ -122,26 +124,21 @@ class DuckdbLanguageService implements LanguageService {
     });
   }
 
-  async complete(text: string, offset: number, catalog: SqlCatalog): Promise<Completions | undefined> {
-    if (text.length > MAX_COMPLETE_LENGTH) return undefined;
-    const [tokens, vocabulary] = await Promise.all([this.statementTokens(text, offset), this.vocabulary()]);
-    return completionsAt(tokens, offset, vocabulary, catalogOfStatement(catalog, tokens, offset));
+  complete(text: string, offset: number, catalog: SqlCatalog): Promise<Completions | undefined> {
+    return this.atStatement(text, offset, catalog, (tokens, vocabulary, at) =>
+      completionsAt(tokens, offset, vocabulary, at),
+    );
   }
 
-  async hover(text: string, offset: number, catalog: SqlCatalog): Promise<Hover | undefined> {
-    if (text.length > MAX_COMPLETE_LENGTH) return undefined;
-    const [tokens, vocabulary] = await Promise.all([this.statementTokens(text, offset), this.vocabulary()]);
-    return hoverAt(tokens, offset, vocabulary, await openLookup(catalogOfStatement(catalog, tokens, offset)));
+  hover(text: string, offset: number, catalog: SqlCatalog): Promise<Hover | undefined> {
+    return this.atStatement(text, offset, catalog, async (tokens, vocabulary, at) =>
+      hoverAt(tokens, offset, vocabulary, await openLookup(at)),
+    );
   }
 
-  async signature(text: string, offset: number, catalog: SqlCatalog): Promise<SignatureHelp | undefined> {
-    if (text.length > MAX_COMPLETE_LENGTH) return undefined;
-    const [tokens, vocabulary] = await Promise.all([this.statementTokens(text, offset), this.vocabulary()]);
-    return signatureAt(
-      tokens,
-      offset,
-      vocabulary,
-      await openLookup(catalogOfStatement(catalog, tokens, offset)),
+  signature(text: string, offset: number, catalog: SqlCatalog): Promise<SignatureHelp | undefined> {
+    return this.atStatement(text, offset, catalog, async (tokens, vocabulary, at) =>
+      signatureAt(tokens, offset, vocabulary, await openLookup(at)),
     );
   }
 
@@ -149,43 +146,28 @@ class DuckdbLanguageService implements LanguageService {
     this.disposed = true;
     for (const job of this.waiting.values()) job.resolve(undefined);
     this.waiting.clear();
-    const ready = this.ready;
-    this.ready = undefined;
+    const ready = this.ready.take();
     await Promise.allSettled([...this.running]);
     // A failed start was logged when it happened.
-    const created = await ready?.catch(() => undefined);
-    try {
-      created?.connection.closeSync();
-    } finally {
-      created?.instance.closeSync();
-    }
+    const created = await ready;
+    if (created) closeParserDuckdb(created);
   }
 
   private open(): Promise<Ready> {
     if (this.disposed) return Promise.reject(new Error(CLOSED));
-    this.ready ??= this.create().catch((cause: unknown) => {
-      this.ready = undefined;
-      this.failed?.('Starting the DuckDB of the language service', cause);
-      throw cause;
-    });
-    return this.ready;
+    return this.ready.get();
   }
 
   private async create(): Promise<Ready> {
-    const engine = await loadEngine();
-    const instance = await engine.DuckDBInstance.create(':memory:', {
-      enable_external_access: 'false',
-      autoinstall_known_extensions: 'false',
-      autoload_known_extensions: 'false',
-      allow_persistent_secrets: 'false',
-      ...(this.options.extensionDirectory ? { extension_directory: this.options.extensionDirectory } : {}),
-    });
+    const duckdb = await openParserDuckdb(this.options.extensionDirectory);
     try {
-      const connection = await instance.connect();
-      const [vocabulary, system] = await Promise.all([loadVocabulary(connection), systemViews(connection)]);
-      return { instance, connection, vocabulary, system };
+      const [vocabulary, system] = await Promise.all([
+        loadVocabulary(duckdb.connection),
+        systemViews(duckdb.connection),
+      ]);
+      return { ...duckdb, vocabulary, system };
     } catch (cause) {
-      instance.closeSync();
+      closeParserDuckdb(duckdb);
       throw cause;
     }
   }
@@ -198,6 +180,19 @@ class DuckdbLanguageService implements LanguageService {
     return promise;
   }
 
+  // What completion and help read: the tokens up to the end of the statement at the offset, the vocabulary, and the
+  // catalog at the snapshot that the statement names. A text that is too long gets nothing.
+  private async atStatement<T>(
+    text: string,
+    offset: number,
+    catalog: SqlCatalog,
+    answer: (tokens: SqlToken[], vocabulary: Vocabulary, at: SqlCatalog) => Promise<T | undefined>,
+  ): Promise<T | undefined> {
+    if (text.length > MAX_COMPLETE_LENGTH) return undefined;
+    const [tokens, vocabulary] = await Promise.all([this.statementTokens(text, offset), this.vocabulary()]);
+    return answer(tokens, vocabulary, catalogOfStatement(catalog, tokens, offset));
+  }
+
   // The tokens of the text up to the end of the statement at the offset: all that completion and help read.
   private statementTokens(text: string, offset: number): Promise<SqlToken[]> {
     if (this.disposed) return Promise.reject(new Error(CLOSED));
@@ -206,12 +201,9 @@ class DuckdbLanguageService implements LanguageService {
 
   private async readTokens(plain: string): Promise<SqlToken[]> {
     const { connection } = await this.open();
-    const reader = await connection.runAndReadAll('SELECT start, token_type, word FROM sql_tokenize($1)', [
-      plain,
-    ]);
     const unitOf = utf16Offsets(plain);
-    return (reader.getRowsJson() as unknown as [number, string, string][]).map(([start, type, word]) => {
-      const offset = unitOf(Number(start));
+    return (await tokenRows(connection, plain)).map(({ start, type, word }) => {
+      const offset = unitOf(start);
       return { start: offset, end: offset + word.length, type, word };
     });
   }

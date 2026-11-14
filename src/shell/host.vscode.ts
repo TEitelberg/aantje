@@ -2,13 +2,15 @@ import { randomBytes } from 'node:crypto';
 import * as vscode from 'vscode';
 import type { ActiveConnection } from '../active-connection.vscode';
 import { guarded, showConnectFirst } from '../command.vscode';
+import type { Register } from '../command.vscode';
 import type { CatalogReader } from '../catalog/model';
 import type { ConnectionProfile } from '../connections/profile';
 import type { ConnectionStore } from '../connections/store';
-import { gridHtml } from '../grid/html';
 import type { Logger } from '../log';
 import { withCancel } from '../progress.vscode';
 import type { CatalogTree } from '../tree/model';
+import type { NodeRef } from '../tree/refs';
+import { webviewHtml } from './page-html';
 import { ReportPanels } from './panels';
 import type { PanelFactory, PanelHandlers, ReportKind } from './panels';
 
@@ -26,9 +28,11 @@ interface PanelSpec {
   readonly title: string;
   /** The page script in `dist`. */
   readonly script: 'grid-client.js' | 'report-client.js';
+  /** Scripts in `dist` that the page loads before it, under the same nonce: the results page draws plans with them. */
+  readonly before?: readonly 'plan-client.js'[];
   readonly column: Parameters<typeof vscode.window.createWebviewPanel>[2];
-  /** The stylesheet of the page; the grid's own one when absent. */
-  readonly css?: string;
+  /** The stylesheet of the page. */
+  readonly css: string;
 }
 
 /** A panel whose page runs one script of `dist` under a fresh nonce; it may load resources from `dist` only. */
@@ -37,9 +41,12 @@ export function createPanel(extensionUri: vscode.Uri, spec: PanelSpec): vscode.W
     enableScripts: true,
     localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'dist')],
   });
-  panel.webview.html = gridHtml({
+  const uri = (script: string): string =>
+    panel.webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'dist', script)).toString();
+  panel.webview.html = webviewHtml({
     nonce: randomBytes(16).toString('base64'),
-    scriptUri: panel.webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'dist', spec.script)).toString(),
+    scriptUri: uri(spec.script),
+    ...(spec.before ? { scriptsBefore: spec.before.map(uri) } : {}),
     title: spec.title,
     css: spec.css,
   });
@@ -89,7 +96,7 @@ export function reportPanels<Data, Action, View>(
 }
 
 /** The panel's connection, or a hint when it was removed while the panel stayed open. */
-export function profileOf(
+function profileOf(
   store: Pick<ConnectionStore, 'get'>,
   connectionId: string,
   what: string,
@@ -136,13 +143,18 @@ export interface ReportSpec<Data, Action, View, Plan, Params extends object> {
 interface OpenedReport<Params extends object> {
   /** Reads the report under a cancellable progress and shows it in its panel. */
   show(profile: ConnectionProfile, params: Params): Promise<void>;
+  /**
+   * Registers the command of the report on a node of the explorer. `paramsOf` maps the node to the parameters of the
+   * report, undefined for a node that has no such report; a connection that is gone asks to connect first.
+   */
+  command(register: Register, paramsOf: (ref: NodeRef) => Params | undefined): vscode.Disposable;
   dispose(): void;
 }
 
 /**
  * A refresh of the explorer, also after a statement of the SQL editor changed the lake, leaves the numbers of an open
  * panel behind: the panels that `keysOf` names for the refreshed connection are marked out of date until new data
- * arrives. A report whose panels do not go through `openReport` calls this itself.
+ * arrives. Exported so that the tests can check it apart from `openReport`, its one caller.
  */
 export function markStaleOnRefresh(
   tree: Pick<CatalogTree, 'onDidRefresh'>,
@@ -213,6 +225,19 @@ export function openReport<Data, Action, View, Plan, Params extends object>(
 
   return {
     show,
+    command: (register, paramsOf) =>
+      register(spec.command, async (node) => {
+        const params = node && paramsOf(node.ref);
+        if (!node || !params) {
+          return;
+        }
+        const profile = store.get(node.ref.connectionId);
+        if (!profile) {
+          showConnectFirst(spec.goal);
+          return;
+        }
+        await show(profile, params);
+      }),
     dispose: () => {
       refreshed.dispose();
       panels.dispose();

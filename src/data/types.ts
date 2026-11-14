@@ -1,6 +1,7 @@
 import type { SnapshotId } from '../catalog/model';
 import type { ConnectionProfile } from '../connections/profile';
 import type { Logger } from '../log';
+import type { ResolvedStorage } from '../storage/config';
 
 export const PREVIEW_LIMIT = 1000;
 
@@ -51,14 +52,6 @@ export interface S3Credentials {
   readonly secretKey: string;
 }
 
-/** Entra access to the storage account of an Azure lake: DuckDB's azure extension does not renew an access token. */
-export interface AzureAccess {
-  readonly accountName: string;
-  readonly accessToken: string;
-  /** A fresh token; a long session calls it before the old one runs out. */
-  readonly refresh?: () => Promise<string>;
-}
-
 export interface DataAccess {
   readonly profile: ConnectionProfile;
   /** PostgreSQL password from the secret storage. */
@@ -74,9 +67,8 @@ export interface DataAccess {
   readonly viewsTrusted?: boolean;
   /** Undefined means the latest snapshot. */
   readonly snapshot?: SnapshotId;
-  readonly s3: S3Settings;
-  readonly s3Credentials?: S3Credentials;
-  readonly azure?: AzureAccess;
+  /** Where the data files live and how to sign in there; undefined for a local lake without S3 settings or keys. */
+  readonly storage?: ResolvedStorage;
   /** DuckDB `extension_directory`; undefined keeps the DuckDB default (extensions download on first use). */
   readonly extensionDirectory?: string;
   /** Limit of the attach and the query, in ms; undefined means none. Extension downloads do not count. */

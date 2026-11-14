@@ -53,7 +53,7 @@ function connectedContent(name: string, state: StatusBarState): StatusBarContent
           `Pinned to snapshot @${state.snapshot}, not following the latest${latest}`,
         ];
   return {
-    text: [`$(database) ${name}`, ...version, shown].join(' · '),
+    text: [`$(aantje-duck) ${name}`, ...version, shown].join(' · '),
     tooltip: `Select snapshot. ${tooltip}.`,
   };
 }

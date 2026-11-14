@@ -1,6 +1,7 @@
 import { createTableDdl, createViewDdl, qualifiedName } from './catalog/ddl';
-import type { CatalogEntry, SnapshotId } from './catalog/model';
-import { folderNodeId, treeNodeId } from './search';
+import type { CatalogReader, SnapshotId } from './catalog/model';
+import { treeNodePath } from './search';
+import type { SearchHit } from './search';
 import type { CatalogTree } from './tree/model';
 import type { ConnectionState, NodeRef, TreeNode } from './tree/refs';
 import { connectionClosed } from './messages';
@@ -10,6 +11,24 @@ import { connectionClosed } from './messages';
 /** The snapshot a connection shows; undefined while not connected. */
 export function shownSnapshot(state: ConnectionState): SnapshotId | undefined {
   return state.snapshot === 'latest' ? state.latestSnapshot : state.snapshot;
+}
+
+/**
+ * The reader of a connection and the snapshot its tree shows. Throws `connectionClosed` when it is not connected:
+ * `goal` completes "Connect again to ...", `name` names the connection.
+ */
+export function catalogAt(
+  tree: Pick<CatalogTree, 'reader' | 'state'>,
+  connectionId: string,
+  goal: string,
+  name?: string,
+): { readonly reader: CatalogReader; readonly snapshot: SnapshotId } {
+  const reader = tree.reader(connectionId);
+  const snapshot = shownSnapshot(tree.state(connectionId));
+  if (!reader || snapshot === undefined) {
+    throw connectionClosed(goal, name);
+  }
+  return { reader, snapshot };
 }
 
 /** Quoted name of a schema, table, view or (nested) column; undefined for nodes without an SQL name. */
@@ -41,35 +60,43 @@ export async function ddlOf(
   if (ref.kind !== 'table') {
     return undefined;
   }
-  const reader = tree.reader(ref.connectionId);
-  const snapshot = shownSnapshot(tree.state(ref.connectionId));
-  if (!reader || snapshot === undefined) {
-    throw connectionClosed('copy the DDL');
-  }
+  const { reader, snapshot } = catalogAt(tree, ref.connectionId, 'copy the DDL');
   return createTableDdl(ref.schema.name, ref.table.name, await reader.columns(ref.table.id, snapshot));
 }
 
-/** The tree node of a search result, taken from the tree's cache because VS Code matches elements by identity. */
+/** The node of a connection; undefined when the tree has no such connection. */
+export function rootOf(tree: Pick<CatalogTree, 'roots'>, connectionId: string): TreeNode | undefined {
+  return tree.roots().find((root) => root.ref.connectionId === connectionId);
+}
+
+/** The node of a connection, or with `schemaId` the node of one of its schemas; undefined when the tree lacks it. */
+export async function nodeOf(
+  tree: Pick<CatalogTree, 'roots' | 'children'>,
+  connectionId: string,
+  schemaId?: number,
+): Promise<TreeNode | undefined> {
+  const root = rootOf(tree, connectionId);
+  if (!root || schemaId === undefined) {
+    return root;
+  }
+  return (await tree.children(root)).find(
+    (child) => child.ref.kind === 'schema' && child.ref.schema.id === schemaId,
+  );
+}
+
+/**
+ * The tree node of a table, view or column (a row of the search), taken from the tree's cache because VS Code matches
+ * elements by identity.
+ */
 export async function findEntryNode(
   tree: Pick<CatalogTree, 'roots' | 'children'>,
   connectionId: string,
-  entry: CatalogEntry,
+  entry: SearchHit,
 ): Promise<TreeNode | undefined> {
-  const connection = tree.roots().find((node) => node.ref.connectionId === connectionId);
-  if (!connection) {
-    return undefined;
+  let node = rootOf(tree, connectionId);
+  // A level is read before its children can be found; the tree caches what it reads.
+  for (const id of treeNodePath(connectionId, entry)) {
+    node = node && (await tree.children(node)).find((child) => child.id === id);
   }
-  const schema = (await tree.children(connection)).find(
-    (node) => node.ref.kind === 'schema' && node.ref.schema.id === entry.schemaId,
-  );
-  if (!schema) {
-    return undefined;
-  }
-  const folderId = folderNodeId(connectionId, entry);
-  const folder = (await tree.children(schema)).find((node) => node.id === folderId);
-  if (!folder) {
-    return undefined;
-  }
-  const id = treeNodeId(connectionId, entry);
-  return (await tree.children(folder)).find((node) => node.id === id);
+  return node;
 }

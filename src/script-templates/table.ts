@@ -1,26 +1,14 @@
-import {
-  columnDefinition,
-  createTableDdl,
-  qualifiedName,
-  quoteIdentifier,
-  quoteLiteral,
-} from '../catalog/ddl';
+import { columnDefinition, qualifiedName, quoteIdentifier } from '../catalog/ddl';
 import type { ColumnInfo, SnapshotId } from '../catalog/model';
-import {
-  columnFragments,
-  commented,
-  fromCatalog,
-  newestComment,
-  newestNote,
-  pinnedOf,
-  selectStatement,
-} from '../script';
-import type { ScriptSource } from '../script';
-import { alterOptionLines, tableOptionsOf } from '../maintenance-options';
+import { columnFragments, commented, fromCatalog, isStatement } from '../ddl-script/check';
+import { readCreatedTable } from '../ddl-script/read';
+import { commentStatement, dropStatement } from '../ddl-script/statements';
+import { tableDdl } from '../ddl-script/table-ddl';
+import { alterOptionLines } from '../maintenance/options';
+import { newestComment, newestNote, pinnedOf, selectStatement } from '../script';
 import { addColumnBlock, columnBlocks } from './columns';
-import { blocks, catalogOf, COMMENTED_OUT, dropStatement, RUN, withDrop } from './common';
+import { blocks, catalogOf, COMMENTED_OUT, RUN, withDrop } from './common';
 import type { Ref, Tree } from './common';
-import { partitionKey, setStatement, sortKey } from './layout';
 
 /** The `SELECT` of a table; table folders without a query of their own use it too. */
 export async function tableSelect(
@@ -37,42 +25,29 @@ export async function tableSelect(
   );
 }
 
-/** `CREATE TABLE`, followed by the partitioning, sort order and comments as commented-out statements. */
+/**
+ * `CREATE TABLE`, followed by the partitioning, sort order and comments as commented-out statements: the DDL that
+ * Generate Scripts writes live. Commented out, they need no note to read the sort expressions before running.
+ */
 export async function createTable(tree: Tree, ref: Ref<'table'>): Promise<string> {
   const { reader, snapshot } = catalogOf(tree, ref.connectionId, 'CREATE');
-  const read = reader.columns(ref.table.id, snapshot);
-  const [columns, partitioning, sortOrder, metadata] = await Promise.all([
-    read,
-    read.then((columnTree) => reader.partitioning(ref.table.id, snapshot, columnTree)),
-    reader.sortOrder(ref.table.id, snapshot),
-    reader.metadata(),
-  ]);
   const schemaName = ref.schema.name;
   const tableName = ref.table.name;
-  const options = tableOptionsOf(metadata, ref.table.id, columns);
-  const created = fromCatalog(
-    createTableDdl(schemaName, tableName, columns, options),
-    columnFragments(columns),
+  const table = await readCreatedTable(
+    reader,
+    snapshot,
+    { id: ref.table.id, schemaName, name: tableName, comment: ref.table.comment },
+    reader.metadata(),
   );
-  const restoring = [
-    ...(partitioning
-      ? [setStatement(schemaName, tableName, 'PARTITIONED', partitioning.columns.map(partitionKey))]
-      : []),
-    ...(sortOrder ? [setStatement(schemaName, tableName, 'SORTED', sortOrder.expressions.map(sortKey))] : []),
-    ...(ref.table.comment === null
-      ? []
-      : [`COMMENT ON TABLE ${qualifiedName(schemaName, tableName)} IS ${quoteLiteral(ref.table.comment)};`]),
-    ...columns.flatMap(({ name, comment }) =>
-      comment === null
-        ? []
-        : [`COMMENT ON COLUMN ${qualifiedName(schemaName, tableName, name)} IS ${quoteLiteral(comment)};`],
-    ),
-  ].map((statement) => (statement.startsWith('--') ? statement : commented(statement)));
+  const { notes, create, followUps } = tableDdl(schemaName, table, fromCatalog);
+  const restoring = followUps
+    .filter(({ note }) => note !== 'sort')
+    .map(({ text }) => (isStatement(text) ? commented(text) : text));
   return withDrop(
-    [...newestNote(tree, ref.connectionId), ...created.notes],
+    [...newestNote(tree, ref.connectionId), ...notes],
     dropStatement('TABLE', schemaName, tableName),
     [
-      created.statement,
+      create,
       ...(restoring.length > 0
         ? ['-- The partitioning, the sort order and the comments of the table', ...restoring]
         : []),
@@ -106,7 +81,7 @@ export async function insertTable(tree: Tree, ref: Ref<'table'>): Promise<string
 }
 
 /** One row to insert, with a `<placeholder>` per column that names it with its type, default and `NOT NULL`. */
-export function insertTemplate(
+function insertTemplate(
   schemaName: string,
   tableName: string,
   columns: readonly ColumnInfo[],
@@ -136,7 +111,6 @@ export async function alterTable(tree: Tree, ref: Ref<'table'>): Promise<string>
     ref.table.name,
     await reader.columns(ref.table.id, snapshot),
     pinnedOf(tree, ref.connectionId),
-    tree,
   );
 }
 
@@ -146,7 +120,6 @@ export function alterTableTemplate(
   tableName: string,
   columns: readonly ColumnInfo[],
   pinned: SnapshotId | undefined,
-  source: ScriptSource = {},
 ): string {
   const table = qualifiedName(schemaName, tableName);
   const alter = (change: string): string => commented(`ALTER TABLE ${table} ${change};`);
@@ -154,11 +127,11 @@ export function alterTableTemplate(
     [
       ...COMMENTED_OUT,
       '-- DuckLake can add, rename and drop columns and struct fields, change a column type (only widening, for example INTEGER to BIGINT), rename the table, and set the comment, the partitioning, the sort order and the options.',
-      ...newestComment(pinned, { several: true, fromReport: source.fromReport }),
+      ...newestComment(pinned, { several: true }),
     ],
     addColumnBlock(schemaName, tableName),
     ['-- Rename the table', alter('RENAME TO <new_name>')],
-    ['-- Comment on the table', commented(`COMMENT ON TABLE ${table} IS '<comment>';`)],
+    ['-- Comment on the table', commented(commentStatement('TABLE', [schemaName, tableName], '<comment>'))],
     ['-- Partitioning of new data', alter('SET PARTITIONED BY (<column>)'), alter('RESET PARTITIONED BY')],
     ['-- Sort order of new data', alter('SET SORTED BY (<column> ASC)'), alter('RESET SORTED BY')],
     [

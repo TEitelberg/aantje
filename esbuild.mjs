@@ -45,14 +45,22 @@ const reportClientOptions = {
   sourcemap: true,
 };
 
-const bundles = [options, gridClientOptions, reportClientOptions];
+// The plans of the results page (Explain, Analysis), apart from grid-client.js: ECharts writes its tooltips as markup.
+const planClientOptions = {
+  ...gridClientOptions,
+  entryPoints: ['src/grid/plan-client.ts'],
+  outfile: 'dist/plan-client.js',
+  sourcemap: true,
+};
+
+const bundles = [options, gridClientOptions, reportClientOptions, planClientOptions];
 
 if (watch) {
   await Promise.all(bundles.map(async (config) => (await esbuild.context(config)).watch()));
 } else {
   await Promise.all(bundles.map((config) => esbuild.build(config)));
   writeNotices({
-    mapFiles: ['dist/extension.js.map', 'dist/report-client.js.map'],
+    mapFiles: ['dist/extension.js.map', 'dist/report-client.js.map', 'dist/plan-client.js.map'],
     outFile: 'THIRD-PARTY-NOTICES.md',
   });
 }

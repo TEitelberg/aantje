@@ -9,6 +9,8 @@ name: Release
 # Open VSX gets a version only when the owner releases it on purpose: a pre-release on GitHub is turned into a release
 # (Releases, edit, remove the tick of "Set as a pre-release"). That event starts the last job, which publishes the two
 # packages of the release. A release that the workflow created itself could not start it, its token triggers no events.
+#
+# Only TEitelberg/aantje releases. The same file lives in the development repository, where every job is skipped.
 on:
   push:
     branches: [main]
@@ -32,7 +34,7 @@ concurrency:
 
 jobs:
   version:
-    if: github.event_name != 'release'
+    if: github.repository == 'TEitelberg/aantje' && github.event_name != 'release'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -122,7 +124,7 @@ jobs:
         run: gh release create "v$VERSION" aantje-*.vsix --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "v$VERSION" --generate-notes --prerelease
 
   open-vsx:
-    if: github.event_name == 'release'
+    if: github.repository == 'TEitelberg/aantje' && github.event_name == 'release'
     runs-on: ubuntu-latest
     permissions:
       contents: read

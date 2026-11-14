@@ -1,13 +1,16 @@
 import type { SnapshotId } from '../catalog/model';
 import { qualifiedName } from '../catalog/ddl';
-import { isAzureLake } from '../connections/profile';
+import { signsInWithEntra } from '../connections/profile';
 import type { ConnectionProfile } from '../connections/profile';
-import { AantjeError } from '../errors';
 import { firstSchemaQuery } from '../data/attach';
 import { MEMORY_LIMIT } from '../data/instance';
 import { PREVIEW_LIMIT } from '../data/types';
 import type { S3Settings, TableRef } from '../data/types';
-import { inlineCode } from '../tree/format';
+import { inlineCode } from '../markdown';
+import { storedValueNames } from '../storage/config';
+import type { AzureStorage, OneLakeStorage, StorageConfig, StoredValueName } from '../storage/config';
+import { storageExtensions, storageSecretTemplate } from '../storage/statements';
+import type { SecretTemplateField } from '../storage/statements';
 import { pyString } from './python';
 
 export interface NotebookCell {
@@ -25,8 +28,13 @@ export interface NotebookSpec {
   readonly snapshot?: SnapshotId;
   /** The snapshot the tree showed; informational. */
   readonly shownSnapshot?: SnapshotId;
-  /** Settings values, never credentials. */
+  /** The `aantje.s3.*` settings values, never credentials: what a connection without `storage` uses. */
   readonly s3: S3Settings;
+  /**
+   * The storage of the connection (`effectiveStorage`), without any secret value. With it the notebook mirrors the
+   * secret of the engine and `s3` is ignored; without it the notebook behaves as before (S3 from the settings).
+   */
+  readonly storage?: StorageConfig;
   readonly extensionDirectory?: string;
   /** `YYYY-MM-DD`; passed in so that the function stays pure. */
   readonly generatedOn: string;
@@ -55,30 +63,17 @@ const SECRET_VARIABLES: Readonly<Record<ConnectionProfile['kind'], string | unde
   quack: 'QUACK_TOKEN',
 };
 
-/**
- * The cells attach the catalog and read its data files with plain DuckDB. An Azure DuckLake also needs the azure
- * extension, a token for the storage account and, with Entra, a token instead of a password; the cells do none of it,
- * so the notebook of such a lake would fail at the attach or at the first query. Refused before anything is read.
- */
-export function assertNotebookSupported(profile: ConnectionProfile): void {
-  if (isAzureLake(profile)) {
-    throw new AantjeError(
-      'INVALID_PROFILE',
-      `Create Notebook does not support the Azure DuckLake "${profile.name}" yet: the notebook cannot sign in to its PostgreSQL server or read its storage account. Use the SQL editor, or the Azure notebooks of the Docker stack (Copy Azure Config).`,
-    );
-  }
-}
-
 /** Builds the cells of a notebook that queries one table; its attach SQL mirrors `src/data/attach.ts`. */
 export function buildNotebook(spec: NotebookSpec): NotebookCell[] {
-  assertNotebookSupported(spec.profile);
   const tableName = `${spec.table.schema}.${spec.table.table}`;
+  const entra = entraSignIn(spec);
   return [
     markdown(titleCell(spec, tableName)),
-    code(['%pip install "duckdb>=2.0.0" pandas']),
+    code([`%pip install "duckdb>=2.0.0" pandas${entra ? ' azure-identity' : ''}`]),
     code(importsCell()),
     code(configurationCell(spec)),
-    code(connectCell(spec.profile)),
+    ...(entra ? [code(signInCell(spec, entra))] : []),
+    code(connectCell(spec)),
     markdown(askCell()),
     code(queryCell(spec.table)),
     markdown(nextStepsCell(spec.profile)),
@@ -102,7 +97,7 @@ function titleCell(spec: NotebookSpec, tableName: string): string[] {
       ? `follows the latest snapshot${shown}`
       : `pinned to snapshot ${spec.snapshot}`;
   const secretSource =
-    spec.profile.kind === 'postgres'
+    spec.profile.kind === 'postgres' && !signsInWithEntra(spec.profile)
       ? 'The PostgreSQL password is read from the environment variable `PGPASSWORD` or asked for when you run the configuration cell. '
       : spec.profile.kind === 'quack'
         ? 'The token of the Quack server is read from the environment variable `QUACK_TOKEN` or asked for when you run the configuration cell. '
@@ -116,7 +111,7 @@ function titleCell(spec: NotebookSpec, tableName: string): string[] {
     `- **Snapshot:** ${snapshot}. Change \`SNAPSHOT\` in the configuration cell to read another snapshot.`,
     '- **Kernel:** select a Python 3 kernel in the Jupyter extension. The first code cell installs `duckdb` and `pandas`; if the import fails afterwards, restart the kernel and run the cells again from the second code cell.',
     '- **Run:** run the cells from top to bottom, then edit `QUERY` to ask your own question.',
-    `- **Secrets:** this notebook stores no password. ${secretSource}S3 credentials come from \`AWS_ACCESS_KEY_ID\` and \`AWS_SECRET_ACCESS_KEY\`; a missing one is asked for when an S3 endpoint is configured. The connection cell deletes the secrets from the kernel after use, so run the cells from the configuration cell on.`,
+    `- **Secrets:** this notebook stores no password. ${secretSource}${storageSecretsText(spec)}The connection cell deletes the secrets from the kernel after use, so run the cells from the configuration cell on.`,
   ];
 }
 
@@ -137,13 +132,22 @@ function importsCell(): string[] {
   ];
 }
 
-function configurationCell({ profile, snapshot, s3, extensionDirectory }: NotebookSpec): string[] {
+function configurationCell({ profile, snapshot, s3, storage, extensionDirectory }: NotebookSpec): string[] {
   return [
     ...catalogVariables(profile),
     '',
     '# Snapshot to read; None follows the latest snapshot.',
     `SNAPSHOT = ${snapshot ?? 'None'}`,
     '',
+    ...(storage === undefined ? s3Variables(s3) : storageVariables(storage)),
+    '',
+    '# Where DuckDB keeps its extensions; None uses the DuckDB default and downloads them on first use.',
+    `EXTENSION_DIRECTORY = ${optionalString(extensionDirectory)}`,
+  ];
+}
+
+function s3Variables(s3: S3Settings): string[] {
+  return [
     '# S3: only needed when the data files of the table are stored on S3.',
     '# AWS without an endpoint: set the environment variables, or assign S3_KEY_ID and S3_SECRET_KEY with getpass.getpass().',
     `S3_ENDPOINT = ${optionalString(s3.endpoint)}`,
@@ -155,13 +159,19 @@ function configurationCell({ profile, snapshot, s3, extensionDirectory }: Notebo
     "    S3_KEY_ID = getpass.getpass('S3 access key id: ')",
     'if S3_ENDPOINT and not S3_SECRET_KEY:',
     "    S3_SECRET_KEY = getpass.getpass('S3 secret access key: ')",
-    '',
-    '# Where DuckDB keeps its extensions; None uses the DuckDB default and downloads them on first use.',
-    `EXTENSION_DIRECTORY = ${optionalString(extensionDirectory)}`,
   ];
 }
 
 function catalogVariables(profile: ConnectionProfile): string[] {
+  if (signsInWithEntra(profile)) {
+    return catalogVariablesOf(profile).map((line) =>
+      line.startsWith('PG_PASSWORD = ') ? 'PG_PASSWORD = None  # the sign-in cell sets a token' : line,
+    );
+  }
+  return catalogVariablesOf(profile);
+}
+
+function catalogVariablesOf(profile: ConnectionProfile): string[] {
   if (profile.kind === 'quack') {
     return [
       '# DuckLake catalog (DuckDB + Quack server).',
@@ -196,11 +206,13 @@ function optionalString(value: string | undefined): string {
   return trimmed === '' ? 'None' : pyString(trimmed);
 }
 
-function connectCell(profile: ConnectionProfile): string[] {
-  const extensions = ['ducklake', ...CATALOG_EXTENSIONS[profile.kind]]
-    .map((name) => pyString(name))
-    .join(', ');
+function connectCell({ profile, storage }: NotebookSpec): string[] {
   const secret = SECRET_VARIABLES[profile.kind];
+  const storageStatements = storage === undefined ? [] : storageExtensionStatements(storage).all;
+  const catalogExtensions = CATALOG_EXTENSIONS[profile.kind].filter(
+    (name) => !storageStatements.includes(`LOAD ${name}`),
+  );
+  const extensions = ['ducklake', ...catalogExtensions].map((name) => pyString(name)).join(', ');
   return [
     '# Like the extension: no secrets written to disk, a private temporary directory, a memory limit.',
     "TEMP_DIRECTORY = tempfile.mkdtemp(prefix='aantje-duckdb-')",
@@ -210,15 +222,25 @@ function connectCell(profile: ConnectionProfile): string[] {
     "    config['extension_directory'] = EXTENSION_DIRECTORY",
     'con = duckdb.connect(config=config)',
     '',
-    'use_s3 = bool(S3_ENDPOINT or (S3_KEY_ID and S3_SECRET_KEY))',
-    `extensions = [${extensions}]`,
-    "if use_s3 and 'httpfs' not in extensions:",
-    "    extensions.append('httpfs')",
-    'for extension in extensions:',
-    "    con.execute('INSTALL ' + extension)",
-    "    con.execute('LOAD ' + extension)",
-    '',
-    ...s3SecretLines(),
+    ...(storage === undefined
+      ? [
+          'use_s3 = bool(S3_ENDPOINT or (S3_KEY_ID and S3_SECRET_KEY))',
+          `extensions = [${extensions}]`,
+          "if use_s3 and 'httpfs' not in extensions:",
+          "    extensions.append('httpfs')",
+          'for extension in extensions:',
+          "    con.execute('INSTALL ' + extension)",
+          "    con.execute('LOAD ' + extension)",
+          '',
+          ...s3SecretLines(),
+        ]
+      : [
+          `extensions = [${extensions}]`,
+          'for extension in extensions:',
+          "    con.execute('INSTALL ' + extension)",
+          "    con.execute('LOAD ' + extension)",
+          ...storageSetupLines(storage, notebookSecretName(profile.id)),
+        ]),
     ...(profile.kind === 'postgres' ? postgresSecretLines() : []),
     ...(profile.kind === 'quack' ? quackSecretLines() : []),
     '',
@@ -227,10 +249,17 @@ function connectCell(profile: ConnectionProfile): string[] {
     "con.execute('SET autoinstall_known_extensions = false')",
     "con.execute('SET autoload_known_extensions = false')",
     ...useLakeLines(),
-    '',
-    '# The kernel keeps no secrets after the connection is made.',
-    `del ${secret ? `${secret}, ` : ''}S3_KEY_ID, S3_SECRET_KEY`,
+    ...deleteLines([
+      ...(secret ? [secret] : []),
+      ...(storage === undefined ? ['S3_KEY_ID', 'S3_SECRET_KEY'] : storageVariableNames(storage)),
+    ]),
   ];
+}
+
+function deleteLines(names: readonly string[]): string[] {
+  return names.length === 0
+    ? []
+    : ['', '# The kernel keeps no secrets after the connection is made.', `del ${names.join(', ')}`];
 }
 
 // `USE lake` fails for a lake without the schema `main`; its first schema becomes the default then, as in the SQL editor.
@@ -354,4 +383,235 @@ function nextStepsCell(profile: ConnectionProfile): string[] {
     '- Print the result as text with `con.sql(QUERY).show()` or fetch it as Python tuples with `con.sql(QUERY).fetchall()`.',
     '- Time travel: set `SNAPSHOT` in the configuration cell and run the cells from there on. List the snapshots with `con.sql("SELECT * FROM ducklake_snapshots(\'lake\')").df()`.',
   ];
+}
+
+// --- The storage of a connection -----------------------------------------------------------------------------------
+//
+// The notebook creates the same secret as the engine. `storageSecretTemplate` (src/storage/statements.ts) returns the
+// statement of the engine as fields with the secret values left out; `secretSqlLines` turns them into a Python function
+// that puts the values of variables back in, so the statement text comes from the one set of builders and
+// notebook-run.test.ts can compare it with `setupStatements`. The values come from environment variables or a prompt
+// in the configuration cell, or from the device code sign-in cell; they never appear in a cell. Only the name of the
+// secret differs from the engine's: one per connection.
+
+const VALUE_VARIABLES: Readonly<Record<StoredValueName | 'accessToken', string>> = {
+  keyId: 'STORAGE_KEY_ID',
+  secretKey: 'STORAGE_SECRET_KEY',
+  sessionToken: 'STORAGE_SESSION_TOKEN',
+  connectionString: 'STORAGE_CONNECTION_STRING',
+  accountKey: 'STORAGE_ACCOUNT_KEY',
+  sasToken: 'STORAGE_SAS_TOKEN',
+  clientSecret: 'STORAGE_CLIENT_SECRET',
+  accessToken: 'STORAGE_ACCESS_TOKEN',
+};
+
+const VALUE_ENVIRONMENT: Readonly<Record<StoredValueName, string>> = {
+  keyId: 'AWS_ACCESS_KEY_ID',
+  secretKey: 'AWS_SECRET_ACCESS_KEY',
+  sessionToken: 'AWS_SESSION_TOKEN',
+  connectionString: 'AZURE_STORAGE_CONNECTION_STRING',
+  accountKey: 'AZURE_STORAGE_ACCOUNT_KEY',
+  sasToken: 'AZURE_STORAGE_SAS_TOKEN',
+  clientSecret: 'AZURE_CLIENT_SECRET',
+};
+
+// A session token is optional: no prompt, and the secret leaves the field out when it is empty.
+const VALUE_PROMPTS: Readonly<Partial<Record<StoredValueName, string>>> = {
+  keyId: 'Storage access key id: ',
+  secretKey: 'Storage secret access key: ',
+  connectionString: 'Azure storage connection string: ',
+  accountKey: 'Azure storage account key: ',
+  sasToken: 'Azure storage SAS token: ',
+  clientSecret: 'Azure client secret: ',
+};
+
+const STORAGE_SCOPE = 'https://storage.azure.com/.default';
+const POSTGRES_SCOPE = 'https://ossrdbms-aad.database.windows.net/.default';
+
+/** The secret of a notebook: one name per connection, a plain identifier whatever the id of the profile is. */
+export function notebookSecretName(profileId: string): string {
+  const id = profileId
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 40);
+  return id === '' ? 'aantje_storage' : `aantje_storage_${id}`;
+}
+
+interface EntraSignIn {
+  /** The storage is read with the token. */
+  readonly storage: boolean;
+  /** The PostgreSQL password is a token. */
+  readonly postgres: boolean;
+  readonly tenant: string | undefined;
+}
+
+const entraStorage = (storage: StorageConfig | undefined): storage is AzureStorage | OneLakeStorage =>
+  (storage?.kind === 'azure' || storage?.kind === 'onelake') && storage.signIn === 'entra';
+
+// The kernel cannot receive the token of the VS Code account, so an Entra sign-in asks for a device code.
+function entraSignIn({ profile, storage }: NotebookSpec): EntraSignIn | undefined {
+  const forStorage = entraStorage(storage);
+  const postgres = signsInWithEntra(profile);
+  if (!forStorage && !postgres) {
+    return undefined;
+  }
+  const tenant =
+    (entraStorage(storage) ? storage.tenant : undefined) ??
+    (profile.kind === 'postgres' ? profile.azureTenant : undefined);
+  return { storage: forStorage, postgres, tenant };
+}
+
+function storageVariableNames(storage: StorageConfig): string[] {
+  return [
+    ...storedValueNames(storage).map((name) => VALUE_VARIABLES[name]),
+    ...(entraStorage(storage) ? [VALUE_VARIABLES.accessToken] : []),
+  ];
+}
+
+function storageVariables(storage: StorageConfig): string[] {
+  const lines = storedValueNames(storage).flatMap((name) => {
+    const variable = VALUE_VARIABLES[name];
+    const environment = `os.environ.get(${pyString(VALUE_ENVIRONMENT[name])})`;
+    const prompt = VALUE_PROMPTS[name];
+    const read =
+      prompt === undefined ? environment : `${environment} or getpass.getpass(${pyString(prompt)})`;
+    return [
+      `${variable} = ${read}`,
+      ...(name === 'sasToken' ? [`${variable} = ${variable}.removeprefix('?')`] : []),
+      // Both values go into a connection string whose parts a `;` would separate.
+      ...(name === 'accountKey' || name === 'sasToken'
+        ? [
+            `if ';' in ${variable}:`,
+            "    raise ValueError('A semicolon would split the connection string of the storage account.')",
+          ]
+        : []),
+    ];
+  });
+  return [
+    `# Storage (${storage.kind}): the secret values come from environment variables, else they are asked for here.`,
+    ...(lines.length === 0 ? ['# This sign-in needs no secret value here.'] : lines),
+  ];
+}
+
+function storageExtensionStatements(storage: StorageConfig): {
+  all: string[];
+  common: string[];
+  linux: string[];
+} {
+  const resolved = { config: storage, values: {} };
+  const common = storageExtensions(resolved, 'win32');
+  const all = storageExtensions(resolved, 'linux');
+  return { all, common, linux: all.filter((statement) => !common.includes(statement)) };
+}
+
+function storageSetupLines(storage: StorageConfig, secretName: string): string[] {
+  const { common, linux } = storageExtensionStatements(storage);
+  const hasSecret = storageSecretTemplate(storage, secretName) !== undefined;
+  return [
+    ...(linux.length === 0 ? [] : ['import sys', '']),
+    ...common.map((statement) => `con.execute(${pyString(statement)})`),
+    ...(linux.length === 0
+      ? []
+      : [
+          "if sys.platform.startswith('linux'):",
+          ...linux.map((statement) => `    con.execute(${pyString(statement)})`),
+        ]),
+    ...(entraStorage(storage) || !hasSecret ? [] : ['', ...secretSqlLines(storage, secretName), '']),
+    ...(hasSecret ? ['con.execute(storage_secret_sql())'] : []),
+    '',
+  ];
+}
+
+// The Python function that returns the secret statement; empty when the storage has none.
+function secretSqlLines(storage: StorageConfig, secretName: string): string[] {
+  const template = storageSecretTemplate(storage, secretName);
+  if (template === undefined) {
+    return [];
+  }
+  return [
+    'def storage_secret_sql():',
+    '    fields = []',
+    ...template.fields.flatMap((field) => {
+      const append = `fields.append(${fieldExpression(field)})`;
+      const [first] = field.values;
+      return field.optional && first !== undefined
+        ? [`    if ${VALUE_VARIABLES[first]}:`, `        ${append}`]
+        : [`    ${append}`];
+    }),
+    `    return ${pyString(`CREATE OR REPLACE SECRET ${template.name} (`)} + ', '.join(fields) + ')'`,
+  ];
+}
+
+// A value between two quotes is the whole SQL literal; inside a longer literal only its escaped text is put in.
+function fieldExpression({ parts, values }: SecretTemplateField): string {
+  const terms: string[] = [];
+  let pending = parts[0] ?? '';
+  values.forEach((value, index) => {
+    const next = parts[index + 1] ?? '';
+    const variable = VALUE_VARIABLES[value];
+    if (pending.endsWith("'") && next.startsWith("'")) {
+      terms.push(...(pending.length > 1 ? [pyString(pending.slice(0, -1))] : []), `lit(${variable})`);
+      pending = next.slice(1);
+    } else {
+      terms.push(...(pending === '' ? [] : [pyString(pending)]), `lit(${variable})[1:-1]`);
+      pending = next;
+    }
+  });
+  if (pending !== '') {
+    terms.push(pyString(pending));
+  }
+  return terms.join(' + ');
+}
+
+function signInCell(spec: NotebookSpec, entra: EntraSignIn): string[] {
+  const { storage } = spec;
+  return [
+    '# Microsoft Entra sign-in with a device code: the kernel cannot use the account of VS Code. Open the address that is',
+    '# shown, enter the code and sign in with the account that may read the data. This needs azure-identity (first cell);',
+    '# a tenant that blocks the device code flow cannot be used from a notebook.',
+    'from azure.identity import DeviceCodeCredential',
+    '',
+    `credential = DeviceCodeCredential(tenant_id=${optionalString(entra.tenant)})`,
+    ...(entra.storage && storage !== undefined
+      ? [
+          `STORAGE_ACCESS_TOKEN = credential.get_token(${pyString(STORAGE_SCOPE)}).token`,
+          '',
+          '',
+          ...secretSqlLines(storage, notebookSecretName(spec.profile.id)),
+          '',
+          '',
+          'def refresh_storage_secret():',
+          '    """Replace the storage secret with a new token; DuckDB does not renew a token during a long session."""',
+          '    global STORAGE_ACCESS_TOKEN',
+          `    STORAGE_ACCESS_TOKEN = credential.get_token(${pyString(STORAGE_SCOPE)}).token`,
+          '    con.execute(storage_secret_sql())',
+        ]
+      : []),
+    ...(entra.postgres
+      ? [
+          '',
+          '# The PostgreSQL server takes a token of the same sign-in as the password (valid for about an hour).',
+          `PG_PASSWORD = credential.get_token(${pyString(POSTGRES_SCOPE)}).token`,
+        ]
+      : []),
+  ];
+}
+
+function storageSecretsText({ storage, profile }: NotebookSpec): string {
+  const entra = signsInWithEntra(profile)
+    ? 'The PostgreSQL server takes a token of your Microsoft sign-in, which the sign-in cell asks for with a device code. '
+    : '';
+  if (storage === undefined) {
+    return `${entra}S3 credentials come from \`AWS_ACCESS_KEY_ID\` and \`AWS_SECRET_ACCESS_KEY\`; a missing one is asked for when an S3 endpoint is configured. `;
+  }
+  if (entraStorage(storage)) {
+    return `${entra}The storage is read with your Microsoft sign-in: the sign-in cell shows a device code to enter in the browser, and \`refresh_storage_secret()\` replaces the token, which is valid for about an hour. `;
+  }
+  const names = storedValueNames(storage).map((name) => `\`${VALUE_ENVIRONMENT[name]}\``);
+  return `${entra}${
+    names.length === 0
+      ? 'The storage needs no secret value here: it signs in with the credential chain or the certificate of this machine. '
+      : `The storage secrets come from the environment variables ${names.join(', ')}; a missing one is asked for in the configuration cell. `
+  }`;
 }

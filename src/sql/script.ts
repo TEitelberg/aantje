@@ -70,6 +70,34 @@ export function statementSpans<T extends { readonly type: string }>(
   return spans;
 }
 
+/** What Run Query runs: the selection unless it is blank, else the whole document. */
+export function scriptToRun(
+  text: string,
+  selection: { readonly start: number; readonly end: number },
+): { text: string; base: number } {
+  const selected = text.slice(selection.start, selection.end);
+  return selected.trim() === '' ? { text, base: 0 } : { text: selected, base: selection.start };
+}
+
+/** Where the statement of a span is: from its first token to the end of its last, without the terminator. */
+export function spanRange<T extends { readonly start: number; readonly end: number }>(
+  span: readonly [T, ...T[]],
+): { start: number; end: number } {
+  return { start: span[0].start, end: (span.at(-1) ?? span[0]).end };
+}
+
+/**
+ * The statement at the offset, as Run Statement at Cursor and the lenses pick it: text between statements belongs to the
+ * one before, an offset before all statements picks the first. Undefined for a text without a statement.
+ */
+export function statementSpanAt<T extends { readonly type: string; readonly start: number }>(
+  tokens: readonly T[],
+  offset: number,
+): StatementSpan<T> | undefined {
+  const spans = statementSpans(tokens);
+  return spans.findLast(({ tokens: [first] }) => first.start <= offset) ?? spans[0];
+}
+
 /** Splits a script into statements at terminators; comments and empty statements are dropped. */
 export function splitScript(script: string, tokens: readonly Token[]): ScriptStatement[] {
   const unitOf = utf16Offsets(script);

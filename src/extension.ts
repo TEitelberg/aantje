@@ -1,11 +1,11 @@
 import { join } from 'node:path';
 import * as vscode from 'vscode';
 import { registerActivityCommand } from './activity/commands.vscode';
+import { nodeOf, rootOf } from './actions';
 import { createActiveConnection } from './active-connection.vscode';
 import { registerAdvisorCommand } from './advisor/commands.vscode';
 import { registerAzureCommands } from './azure/commands.vscode';
 import { createAzureAuth } from './azure/auth.vscode';
-import { requireUserName } from './azure/jwt';
 import { PendingLakes } from './azure/pending';
 import { LakeRegistry } from './azure/registry';
 import { openCatalog } from './catalog/open';
@@ -13,12 +13,17 @@ import { commandRegistrar } from './command.vscode';
 import type { Register } from './command.vscode';
 import { registerCommands } from './commands.vscode';
 import { SchemaDocuments } from './compare.vscode';
+import { registerConnectionCommands } from './connections/commands.vscode';
 import { openWithPassword } from './connections/connect';
-import { createSecretsPort, createSettingsPort } from './connections/ports.vscode';
-import { isAzureLake, secretLabel } from './connections/profile';
+import { askPassword, createSecretsPort, createSettingsPort } from './connections/ports.vscode';
 import type { ConnectionProfile } from './connections/profile';
 import { ConnectionStore } from './connections/store';
-import { createDataAccessFactory, readDataSettings } from './data/access.vscode';
+import {
+  createDataAccessFactory,
+  readDataSettings,
+  testAccess as testStorageAccess,
+} from './data/access.vscode';
+import type { StorageValues } from './storage/config';
 import { createDataActions, registerDataCommands } from './data/commands.vscode';
 import { S3CredentialStore } from './data/credentials';
 import { describeRelation } from './data/engine';
@@ -26,6 +31,8 @@ import { resolveViewColumns } from './data/resolve';
 import { maxRowsOf, timeoutMsOf } from './data/settings';
 import { confirmViews, createTrustStore } from './data/trust.vscode';
 import { registerDependenciesCommand } from './dependencies/commands.vscode';
+import { openSqlParser } from './dependencies/parser';
+import { registerGenerateScripts } from './generate-scripts/commands.vscode';
 import { createGridDeps, GridPanels } from './grid/grid.vscode';
 import type { GridDeps } from './grid/grid.vscode';
 import { ResultsPanels } from './grid/results.vscode';
@@ -37,30 +44,33 @@ import { createOutputChannelLogger } from './log.vscode';
 import { watchProfiles } from './profile-watch.vscode';
 import { createPropertiesReport } from './properties-report/commands.vscode';
 import type { PropertiesReport } from './properties-report/model';
+import { registerRestoreCommands } from './restore/commands.vscode';
+import { registerSchemaCompare } from './schema-compare/commands.vscode';
 import { registerSchemaHistoryCommand } from './schema-history/commands.vscode';
 import { reportPanels } from './shell/host.vscode';
 import type { ReportHostEnv } from './shell/host.vscode';
 import type { ReportCommandEnv } from './shell/report-port.vscode';
 import type { TableActionEnv } from './shell/table-actions.vscode';
+import { registerScriptCommands } from './script-commands.vscode';
 import { disposeAll } from './shutdown';
 import { registerSnapshotReportCommand } from './snapshot-report/commands.vscode';
-import { catalogCache, QueryEditors, trustedViewColumns } from './sql/editor';
+import { catalogCache, trustedViewColumns } from './sql/catalog-cache';
+import { QueryEditors } from './sql/editor';
 import type { ExplorerPort } from './sql/editor';
-import {
-  createQueryUi,
-  documentKey,
-  openForConnection,
-  registerQueryEditor,
-  revealStatement,
-} from './sql/editor.vscode';
+import { createQueryUi, openForConnection, registerQueryEditor, revealStatement } from './sql/editor.vscode';
+import { documentKey, documentOfKey, editorOf } from './sql/glue.vscode';
+import { registerLenses } from './sql/lens.vscode';
 import { openLanguageService } from './sql/language';
 import type { LanguageService } from './sql/language';
+import { createQueryHistory, registerQueryHistory } from './sql/history.vscode';
+import { registerSqlFormatting } from './sql/format.vscode';
 import { registerSqlLanguage } from './sql/language.vscode';
 import type { ResultsView } from './sql/results';
 import { openSqlSession } from './sql/session';
 import { registerStatisticsCommand, showStatistics } from './stats/commands.vscode';
 import { statisticsKind } from './stats/kind';
 import { createStorageReport } from './storage-report/commands.vscode';
+import { registerTimeTravelCommands } from './time-travel.vscode';
 import { CatalogTree } from './tree/model';
 import { CatalogTreeProvider } from './tree/provider.vscode';
 import type { TreeNode } from './tree/refs';
@@ -101,6 +111,14 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi | undef
   const shared: Shared = { logger, register: commandRegistrar(logger), gridDeps: createGridDeps(logger) };
   const sql = createSqlEditors(context, core, shared);
   const explorer = createExplorer(context, core, sql.editors, logger);
+  context.subscriptions.push(
+    ...registerQueryHistory({
+      history: core.history,
+      tree: core.catalogTree,
+      editors: sql.editors,
+      register: shared.register,
+    }),
+  );
   const env = createCommandEnv(context, core, explorer, sql.editors, shared);
   registerSqlEditing(context, core, sql, shared);
   registerExplorerCommands(context, core, explorer, env, shared);
@@ -161,13 +179,22 @@ function createSqlEditors(context: vscode.ExtensionContext, core: Core, { logger
       revealStatement: (key, offset, length) => {
         if (editors) revealStatement(editors, key, offset, length, logger);
       },
+      openQuery: (key) => {
+        const script = editors?.lastScript(key);
+        const connectionId = editors?.connectionOf(key);
+        if (editors && script && connectionId) {
+          openForConnection(editors, script.text, connectionId).catch((error: unknown) => {
+            logger.error('Opening the statement as a new query failed.', error);
+          });
+        }
+      },
       setContext,
     },
     gridDeps,
   );
   context.subscriptions.push({ dispose: () => panels.dispose() });
   const results = { current: panels as ResultsView };
-  editors = createQueryEditors(core.store, core.dataAccess, results, {
+  editors = createQueryEditors(core, results, {
     status: (id) => tree.state(id).status,
     disconnect: (id) => tree.disconnect(id),
     connect: (id) => void tree.connect(id),
@@ -179,10 +206,7 @@ function createSqlEditors(context: vscode.ExtensionContext, core: Core, { logger
 /** The tree view, the connection that commands without a node act on, and the watch on `aantje.connections`. */
 function createExplorer(context: vscode.ExtensionContext, core: Core, editors: QueryEditors, logger: Logger) {
   const { store, catalogTree: tree } = core;
-  const provider = new CatalogTreeProvider(tree, (id) => {
-    const profile = store.get(id);
-    return profile !== undefined && isAzureLake(profile);
-  });
+  const provider = new CatalogTreeProvider(tree, (listener) => core.history.onDidChange(listener));
   const view = vscode.window.createTreeView('aantje.catalogs', {
     treeDataProvider: provider,
     showCollapseAll: true,
@@ -190,7 +214,7 @@ function createExplorer(context: vscode.ExtensionContext, core: Core, editors: Q
   const connection = createActiveConnection({ store, tree, view });
   const profiles = watchProfiles({ store, tree, editors, logger, onChanged: connection.updateStatus });
   context.subscriptions.push(provider, view, connection.disposable, profiles.disposable);
-  return { view, connection, profiles };
+  return { view, connection, profiles, editors };
 }
 
 /** What the commands share, built once: the panels, the data actions and the environments of the reports. */
@@ -224,12 +248,20 @@ function createCommandEnv(
     showStatistics: showTableStatistics,
   };
   const { storage, properties } = createReportPair(host, tableActions, store);
+  // One SQL parser for the commands that parse view SQL and tokenize scripts; it runs nothing and opens on first use.
+  const parser = openSqlParser();
   context.subscriptions.push(
     { dispose: () => grid.dispose() },
     { dispose: () => statisticsPanels.dispose() },
     properties,
     storage,
     schemaDocuments,
+    {
+      dispose: () =>
+        void parser
+          .dispose()
+          .catch((error: unknown) => logger.error('Closing the SQL parser failed.', error)),
+    },
   );
   const reports: ReportCommandEnv = { ...host, actions: dataActions, schemaDocuments, register };
   return {
@@ -241,6 +273,7 @@ function createCommandEnv(
     storage,
     properties,
     reports,
+    parser,
   };
 }
 
@@ -280,23 +313,14 @@ function registerSqlEditing(
   { editors, service, panels, setContext }: SqlEditors,
   { logger, register }: Shared,
 ): void {
-  const { store, catalogTree: tree, azureAuth } = core;
-  // Completion reads view columns while the user types: the access never shows a sign-in.
-  const quietAccess = createDataAccessFactory(
-    store,
-    core.credentials,
-    queryTimeoutMs,
-    logger,
-    (account, tenant) => azureAuth.storageAccess(account, tenant, true),
-    (tenant) => azureAuth.postgresToken(tenant, true),
-  );
+  const { store, catalogTree: tree } = core;
   const catalogs = catalogCache({
     reader: (id) => tree.reader(id),
     snapshot: (id) => tree.state(id).latestSnapshot,
     views: trustedViewColumns({
       store,
       trust: core.trust,
-      dataAccess: quietAccess,
+      dataAccess: core.quietAccess,
       describe: describeRelation,
       log: logger,
     }),
@@ -309,7 +333,7 @@ function registerSqlEditing(
     { dispose: () => catalogs.invalidate() },
     tree.onDidChange(() => catalogs.invalidate()),
     editors.onDidChange(({ key, association }) => {
-      const document = vscode.workspace.textDocuments.find((candidate) => documentKey(candidate) === key);
+      const document = documentOfKey(key);
       if (association && document) connectionChanged.fire(document);
     }),
     registerSqlLanguage({
@@ -328,12 +352,13 @@ function registerSqlEditing(
       editors,
       tree,
       store,
-      service,
       logger,
       register,
       setContext,
       results: panels,
     }),
+    ...registerLenses({ editors, service, logger, editorOf, connectionOf }),
+    ...registerSqlFormatting({ service, logger, connectionOf }),
   );
 }
 
@@ -341,25 +366,41 @@ function registerSqlEditing(
 function registerExplorerCommands(
   context: vscode.ExtensionContext,
   core: Core,
-  { view, connection, profiles }: Explorer,
+  { view, connection, profiles, editors }: Explorer,
   env: CommandEnv,
   { logger, register }: Shared,
 ): void {
   const { store, catalogTree: tree, trust, credentials } = core;
   context.subscriptions.push(
-    ...registerCommands({
+    ...registerConnectionCommands({
       tree,
       store,
       view,
       logger,
       connect: core.connect,
-      entraUser: async (tenant) => requireUserName(await core.azureAuth.postgresToken(tenant)),
+      testAccess: core.testAccess,
+      editors,
+      entraUser: (tenant) => core.azureAuth.entraUser(tenant),
       trust,
-      properties: env.properties,
-      storage: env.storage,
-      schemaDocuments: env.schemaDocuments,
+      history: core.history,
       active: connection.active,
       editing: profiles.editing,
+      register,
+    }),
+    ...registerCommands({
+      tree,
+      store,
+      view,
+      properties: env.properties,
+      storage: env.storage,
+      active: connection.active,
+      register,
+    }),
+    ...registerTimeTravelCommands({
+      tree,
+      store,
+      active: connection.active,
+      schemaDocuments: env.schemaDocuments,
       register,
     }),
     ...registerDataCommands({
@@ -379,11 +420,35 @@ function registerExplorerCommands(
       dataAccess: core.dataAccess,
       connect: core.connect,
       trust,
+      history: core.history,
       register,
       logger,
     }),
     ...registerStatisticsCommand({ ...env.statistics, register }),
     ...registerReportCommands(core, view, env),
+    ...registerSchemaCompare({
+      tree,
+      store,
+      active: connection.active,
+      schemaDocuments: env.schemaDocuments,
+      openSql: env.dataActions.openSql,
+      logger,
+      register,
+      parser: env.parser,
+    }),
+    ...registerGenerateScripts({
+      tree,
+      openSql: env.dataActions.openSql,
+      logger,
+      register,
+      parser: env.parser,
+    }),
+    ...registerRestoreCommands({ tree, openSql: env.dataActions.openSql, register, parser: env.parser }),
+    ...registerScriptCommands({ tree, openSql: env.dataActions.openSql, register }),
+    // The details page of aantje in the Extensions view: README, features, changelog and version.
+    register('aantje.showInfo', async () => {
+      await vscode.commands.executeCommand('extension.open', context.extension.id);
+    }),
   );
 }
 
@@ -399,7 +464,12 @@ function registerReportCommands(
     ...registerActivityCommand(reports),
     ...registerSchemaHistoryCommand(reports),
     ...registerGrowthCommand(reports),
-    ...registerDependenciesCommand({ ...reports, view, showStatistics: env.showTableStatistics }),
+    ...registerDependenciesCommand({
+      ...reports,
+      view,
+      showStatistics: env.showTableStatistics,
+      parser: env.parser,
+    }),
     ...registerHealthCommands({ ...reports, ...tableActions, env: process.env, dataAccess, credentials }),
     ...registerAdvisorCommand({
       ...reports,
@@ -407,13 +477,7 @@ function registerReportCommands(
       dataAccess,
       showStorage: (profile, scope) => storage.show(profile, scope),
       checkHealth: async (connectionId, schemaId) => {
-        const root = reports.tree.roots().find((candidate) => candidate.ref.connectionId === connectionId);
-        const node =
-          root && schemaId !== undefined
-            ? (await reports.tree.children(root)).find(
-                (child) => child.ref.kind === 'schema' && child.ref.schema.id === schemaId,
-              )
-            : root;
+        const node = await nodeOf(reports.tree, connectionId, schemaId);
         await vscode.commands.executeCommand('aantje.checkHealth', node);
       },
     }),
@@ -448,12 +512,45 @@ function createCore(context: vscode.ExtensionContext, secrets: SecretRegistry, l
   const dataAccess = createDataAccessFactory(
     store,
     credentials,
+    store.storage,
     queryTimeoutMs,
     logger,
-    (account, tenant) => azureAuth.storageAccess(account, tenant),
-    (tenant, silent) => azureAuth.postgresToken(tenant, silent),
+    azureAuth,
   );
+  // Completion reads view columns while the user types: this access never shows a sign-in.
+  const quietAccess = createDataAccessFactory(
+    store,
+    credentials,
+    store.storage,
+    queryTimeoutMs,
+    logger,
+    azureAuth,
+    {
+      silent: true,
+    },
+  );
+  // The wizard tests a connection before it is saved: its typed sign-in values replace the stored ones.
+  const testAccess = (
+    profile: ConnectionProfile,
+    password: string | undefined,
+    values: StorageValues | undefined,
+  ) =>
+    testStorageAccess(
+      (typed) =>
+        createDataAccessFactory(
+          store,
+          credentials,
+          typed ? { get: () => Promise.resolve(typed) } : store.storage,
+          queryTimeoutMs,
+          logger,
+          azureAuth,
+        ),
+      profile,
+      password,
+      values,
+    );
   const lakes = new LakeRegistry(context.globalState);
+  const history = createQueryHistory(context.globalState, logger, secrets);
   const pendingLakes = new PendingLakes(context.globalState, createSecretsPort(context.secrets), (value) =>
     secrets.add(value),
   );
@@ -467,10 +564,11 @@ function createCore(context: vscode.ExtensionContext, secrets: SecretRegistry, l
       dataAccess,
       describe: describeRelation,
     }),
+    queryHistory: history,
     logger,
   });
   const refreshRoot = (connectionId: string): void => {
-    const node = catalogTree.roots().find((root) => root.ref.connectionId === connectionId);
+    const node = rootOf(catalogTree, connectionId);
     if (node) catalogTree.refresh(node);
   };
   // Trusting through another path (Select Top 1000 Rows on a view) leaves the Columns folder with the refusal.
@@ -478,21 +576,23 @@ function createCore(context: vscode.ExtensionContext, secrets: SecretRegistry, l
   return {
     store,
     connect,
+    testAccess,
     credentials,
     trust,
     confirmViewsOf,
     dataAccess,
+    quietAccess,
     catalogTree,
     refreshRoot,
     azureAuth,
     lakes,
     pendingLakes,
+    history,
   };
 }
 
 function createQueryEditors(
-  store: ConnectionStore,
-  dataAccess: ReturnType<typeof createDataAccessFactory>,
+  { store, dataAccess, history }: Pick<Core, 'store' | 'dataAccess' | 'history'>,
   results: { current: ResultsView },
   explorer: ExplorerPort,
 ): QueryEditors {
@@ -509,23 +609,10 @@ function createQueryEditors(
     explorer,
     ui: createQueryUi(),
     maxRows: () => maxRowsOf(vscode.workspace.getConfiguration('aantje').get<unknown>('sql.maxRows')),
+    history,
   });
 }
 
 function queryTimeoutMs(): number {
   return timeoutMsOf(vscode.workspace.getConfiguration('aantje').get<unknown>('queryTimeoutSeconds'));
-}
-
-function askPassword(profile: ConnectionProfile, previousRejected: boolean): Promise<string | undefined> {
-  const secret = secretLabel(profile);
-  return Promise.resolve(
-    vscode.window.showInputBox({
-      title: `${secret === 'token' ? 'Token' : 'Password'} for "${profile.name}"`,
-      prompt: previousRejected
-        ? `The stored ${secret} was rejected. Enter the current ${secret}; it is kept in the secret storage.`
-        : `The server asks for a ${secret}. It is kept in the secret storage, not in the settings.`,
-      password: true,
-      ignoreFocusOut: true,
-    }),
-  );
 }

@@ -1,6 +1,6 @@
 import { isArrayOf, isCount, isOneOf, isOptional, isShape, isString } from '../guards';
-import { POINT_KINDS } from '../snapshot-report/model';
-import type { Model, PointKind } from '../snapshot-report/model';
+import { POINT_KINDS } from '../snapshot-changes/model';
+import type { Model, PointKind } from '../snapshot-changes/model';
 import { boundsOf, isBounds, restoredRange } from '../shell/range-state';
 import type { Bounds } from '../shell/range-state';
 import { choices } from './model';

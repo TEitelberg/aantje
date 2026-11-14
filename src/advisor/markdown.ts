@@ -1,9 +1,16 @@
-import { MAINTENANCE_LABEL } from '../maintenance-labels';
+import { MAINTENANCE_LABEL } from '../maintenance/labels';
 import { capRows, code, markdownTable, reportTitle } from '../markdown';
 import { count, files, formatUtc, groupedPlural, tableLabel } from '../shell/model';
 import { expirableLine, expirableNote, scheduledLine } from '../shell/scheduled-text';
 import { lakeWide, scopeSchema } from '../shell/scope';
-import { CANDIDATE_LIMIT, MARKDOWN_RECOMMENDATIONS, policyLines, sizeText, skippedMeasures } from './model';
+import {
+  CANDIDATE_LIMIT,
+  INLINED_FAILED_NOTE,
+  MARKDOWN_RECOMMENDATIONS,
+  policyLines,
+  sizeText,
+  skippedMeasures,
+} from './model';
 import type { AdvisorData, Measured } from './model';
 import { levelText, recommendationsOf, riskText } from './recommend';
 import type { Recommendation } from './recommend';
@@ -121,6 +128,7 @@ export function advisorMarkdown(data: AdvisorData): string {
     ...(data.more
       ? ['', `The lists of tables were cut at ${count(CANDIDATE_LIMIT)} per kind; more tables may qualify.`]
       : []),
+    ...(data.inlinedFailed ? ['', INLINED_FAILED_NOTE] : []),
     '',
   ].join('\n');
 }

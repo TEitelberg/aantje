@@ -1,39 +1,30 @@
-import { lakeScript, tableScript } from '../maintenance';
-import type { MaintenanceKind, TableMaintenance } from '../maintenance';
-import type { CheckId, FindingScope, FixStep, HealthFinding } from './model';
-
-const LAKE_FIXES: Partial<Record<CheckId, MaintenanceKind>> = {
-  'catalog.cleanup-overdue': 'cleanup',
-  'catalog.cleanup-pending': 'cleanup',
-  'catalog.many-snapshots': 'expire',
-  'storage.file-orphaned': 'orphans',
-};
-
-const TABLE_FIXES: Partial<Record<CheckId, TableMaintenance>> = {
-  'catalog.small-files': 'merge',
-  'catalog.large-inlined-data': 'flush',
-};
-
-const STEPS: Partial<Record<MaintenanceKind, FixStep>> = {
-  expire: 'expire',
-  cleanup: 'cleanup',
-  orphans: 'orphans',
-};
+import type { DeletedFiles } from '../catalog/model';
+import { lakeScript, tableScript } from '../maintenance/scripts';
+import { STEP_OF } from '../maintenance/steps';
+import { FIXES } from './model';
+import type { CheckId, FindingScope, HealthFinding } from './model';
 
 /**
- * The maintenance script of a check that maintenance can fix, written by the builders of the Maintenance menu:
- * the destructive calls start as a dry run and keep the real call commented out.
+ * The maintenance script of a check that maintenance can fix (`FIXES`), written by the builders of the Maintenance
+ * menu: the destructive calls start as a dry run and keep the real call commented out. A table script needs the schema
+ * name of the table. `deleted`, the files of the table with deleted rows, puts the rewrite before a merge as the menu
+ * does (null: not readable, which the script says).
  */
 export function maintenanceFix(
   check: CheckId,
   scope: FindingScope,
+  deleted?: DeletedFiles | null,
 ): Pick<HealthFinding, 'fixSql' | 'fixStep'> | undefined {
+  const fix = FIXES[check];
   if (scope.kind === 'table') {
-    const kind = TABLE_FIXES[check];
-    return kind && scope.schema !== ''
-      ? { fixSql: tableScript(kind, scope.schema, scope.name).join('\n'), fixStep: 'compact' }
+    return fix?.level === 'table' && scope.schema !== ''
+      ? {
+          fixSql: tableScript(fix.kind, scope.schema, scope.name, deleted).join('\n'),
+          fixStep: STEP_OF[fix.kind],
+        }
       : undefined;
   }
-  const kind = LAKE_FIXES[check];
-  return kind && { fixSql: lakeScript(kind).join('\n'), fixStep: STEPS[kind] };
+  return fix?.level === 'lake'
+    ? { fixSql: lakeScript(fix.kind).join('\n'), fixStep: STEP_OF[fix.kind] }
+    : undefined;
 }

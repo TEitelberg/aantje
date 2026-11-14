@@ -1,38 +1,25 @@
-import type {
-  CatalogInfo,
-  CatalogReader,
-  ResolvedAction,
-  SchemaInfo,
-  SnapshotId,
-  ViewInfo,
-} from '../catalog/model';
+import type { CatalogInfo, CatalogReader, SchemaInfo, SnapshotId, ViewInfo } from '../catalog/model';
 import type { OpenedCatalog } from '../catalog/open';
 import { isAzureLake } from '../connections/profile';
 import type { ConnectionProfile } from '../connections/profile';
 import type { RelationColumn } from '../data/types';
-import { isAborted } from '../data/aborted';
-import { isAantjeError, userMessageOf } from '../errors';
+import { isAantjeError, isAborted, userMessageOf } from '../errors';
 import { silentLogger } from '../log';
-import { collator } from '../order';
+import { byName } from '../order';
 import type { Logger } from '../log';
-import { changeDetail, columnTagDetail, partitionDetail, sortDetail, tableTagDetail } from './format';
-import type { TreeDetail } from './format';
+import type { QueryHistory } from '../sql/history';
+import { readBelow } from './levels';
+import type { ViewReader } from './levels';
 import {
-  columnNode,
   connectionNodeId,
   connectionPresentation,
-  detailNode,
+  folderId,
   folderNode,
-  macroNode,
   messageNode,
+  queryNodes,
   schemaNode,
-  SNAPSHOT_LIMIT,
-  snapshotNode,
-  tableNode,
-  viewColumnNode,
-  viewNode,
 } from './nodes';
-import type { ConnectionState, NodeRef, TreeNode } from './refs';
+import type { ConnectionState, TreeNode } from './refs';
 
 export interface CatalogTreeDeps {
   /** Connections in display order, read on every `roots()`; ids must be unique. */
@@ -47,14 +34,13 @@ export interface CatalogTreeDeps {
     snapshot: SnapshotId,
     signal: AbortSignal,
   ) => Promise<readonly RelationColumn[]>;
+  /** The statements the SQL editor ran; without it, a connection has no folder Query History. */
+  queryHistory?: Pick<QueryHistory, 'shown' | 'entries'>;
   logger?: Logger;
 }
 
 // Every resolved view starts a DuckDB instance; cap parallel reads.
 const MAX_VIEW_READS = 3;
-
-// A snapshot with only these actions moves files; nothing to show.
-const MAINTENANCE = new Set<ResolvedAction>(['flushed_inlined', 'compacted', 'merged', 'rewritten']);
 
 type Phase =
   | { readonly status: 'disconnected'; readonly autoConnect: boolean }
@@ -108,6 +94,11 @@ export class CatalogTree {
     // VS Code may still ask a node of a replaced cache; its data must not enter the new cache.
     if (node.ref.kind !== 'connection' && cache.nodes.get(node.id) !== node) {
       return Promise.resolve([]);
+    }
+    // aantje's own record, read anew each time: it changes with every run, not with the catalog.
+    if (node.ref.kind === 'folder' && node.ref.folder === 'queryHistory') {
+      const entries = this.deps.queryHistory?.entries(node.ref.connectionId) ?? [];
+      return Promise.resolve(queryNodes(node, entries, Date.now()));
     }
     let children = cache.children.get(node.id);
     if (!children) {
@@ -193,6 +184,20 @@ export class CatalogTree {
       }
     }
     this.emit(node && targets[0]?.node);
+  }
+
+  /** The folder Query History of a connection, once its level was read: the node to fire a change for after a run. */
+  queryHistoryFolder(connectionId: string): TreeNode | undefined {
+    const conn = this.connections.get(connectionId);
+    return conn?.cache.nodes.get(folderId(conn.node.id, 'queryHistory'));
+  }
+
+  /** Reads the levels of every connection again without reopening one, e.g. when the Query History is switched on or off. */
+  reread(): void {
+    for (const conn of this.sync()) {
+      this.replaceCache(conn);
+      this.changed(conn);
+    }
   }
 
   /** The listener gets the id of each connection that a refresh reloads: what open reports show may be out of date. */
@@ -379,7 +384,15 @@ export class CatalogTree {
             ? Promise.resolve([])
             : viewColumns(node.ref.connectionId, schema, view, snapshot, cache.stale.signal),
         ));
-    return readBelow(phase.reader, snapshotOf(conn.snapshot, phase.info), node, columnsOfView);
+    return readBelow(
+      {
+        reader: phase.reader,
+        snapshot: snapshotOf(conn.snapshot, phase.info),
+        columnsOfView,
+        azure: isAzureLake(conn.profile),
+      },
+      node,
+    );
   }
 
   private async readConnection(conn: Connection, node: TreeNode): Promise<TreeNode[]> {
@@ -401,6 +414,7 @@ export class CatalogTree {
         return [
           ...schemas.toSorted(byName).map((schema) => schemaNode(node, schema)),
           folderNode(node, { folder: 'snapshots', total }),
+          ...(this.deps.queryHistory?.shown() ? [folderNode(node, { folder: 'queryHistory' })] : []),
         ];
       }
       default:
@@ -419,156 +433,6 @@ export class CatalogTree {
       this.logger.warn(`Cannot count the snapshots of "${profile.name}": ${userMessageOf(error)}`);
       return undefined;
     }
-  }
-}
-
-type ViewReader = (
-  schema: SchemaInfo,
-  view: ViewInfo,
-  snapshot: SnapshotId,
-) => Promise<readonly RelationColumn[]>;
-
-async function readBelow(
-  reader: CatalogReader,
-  snapshot: SnapshotId,
-  node: TreeNode,
-  columnsOfView: ViewReader | undefined,
-): Promise<TreeNode[]> {
-  const { ref } = node;
-  switch (ref.kind) {
-    case 'schema': {
-      const { schema } = ref;
-      const [tables, views, macros] = await Promise.all([
-        reader.tables(schema.id, snapshot),
-        reader.views(schema.id, snapshot),
-        reader.macros(schema.id, snapshot),
-      ]);
-      // Folders show even when empty, so every schema looks the same.
-      return [
-        folderNode(node, { folder: 'tables', schema, tables: tables.toSorted(byName) }),
-        folderNode(node, { folder: 'views', schema, views: views.toSorted(byName) }),
-        folderNode(node, { folder: 'macros', schema, macros: macros.toSorted(byName) }),
-      ];
-    }
-    case 'folder':
-      return readFolder(reader, node, ref, columnsOfView, snapshot);
-    case 'table':
-      return readTable(reader, snapshot, node, ref);
-    case 'snapshot':
-      return readSnapshot(reader, node, ref);
-    case 'column':
-      return ref.column.children.map((column) =>
-        columnNode(node, ref.schema, ref.table, column, [...ref.path, column.name]),
-      );
-    case 'view':
-      return columnsOfView
-        ? [folderNode(node, { folder: 'viewColumns', schema: ref.schema, view: ref.view })]
-        : [];
-    case 'connection':
-    case 'viewColumn':
-    case 'macro':
-    case 'detail':
-    case 'message':
-      return [];
-  }
-}
-
-async function readTable(
-  reader: CatalogReader,
-  snapshot: SnapshotId,
-  node: TreeNode,
-  { schema, table }: Extract<NodeRef, { kind: 'table' }>,
-): Promise<TreeNode[]> {
-  // Partitioning and tags name their columns from this one read.
-  const read = reader.columns(table.id, snapshot);
-  const [columns, partitioning, sortOrder, tags] = await Promise.all([
-    read,
-    read.then((columnTree) => reader.partitioning(table.id, snapshot, columnTree)),
-    reader.sortOrder(table.id, snapshot),
-    read.then((columnTree) => reader.tags(table.id, snapshot, columnTree)),
-  ]);
-  return [
-    folderNode(node, { folder: 'statistics', schema, table }),
-    folderNode(node, { folder: 'history', schema, table }),
-    folderNode(node, { folder: 'columns', schema, table, columns }),
-    ...(partitioning ? [folderNode(node, { folder: 'partitioning', schema, table, partitioning })] : []),
-    ...(sortOrder ? [folderNode(node, { folder: 'sortOrder', schema, table, sortOrder })] : []),
-    ...(tags.table.length + tags.columns.length > 0
-      ? [folderNode(node, { folder: 'tags', schema, table, tags })]
-      : []),
-  ];
-}
-
-async function readSnapshot(
-  reader: CatalogReader,
-  node: TreeNode,
-  { snapshot }: Extract<NodeRef, { kind: 'snapshot' }>,
-): Promise<TreeNode[]> {
-  const changes = await reader.snapshotChanges(snapshot.id);
-  if (changes.length === 0) return [messageNode(node, 'No recorded changes.', 'info')];
-  return changes.map((change, index) => {
-    const table =
-      change.object === 'table' &&
-      !MAINTENANCE.has(change.action) &&
-      change.schemaName !== null &&
-      change.name !== null
-        ? { snapshot: snapshot.id, table: { schema: change.schemaName, table: change.name } }
-        : undefined;
-    return detailNode(node, `c${index}`, changeDetail(change), table);
-  });
-}
-
-async function readFolder(
-  reader: CatalogReader,
-  node: TreeNode,
-  ref: Extract<NodeRef, { kind: 'folder' }>,
-  columnsOfView: ViewReader | undefined,
-  snapshot: SnapshotId,
-): Promise<TreeNode[]> {
-  const details = (prefix: string, list: readonly TreeDetail[]): TreeNode[] =>
-    list.map((detail, index) => detailNode(node, `${prefix}${index}`, detail));
-  switch (ref.folder) {
-    case 'tables':
-      return ref.tables.length > 0
-        ? ref.tables.map((table) => tableNode(node, ref.schema, table))
-        : [messageNode(node, 'No tables.', 'info')];
-    case 'views':
-      return ref.views.length > 0
-        ? ref.views.map((view) => viewNode(node, ref.schema, view, columnsOfView !== undefined))
-        : [messageNode(node, 'No views.', 'info')];
-    case 'macros':
-      return ref.macros.length > 0
-        ? ref.macros.map((macro) => macroNode(node, ref.schema, macro))
-        : [messageNode(node, 'No macros.', 'info')];
-    case 'columns':
-      return ref.columns.map((column) => columnNode(node, ref.schema, ref.table, column, [column.name]));
-    case 'viewColumns': {
-      if (!columnsOfView) {
-        return [];
-      }
-      const columns = await columnsOfView(ref.schema, ref.view, snapshot);
-      return columns.map((column, index) => viewColumnNode(node, ref.schema, ref.view, column, index));
-    }
-    case 'partitioning':
-      return details(
-        'p',
-        ref.partitioning.columns.map((column) => partitionDetail(ref.schema, ref.table, column)),
-      );
-    case 'sortOrder':
-      return details(
-        'e',
-        ref.sortOrder.expressions.map((sort) => sortDetail(ref.schema, ref.table, sort)),
-      );
-    case 'statistics':
-    case 'history':
-      return [];
-    case 'tags':
-      return details('k', [
-        ...ref.tags.table.map((tag) => tableTagDetail(ref.schema, ref.table, tag)),
-        ...ref.tags.columns.map((tag) => columnTagDetail(ref.schema, ref.table, tag)),
-      ]);
-    case 'snapshots':
-      return (await reader.snapshots(SNAPSHOT_LIMIT)).map((entry) => snapshotNode(node, entry));
   }
 }
 
@@ -632,11 +496,6 @@ function stateOf({ phase, snapshot }: Connection): ConnectionState {
 
 function snapshotOf(selected: SnapshotId | 'latest', info: CatalogInfo): SnapshotId {
   return selected === 'latest' ? info.latestSnapshot : selected;
-}
-
-/** Case-insensitive, numbers by value ("table2" before "table10"). */
-export function byName(a: { readonly name: string }, b: { readonly name: string }): number {
-  return collator.compare(a.name, b.name);
 }
 
 // A folder is named after its owner; "Columns" alone says too little in the log.

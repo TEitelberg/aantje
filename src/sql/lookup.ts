@@ -1,3 +1,4 @@
+import { foldIdentifier, sameIdentifier } from '../catalog/ddl';
 import type { ColumnInfo, SchemaInfo } from '../catalog/model';
 import { EMPTY_CATALOG, nameOf } from './catalog';
 import type { SqlCatalog, SqlEntry } from './catalog';
@@ -43,8 +44,6 @@ export interface ScopeColumn {
 
 type CatalogColumn = Extract<Named, { kind: 'column' }>;
 
-export const same = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase();
-
 /** Loads schemas and entries once; a failed read (closed connection, changed catalog) counts as empty. */
 export async function openLookup(source: SqlCatalog): Promise<Lookup> {
   const safely = async <T>(read: () => Promise<readonly T[]>): Promise<readonly T[]> => {
@@ -69,9 +68,9 @@ export async function openLookup(source: SqlCatalog): Promise<Lookup> {
   const [schemas, entries] = await Promise.all([catalog.schemas(), catalog.entries()]);
   const bySchema = new Map<string, Map<string, SqlEntry>>();
   for (const entry of entries) {
-    const key = entry.schema.name.toLowerCase();
+    const key = foldIdentifier(entry.schema.name);
     const inSchema = bySchema.get(key) ?? new Map<string, SqlEntry>();
-    inSchema.set(nameOf(entry).toLowerCase(), entry);
+    inSchema.set(foldIdentifier(nameOf(entry)), entry);
     bySchema.set(key, inSchema);
   }
   const columns = new Map<SqlEntry, Promise<readonly ColumnInfo[]>>();
@@ -80,9 +79,9 @@ export async function openLookup(source: SqlCatalog): Promise<Lookup> {
     lake: catalog.lake,
     schemas,
     entries,
-    schema: (name) => schemas.find((schema) => same(schema.name, name)),
-    entry: (schema, name) => bySchema.get(schema.toLowerCase())?.get(name.toLowerCase()),
-    entriesOf: (schema) => [...(bySchema.get(schema.toLowerCase())?.values() ?? [])],
+    schema: (name) => schemas.find((schema) => sameIdentifier(schema.name, name)),
+    entry: (schema, name) => bySchema.get(foldIdentifier(schema))?.get(foldIdentifier(name)),
+    entriesOf: (schema) => [...(bySchema.get(foldIdentifier(schema))?.values() ?? [])],
     columns: (entry) => {
       let promise = columns.get(entry);
       if (!promise) {
@@ -112,7 +111,7 @@ export async function namedBy(
   const found: Named[] = [];
   const inScope = relationNamed(scope, first);
   if (inScope) return scopeNamed(inScope, first, rest, lookup);
-  if (same(first, lookup.lake)) found.push(...(await fromLake(rest, lookup)));
+  if (sameIdentifier(first, lookup.lake)) found.push(...(await fromLake(rest, lookup)));
   const schema = lookup.schema(first);
   if (schema) found.push(...(await fromSchema(schema, rest, lookup)));
   const main = options.unqualifiedTable && lookup.entry(options.unqualifiedTable, first);
@@ -123,11 +122,11 @@ export async function namedBy(
 /** The relation of the query that a name stands for: its alias, or the name of a table or CTE without one. */
 function relationNamed(scope: readonly ScopeRelation[], name: string): ScopeRelation | undefined {
   return (
-    scope.find(({ alias }) => alias !== undefined && same(alias, name)) ??
+    scope.find(({ alias }) => alias !== undefined && sameIdentifier(alias, name)) ??
     scope.find(
       ({ alias, relation, cte }) =>
         alias === undefined &&
-        [relation?.table, cte].some((named) => named !== undefined && same(named, name)),
+        [relation?.table, cte].some((named) => named !== undefined && sameIdentifier(named, name)),
     )
   );
 }
@@ -151,7 +150,7 @@ async function scopeNamed(
   const columns = await scopeColumns(relation, lookup);
   const [column, ...fields] = rest;
   if (column === undefined) return [{ kind: 'derived', name, columns }];
-  const found = columns.find((candidate) => same(candidate.name, column));
+  const found = columns.find((candidate) => sameIdentifier(candidate.name, column));
   if (found?.source) return fieldOf(found.source, fields);
   return found && fields.length === 0 ? [{ kind: 'text-column', name: found.name }] : [];
 }
@@ -173,7 +172,7 @@ export async function columnInScope(
   lookup: Lookup,
 ): Promise<ScopeColumn | undefined> {
   const lists = await Promise.all(scope.map((relation) => scopeColumns(relation, lookup)));
-  const hits = lists.flatMap((columns) => columns.filter((column) => same(column.name, name)));
+  const hits = lists.flatMap((columns) => columns.filter((column) => sameIdentifier(column.name, name)));
   return hits.length === 1 ? hits[0] : undefined;
 }
 
@@ -254,9 +253,9 @@ async function starSlots(
   const lists = await Promise.all(relations.map((relation) => slotsOf(relation, lookup)));
   return lists
     .flatMap((slots, index): Slot[] => (index === 0 ? slots : ['gap', ...slots]))
-    .filter((slot) => !isColumn(slot) || !exclude.includes(slot.name.toLowerCase()))
+    .filter((slot) => !isColumn(slot) || !exclude.includes(foldIdentifier(slot.name)))
     .map((slot) => {
-      const name = isColumn(slot) ? rename.get(slot.name.toLowerCase()) : undefined;
+      const name = isColumn(slot) ? rename.get(foldIdentifier(slot.name)) : undefined;
       return isColumn(slot) && name !== undefined ? { ...slot, name } : slot;
     });
 }
@@ -302,7 +301,7 @@ async function fromSchema(schema: SchemaInfo, rest: readonly string[], lookup: L
 async function descend(entry: SqlEntry, rest: readonly string[], lookup: Lookup): Promise<Named[]> {
   const [name, ...fields] = rest;
   if (name === undefined) return [{ kind: 'relation', entry }];
-  const column = (await lookup.columns(entry)).find((candidate) => same(candidate.name, name));
+  const column = (await lookup.columns(entry)).find((candidate) => sameIdentifier(candidate.name, name));
   return column ? fieldOf({ kind: 'column', entry, column, trail: [column.name] }, fields) : [];
 }
 
@@ -311,7 +310,10 @@ function fieldOf(source: CatalogColumn, fields: readonly string[]): Named[] {
   let column: ColumnInfo | undefined = source.column;
   const trail = [...source.trail];
   for (const field of fields) {
-    column = column?.type === 'struct' ? column.children.find((child) => same(child.name, field)) : undefined;
+    column =
+      column?.type === 'struct'
+        ? column.children.find((child) => sameIdentifier(child.name, field))
+        : undefined;
     if (column) trail.push(column.name);
   }
   return column ? [{ ...source, column, trail }] : [];

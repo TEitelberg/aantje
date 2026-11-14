@@ -1,13 +1,6 @@
+import { foldIdentifier, sameIdentifier } from '../../catalog/ddl';
 import { LAKE } from '../attach';
-import {
-  engineVersionQuery,
-  foldAscii,
-  lakeFunctionsQuery,
-  macrosQuery,
-  METADATA,
-  sameName,
-  viewsQuery,
-} from './queries';
+import { engineVersionQuery, lakeFunctionsQuery, macrosQuery, METADATA, viewsQuery } from './queries';
 import type { Rows } from './queries';
 
 // Read-only DuckLake functions. Any other `ducklake_` function can change the lake or delete files
@@ -70,7 +63,7 @@ export async function maintenanceFunctions(rows: Rows): Promise<ReadonlySet<stri
   const names = new Set(
     [
       ...(listed ?? []).flatMap(([name]) =>
-        typeof name === 'string' ? [name.toLowerCase().replace(/^ducklake_/, '')] : [],
+        typeof name === 'string' ? [foldIdentifier(name).replace(/^ducklake_/, '')] : [],
       ),
       ...CATALOG_MAINTENANCE_FALLBACK,
     ].filter((name) => !READ_ONLY_QUALIFIED.has(name)),
@@ -151,16 +144,18 @@ function usesOf(ast: string | null): Uses | undefined {
       node.forEach(walk);
     } else if (typeof node === 'object' && node !== null) {
       const fields = node as Record<string, unknown>;
+      // Names fold as DuckDB folds them, A to Z only, the same fold the catalog lookups use: with a Unicode fold a view
+      // "Évil" would be looked up as "évil", never found, and never checked.
       if (typeof fields.function_name === 'string') {
-        uses.calls.add(fields.function_name.toLowerCase());
+        uses.calls.add(foldIdentifier(fields.function_name));
         const path = (fields.qualified_name as { path?: unknown } | undefined)?.path;
         if (Array.isArray(path) && path.length > 1 && path.every((part) => typeof part === 'string')) {
-          uses.qualified.add(path.map((part: string) => part.toLowerCase()));
+          uses.qualified.add(path.map((part: string) => foldIdentifier(part)));
         }
         consider(fields.catalog, fields.schema);
       }
       if (fields.type === 'BASE_TABLE' && typeof fields.table_name === 'string') {
-        uses.relations.add(fields.table_name.toLowerCase());
+        uses.relations.add(foldIdentifier(fields.table_name));
         consider(fields.catalog_name, fields.schema_name);
       }
       Object.values(fields).forEach(walk);
@@ -173,7 +168,7 @@ function usesOf(ast: string | null): Uses | undefined {
 // Catalogs other than the lake that can hold user objects reached by a two-part name whose first part DuckDB resolves to
 // a database (it tries a schema of the current catalog first, then a database): the DuckDB metadata file next to the
 // lake, and the engine's own `memory` and `temp` catalogs.
-const LOCAL_CATALOGS: ReadonlySet<string> = new Set(['memory', 'temp', foldAscii(METADATA)]);
+const LOCAL_CATALOGS: ReadonlySet<string> = new Set(['memory', 'temp', foldIdentifier(METADATA)]);
 
 /**
  * The catalog a reference reaches when that is not the lake and not a read-only system catalog, as it should be shown;
@@ -182,11 +177,11 @@ const LOCAL_CATALOGS: ReadonlySet<string> = new Set(['memory', 'temp', foldAscii
  * database, so a `schema` that names another catalog is foreign too. Case-insensitive, as DuckDB folds ASCII.
  */
 function foreignCatalog(catalog: string, schema: string): string | undefined {
-  const folded = foldAscii(catalog);
+  const folded = foldIdentifier(catalog);
   if (folded !== '') {
     return folded === LAKE || SYSTEM_CATALOGS.has(folded) ? undefined : catalog;
   }
-  return LOCAL_CATALOGS.has(foldAscii(schema)) ? schema : undefined;
+  return LOCAL_CATALOGS.has(foldIdentifier(schema)) ? schema : undefined;
 }
 
 // The reason a qualified call is refused; undefined when it is a read-only function, a function of a system catalog or
@@ -250,13 +245,13 @@ export async function closureOf(
   maintenance: ReadonlySet<string>,
 ): Promise<Closure> {
   const relations = new Set<string>();
-  const requestedViews = new Set([foldAscii(start.name)]);
+  const requestedViews = new Set([foldIdentifier(start.name)]);
   const requestedMacros = new Set<string>();
   const macros = new Set<string>();
   const named = await definitions(rows, at, 'view', requestedViews);
-  let level = named.filter((definition) => sameName(definition.schema, start.schema));
+  let level = named.filter((definition) => sameIdentifier(definition.schema, start.schema));
   // Same-named views of other schemas are followed only once a definition names them, as any other view.
-  const spare = named.filter((definition) => !sameName(definition.schema, start.schema));
+  const spare = named.filter((definition) => !sameIdentifier(definition.schema, start.schema));
   while (level.length > 0) {
     const parsed: { definition: Definition; uses: Uses }[] = [];
     const wantedViews = new Set<string>();
@@ -300,14 +295,14 @@ export async function closureOf(
           wantedViews.add(relation);
         }
       }
-      if (uses.relations.has(foldAscii(start.name))) {
+      if (uses.relations.has(foldIdentifier(start.name))) {
         next.push(...spare.splice(0));
       }
       parsed.push({ definition, uses });
     }
     next.push(...(await definitions(rows, at, 'view', wantedViews)));
     const found = await definitions(rows, at, 'macro', wantedMacros);
-    found.forEach((macro) => macros.add(foldAscii(macro.name)));
+    found.forEach((macro) => macros.add(foldIdentifier(macro.name)));
     next.push(...found);
     // The qualified calls of this level are judged once the macros they may name are known.
     for (const { definition, uses } of parsed) {

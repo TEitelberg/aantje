@@ -1,25 +1,14 @@
-import type { SnapshotActivity, SnapshotId } from '../catalog/model';
-import { compareText } from '../order';
-import { OTHER_LANE, POINT_KINDS, buildModel } from '../snapshot-report/model';
-import type { Model, Point, PointKind } from '../snapshot-report/model';
+import type { SnapshotId } from '../catalog/model';
+import { compareText, groupBy } from '../order';
 import { formatUtc, plural, tableLabel } from '../shell/model';
 import type { Card } from '../shell/model';
-import type { ReportScope } from '../shell/scope';
+import { OTHER_LANE, POINT_KINDS, buildModel } from '../snapshot-changes/model';
+import type { Model, PointKind } from '../snapshot-changes/model';
+import { olderNote } from '../snapshot-changes/window';
+import type { ScopedWindow } from '../snapshot-changes/window';
 
-/** What the extension reads and posts to the Activity page; the page computes the rest. */
-export interface ActivityData {
-  readonly connection: string;
-  /** The lake, or one schema: then `snapshots` are those that changed it, with only their changes. */
-  readonly scope: ReportScope;
-  /** The newest snapshot of the catalog, not necessarily among `snapshots`. */
-  readonly latest: SnapshotId;
-  /** Newest first. */
-  readonly snapshots: readonly SnapshotActivity[];
-  /** The catalog has older snapshots than these. */
-  readonly more: boolean;
-  /** For a schema: how many snapshots of the lake were read, of which `snapshots` are those that changed it. */
-  readonly read?: number;
-}
+/** What the extension reads and posts to the Activity page: the newest snapshots of the lake or a schema. */
+export type ActivityData = ScopedWindow;
 
 export const NO_AUTHOR = '';
 const NO_AUTHOR_LABEL = '(no author)';
@@ -135,12 +124,12 @@ export function summarizeActivity(model: Model, filter: ActivityFilter): Activit
   const kinds = new Set(filter.kinds);
   const text = filter.text.trim().toLowerCase();
   const narrowed = kinds.size < POINT_KINDS.length || filter.table !== undefined;
-  const bySnapshot = new Map<SnapshotId, Point[]>();
-  for (const point of model.points) {
-    if (kinds.has(point.kind) && (filter.table === undefined || point.lane === filter.table)) {
-      bySnapshot.set(point.snapshot, [...(bySnapshot.get(point.snapshot) ?? []), point]);
-    }
-  }
+  const bySnapshot = groupBy(
+    model.points.filter(
+      (point) => kinds.has(point.kind) && (filter.table === undefined || point.lane === filter.table),
+    ),
+    (point) => point.snapshot,
+  );
   const visible = model.snapshots.filter(
     (snapshot) =>
       (!filter.range || (snapshot.id >= filter.range.from && snapshot.id <= filter.range.to)) &&
@@ -149,14 +138,13 @@ export function summarizeActivity(model: Model, filter: ActivityFilter): Activit
       (!narrowed || bySnapshot.has(snapshot.id)),
   );
   const days = new Map<string, { commits: number; kinds: Record<PointKind, number> }>();
-  const authors = new Map<string, SnapshotActivity[]>();
+  const authors = groupBy(visible, (snapshot) => authorKey(snapshot.author));
   const tables = new Map<string, Record<PointKind, number>>();
   const total = emptyKinds();
   for (const snapshot of visible) {
     const day = days.get(snapshot.time.slice(0, 10)) ?? { commits: 0, kinds: emptyKinds() };
     day.commits += 1;
     days.set(snapshot.time.slice(0, 10), day);
-    authors.set(authorKey(snapshot.author), [...(authors.get(authorKey(snapshot.author)) ?? []), snapshot]);
     for (const point of bySnapshot.get(snapshot.id) ?? []) {
       day.kinds[point.kind] += 1;
       total[point.kind] += 1;
@@ -233,9 +221,4 @@ export const omittedAuthorsNote = (omitted: number): string =>
 export const omittedTablesNote = (omitted: number): string =>
   `${plural(omitted, 'table', 'tables')} not shown: the ${TOP_TABLES} most changed are drawn. Choose a table in the filter to see the others.`;
 
-export const activityOlderNote = (data: ActivityData): string =>
-  `${
-    data.scope.kind === 'schema' && data.read !== undefined
-      ? `Of the ${data.read} newest snapshots, the ${data.snapshots.length} that changed the schema are shown.`
-      : `The ${data.snapshots.length} newest snapshots are shown.`
-  } Older ones are not read.`;
+export const activityOlderNote = (data: ActivityData): string => olderNote(data);

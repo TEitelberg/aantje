@@ -1,8 +1,10 @@
 import { addColumnDdl, qualifiedName, quoteIdentifier } from '../catalog/ddl';
 import type { ColumnInfo } from '../catalog/model';
 import { PREVIEW_LIMIT } from '../data/types';
-import { columnFragments, commented, fromCatalog, newestNote, pinnedOf, timeTravelNote } from '../script';
-import { catalogOf, COMMENTED_OUT, dropColumnStatement, withDrop } from './common';
+import { columnFragments, commented, fromCatalog } from '../ddl-script/check';
+import { commentStatement, dropColumnStatement } from '../ddl-script/statements';
+import { atVersion, newestNote, pinnedOf, timeTravelNote } from '../script';
+import { catalogOf, COMMENTED_OUT, withDrop } from './common';
 import type { Ref, Tree } from './common';
 
 const MEMBER_NOTE =
@@ -63,11 +65,7 @@ function columnStatements(
           ...(topLevel ? [alter(`ALTER COLUMN ${dotted} SET DATA TYPE <new_type>`)] : []),
           alter(`DROP COLUMN ${dotted}`),
           ...(topLevel
-            ? [
-                commented(
-                  `COMMENT ON COLUMN ${qualifiedName(schemaName, tableName, ...path)} IS '<comment>';`,
-                ),
-              ]
+            ? [commented(commentStatement('COLUMN', [schemaName, tableName, ...path], '<comment>'))]
             : []),
         ]
       : []),
@@ -120,7 +118,7 @@ export async function selectColumn(tree: Tree, ref: Ref<'column'>): Promise<stri
       : []),
     ...timeTravelNote(pinned),
     `SELECT ${path.map(quoteIdentifier).join('.')}`,
-    `FROM ${qualifiedName(ref.schema.name, ref.table.name)}${pinned === undefined ? '' : ` AT (VERSION => ${pinned})`}`,
+    `FROM ${qualifiedName(ref.schema.name, ref.table.name)}${atVersion(pinned)}`,
     `LIMIT ${PREVIEW_LIMIT};`,
   ].join('\n');
 }

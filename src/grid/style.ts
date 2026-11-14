@@ -1,4 +1,10 @@
 import { LAYOUT_CSS } from '../shell/style';
+import { KIND_VARIABLES } from './chart-colors';
+
+// The square of each kind of operator in the Statistics table, in the colour that the charts give the kind.
+const KIND_CSS = Object.entries(KIND_VARIABLES)
+  .map(([kind, [variable, fallback]]) => `.kind-${kind} { background: var(${variable}, ${fallback}); }`)
+  .join('\n');
 
 /** The only stylesheet of the grid. It is inlined into the page (with the CSP nonce) and uses the theme variables of VS Code. */
 export const GRID_CSS = `${LAYOUT_CSS}
@@ -40,9 +46,33 @@ body.vscode-high-contrast tr[class^="chg-update"] td, body.vscode-high-contrast-
 .tab { padding: 4px 12px; color: var(--vscode-tab-inactiveForeground); background: var(--vscode-tab-inactiveBackground); border: 0; border-right: 1px solid var(--vscode-tab-border, var(--vscode-panel-border)); border-bottom: 2px solid transparent; font: inherit; white-space: nowrap; cursor: pointer; }
 .tab.selected { color: var(--vscode-tab-activeForeground); background: var(--vscode-tab-activeBackground); border-bottom-color: var(--vscode-focusBorder); }
 .run { margin-left: auto; padding: 0 8px; color: var(--vscode-descriptionForeground); white-space: nowrap; }
+.tabbar .open { margin-right: 8px; padding: 2px 10px; color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); border: 1px solid var(--vscode-button-border, transparent); border-radius: 2px; cursor: pointer; font: inherit; white-space: nowrap; }
+.tabbar .open:hover { background: var(--vscode-button-secondaryHoverBackground); }
+.tabbar .open:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+.tabbar .open[hidden] { display: none; }
 .pane, .result { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .result > .sql { padding: 4px 8px; border-bottom: 1px solid var(--vscode-panel-border); font-family: var(--vscode-editor-font-family); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .banner { padding: 4px 8px; color: var(--vscode-editorWarning-foreground); border-bottom: 1px solid var(--vscode-panel-border); }
+.plan { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.plan-tools { display: flex; align-items: center; gap: 6px; padding: 3px 8px; border-bottom: 1px solid var(--vscode-panel-border); }
+.plan-tools button { min-width: 2.2em; padding: 1px 8px; color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); border: 1px solid var(--vscode-button-border, transparent); border-radius: 2px; cursor: pointer; font: inherit; }
+.plan-tools button:hover { background: var(--vscode-button-secondaryHoverBackground); }
+.plan-tools button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+.plan-tools .hint { margin-left: auto; color: var(--vscode-descriptionForeground); }
+.plan-scroll { flex: 1; min-height: 0; overflow: auto; cursor: grab; }
+.plan-scroll.dragging { cursor: grabbing; user-select: none; }
+.statistics-scroll { flex: 1; min-height: 0; overflow: auto; }
+table.statistics td.op { font-weight: 600; }
+table.statistics td.details { max-width: 36em; color: var(--vscode-descriptionForeground); }
+table.statistics th.num { text-align: right; }
+.kind { display: inline-block; width: 0.7em; height: 0.7em; margin-right: 6px; border-radius: 2px; vertical-align: baseline; }
+${KIND_CSS}
+.profile-chart { flex: 1; min-height: 0; overflow: auto; padding: 6px 8px; }
+.profile-chart.flame .chart { width: 100%; min-height: 160px; }
+.profile-chart.operators { display: flex; }
+.operators-view { display: flex; flex: 1; gap: 16px; min-height: 260px; }
+.operators-view .chart { flex: 1 1 0; min-width: 0; min-height: 260px; }
+pre.text { flex: 1; min-height: 0; margin: 0; padding: 6px 8px; overflow: auto; font-family: var(--vscode-editor-font-family), "Cascadia Mono", Consolas, Menlo, "DejaVu Sans Mono", FreeMono, monospace; font-size: var(--vscode-editor-font-size); line-height: 1.2; white-space: pre; user-select: text; tab-size: 4; }
 .messages-view { flex: 1; min-height: 0; overflow: auto; }
 table.messages { width: 100%; }
 table.messages td.sql { max-width: 60em; }

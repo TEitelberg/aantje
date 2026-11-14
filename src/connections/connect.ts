@@ -1,6 +1,7 @@
+import type { CatalogInfo } from '../catalog/model';
 import type { OpenedCatalog } from '../catalog/open';
 import { isAantjeError } from '../errors';
-import { usesSecret } from './profile';
+import { signsInWithEntra, usesSecret } from './profile';
 import type { ConnectionProfile } from './profile';
 import type { ConnectionStore } from './store';
 
@@ -24,7 +25,7 @@ export async function openWithPassword(
   if (!usesSecret(profile)) {
     return deps.open(profile, undefined);
   }
-  if (profile.kind === 'postgres' && profile.azureAuth === 'entra' && deps.entraToken) {
+  if (signsInWithEntra(profile) && deps.entraToken) {
     // A new token for every open; a rejected one is no reason to ask for a password that does not exist.
     return deps.open(profile, await deps.entraToken(profile));
   }
@@ -41,6 +42,29 @@ export async function openWithPassword(
     }
     return openAndStore(profile, typed, deps);
   }
+}
+
+/**
+ * Opens and closes the catalog to test a profile with the password the user typed. An Entra login has no password: it
+ * is tested with a token, as it connects.
+ */
+export async function testConnection(
+  profile: ConnectionProfile,
+  password: string | undefined,
+  deps: ConnectDeps,
+): Promise<CatalogInfo> {
+  const { reader, info } = await openForTest(profile, password, deps);
+  await reader.close();
+  return info;
+}
+
+/** Opens the catalog with the password the user typed; an Entra login is opened with a token, as it connects. */
+export function openForTest(
+  profile: ConnectionProfile,
+  password: string | undefined,
+  deps: ConnectDeps,
+): Promise<OpenedCatalog> {
+  return signsInWithEntra(profile) ? openWithPassword(profile, deps) : deps.open(profile, password);
 }
 
 async function openAndStore(

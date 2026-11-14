@@ -10,9 +10,11 @@
 !dist/sql-wasm.wasm
 !dist/grid-client.js
 !dist/report-client.js
+!dist/plan-client.js
 !media/icon.png
 !media/logo.png
 !media/aantje-activity.svg
+!media/aantje-icons.woff
 !package.json
 !CHANGELOG.md
 !LICENSE

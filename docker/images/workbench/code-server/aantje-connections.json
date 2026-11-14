@@ -6,5 +6,20 @@
         "database": "ducklake",
         "user": "ducklake",
         "ssl": false
+    },
+    {
+        "name": "Oog Lakehouse S3",
+        "kind": "postgres",
+        "host": "postgres",
+        "database": "ducklake",
+        "user": "ducklake",
+        "ssl": false,
+        "storage": {
+            "kind": "s3",
+            "endpoint": "http://rustfs:9000",
+            "region": "us-east-1",
+            "urlStyle": "path",
+            "signIn": "keys"
+        }
     }
 ]

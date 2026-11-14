@@ -54,6 +54,7 @@ button.action:hover, button.mode:hover, button.pick:hover { background: var(--vs
 button.mode[aria-pressed="true"], button.pick[aria-pressed="true"] { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
 button.action:focus-visible, button.mode:focus-visible, button.pick:focus-visible, .filter summary:focus-visible, .finding summary:focus-visible, .keylist button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
 .actions { display: flex; flex-wrap: wrap; align-items: center; }
+.kinds { display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .keylist { margin: 0; padding: 0; list-style: none; }
 .keylist button { display: block; width: 100%; padding: 4px 8px; text-align: left; color: inherit; background: none; border: 0; border-bottom: 1px solid var(--vscode-panel-border); font: inherit; cursor: pointer; }
 .keylist button:hover { background: var(--vscode-list-hoverBackground); }
@@ -65,17 +66,28 @@ button.action:focus-visible, button.mode:focus-visible, button.pick:focus-visibl
 .finding.error summary::before { content: "\\2716 "; }
 .finding-body { padding: 0 10px 8px; }
 .finding-body p { margin: 4px 0; }
-body.vscode-high-contrast .card, body.vscode-high-contrast-light .card, body.vscode-high-contrast .finding, body.vscode-high-contrast-light .finding, body.vscode-high-contrast .impact, body.vscode-high-contrast-light .impact { border-color: var(--vscode-contrastBorder); }
+body.vscode-high-contrast .card, body.vscode-high-contrast-light .card, body.vscode-high-contrast .finding, body.vscode-high-contrast-light .finding { border-color: var(--vscode-contrastBorder); }
 body.vscode-high-contrast .tabs, body.vscode-high-contrast-light .tabs, body.vscode-high-contrast th, body.vscode-high-contrast-light th, body.vscode-high-contrast td, body.vscode-high-contrast-light td { border-bottom-color: var(--vscode-contrastBorder); }
 `;
 
-/** The toolbar, the list and the detail pane of the reports of snapshots by time (Activity, Growth). */
+/** The toolbar and the list of the reports of snapshots by time (Snapshot Report, Activity, Growth). */
 export const LIST_CSS = `
 .toolbar select { color: var(--vscode-dropdown-foreground); background: var(--vscode-dropdown-background); border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border)); font: inherit; max-width: 20em; }
 td.who { white-space: normal; max-width: 30em; }
 td.number { text-align: right; }
-.detail, .list { margin-top: var(--aantje-section-gap); }
-.detail:focus { outline: none; }
-.who-line { white-space: pre-wrap; }
+.list { margin-top: var(--aantje-section-gap); }
 .list tr.selected td { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
+`;
+
+/** The pane of the selected snapshot (Snapshot Report, Activity, Growth, Schema History). */
+export const DETAIL_CSS = `
+.detail { margin-top: var(--aantje-section-gap); }
+.detail:focus { outline: none; }
+.detail h3 { margin: 12px 0 4px; font-size: 1em; }
+.who-line { white-space: pre-wrap; }
+.label { margin: 0 4px; color: var(--vscode-descriptionForeground); }
+.tables, .others { margin: 0; padding: 0; list-style: none; }
+.table-row { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; padding: 4px 0; border-bottom: 1px solid var(--vscode-panel-border); }
+.table-row .name { font-family: var(--vscode-editor-font-family); font-weight: 600; }
+.table-row .what { color: var(--vscode-descriptionForeground); }
 `;

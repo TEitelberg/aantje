@@ -1,15 +1,13 @@
 import type * as vscode from 'vscode';
-import { shownSnapshot } from '../actions';
+import { catalogAt, shownSnapshot } from '../actions';
 import type { Register } from '../command.vscode';
 import type { SnapshotId } from '../catalog/model';
-import { validateRequired } from '../connections/profile';
+import { effectiveStorage, validateRequired } from '../connections/profile';
 import type { ConnectionProfile } from '../connections/profile';
 import type { ConnectionStore } from '../connections/store';
 import { createWizardUi } from '../connections/ports.vscode';
 import type { GridPanels } from '../grid/grid.vscode';
-import { AantjeError } from '../errors';
-import { connectionClosed } from '../messages';
-import { assertNotebookSupported, buildNotebook } from '../notebook/build';
+import { buildNotebook } from '../notebook/build';
 import { openNotebook } from '../notebook/open.vscode';
 import { timeTravelUi } from '../pick.vscode';
 import { withCancel } from '../progress.vscode';
@@ -18,6 +16,7 @@ import { changesOfSnapshot, chooseChanges, chooseQuery, subjectOf } from '../tim
 import type { ChangeChoice } from '../time-travel';
 import type { CatalogTree } from '../tree/model';
 import { readDataSettings } from './access.vscode';
+import { readTrusting } from './confirm';
 import type { S3CredentialStore } from './credentials';
 import { checkRelation, previewTable, readChanges } from './engine';
 import { changesKey, changesTitle, gridKey, gridTitle } from './relation';
@@ -55,22 +54,8 @@ interface DataActionsEnv {
 }
 
 export function createDataActions(env: DataActionsEnv): DataActions {
-  // Reads with the current trust; if the guard refuses an untrusted view it finds at the snapshot, asks once and retries.
-  // Covers a table node that is a view at an older snapshot, and the snapshot report, which never passes a tree node.
-  const readTrusting = async <T>(
-    profile: ConnectionProfile,
-    read: (trusted: boolean) => Promise<T>,
-  ): Promise<T> => {
-    try {
-      return await read(env.viewsTrusted(profile));
-    } catch (error) {
-      if (!(error instanceof AantjeError) || error.code !== 'VIEW_UNTRUSTED') {
-        throw error;
-      }
-      await env.confirmViews(profile);
-      return await read(true);
-    }
-  };
+  const trusting = <T>(profile: ConnectionProfile, read: (trusted: boolean) => Promise<T>): Promise<T> =>
+    readTrusting(profile, env, read);
 
   const accessFor = async (
     profile: ConnectionProfile,
@@ -83,7 +68,7 @@ export function createDataActions(env: DataActionsEnv): DataActions {
 
   const showRows: DataActions['showRows'] = async ({ relation, profile }, snapshot) => {
     const name = `${relation.table.schema}.${relation.table.table}`;
-    const data = await readTrusting(profile, (trusted) =>
+    const data = await trusting(profile, (trusted) =>
       withCancel(`Reading ${name}...`, async (signal) =>
         previewTable(await accessFor(profile, snapshot, trusted), relation.table, signal),
       ),
@@ -93,7 +78,7 @@ export function createDataActions(env: DataActionsEnv): DataActions {
 
   const showChanges: DataActions['showChanges'] = async ({ relation, profile }, range) => {
     const name = `${relation.table.schema}.${relation.table.table}`;
-    const { data } = await readTrusting(profile, (trusted) =>
+    const { data } = await trusting(profile, (trusted) =>
       withCancel(`Reading the changes of ${name}...`, async (signal) =>
         // The latest snapshot is attached: the range may end after the one the tree shows.
         readChanges(await accessFor(profile, undefined, trusted), relation.table, range, signal),
@@ -103,12 +88,11 @@ export function createDataActions(env: DataActionsEnv): DataActions {
   };
 
   const createNotebook: DataActions['createNotebook'] = async ({ relation, profile }, pinned, shown) => {
-    assertNotebookSupported(profile);
     const { s3, extensionDirectory } = readDataSettings();
     // The guard of the preview runs first: the notebook hands the relation to the Python kernel of the user, which would
     // run a view that calls the maintenance functions of DuckLake, or read a name that two relations share.
     const name = `${relation.table.schema}.${relation.table.table}`;
-    await readTrusting(profile, (trusted) =>
+    await trusting(profile, (trusted) =>
       withCancel(`Checking ${name}...`, async (signal) =>
         checkRelation(await accessFor(profile, pinned, trusted), relation.table, signal),
       ),
@@ -121,6 +105,7 @@ export function createDataActions(env: DataActionsEnv): DataActions {
         snapshot: pinned,
         shownSnapshot: shown,
         s3,
+        storage: effectiveStorage(profile),
         extensionDirectory,
         generatedOn: new Date().toISOString().slice(0, 10),
       }),
@@ -153,14 +138,6 @@ export function registerDataCommands(env: DataCommandEnv): vscode.Disposable[] {
 
   const { showRows, showChanges, createNotebook, openSql } = env.actions;
 
-  const readerOf = (connectionId: string, goal: string) => {
-    const reader = tree.reader(connectionId);
-    if (!reader) {
-      throw connectionClosed(goal);
-    }
-    return reader;
-  };
-
   return [
     register('aantje.previewTable', async (node) => {
       const found = await target(node);
@@ -188,14 +165,9 @@ export function registerDataCommands(env: DataCommandEnv): vscode.Disposable[] {
         return;
       }
       const { connectionId } = node.ref;
-      const reader = readerOf(connectionId, 'query at a snapshot');
+      const { reader, snapshot } = catalogAt(tree, connectionId, 'query at a snapshot');
       // Ask first: trusting a connection's views reloads the tree and closes this reader.
-      const choice = await chooseQuery(
-        timeTravelUi,
-        reader,
-        subject,
-        shownSnapshot(tree.state(connectionId)),
-      );
+      const choice = await chooseQuery(timeTravelUi, reader, subject, snapshot);
       if (choice?.action === 'sql') {
         // The statement only names the relation, so a view needs no trust.
         await openSql(connectionId, await selectAtSnapshot(reader, subject, choice.table, choice.snapshot));
@@ -219,13 +191,8 @@ export function registerDataCommands(env: DataCommandEnv): vscode.Disposable[] {
         return;
       }
       const { connectionId } = node.ref;
-      const reader = readerOf(connectionId, 'show its changes');
-      const choice = await chooseChanges(
-        timeTravelUi,
-        reader,
-        subject,
-        shownSnapshot(tree.state(connectionId)),
-      );
+      const { reader, snapshot } = catalogAt(tree, connectionId, 'show its changes');
+      const choice = await chooseChanges(timeTravelUi, reader, subject, snapshot);
       const found = choice && (await target(node));
       if (choice && found) {
         await showChanges({ ...found, relation: { ...found.relation, table: choice.table } }, choice);
@@ -240,7 +207,7 @@ export function registerDataCommands(env: DataCommandEnv): vscode.Disposable[] {
       }
       const choice = await changesOfSnapshot(
         timeTravelUi,
-        readerOf(profile.id, 'show the rows of a snapshot'),
+        catalogAt(tree, profile.id, 'show the rows of a snapshot').reader,
         change,
       );
       if (choice) {

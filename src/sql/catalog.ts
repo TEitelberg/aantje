@@ -1,3 +1,4 @@
+import { foldIdentifier, sameIdentifier } from '../catalog/ddl';
 import type {
   CatalogReader,
   ColumnInfo,
@@ -15,6 +16,9 @@ import type { RelationColumn } from '../data/types';
 export type SqlEntry =
   | { readonly kind: 'table'; readonly schema: SchemaInfo; readonly table: TableInfo }
   | { readonly kind: 'view'; readonly schema: SchemaInfo; readonly view: ViewInfo };
+
+/** The schema that unqualified names belong to once the lake is the current catalog. */
+export const DEFAULT_SCHEMA = 'main';
 
 /** What the language service knows about the lake at one snapshot; `catalogOfReader` builds one from an explorer reader. */
 export interface SqlCatalog {
@@ -96,7 +100,7 @@ export function catalogOfReader(
 }
 
 const nameKey = (schema: string, name: string): string =>
-  JSON.stringify([schema.toLowerCase(), name.toLowerCase()]);
+  JSON.stringify([foldIdentifier(schema), foldIdentifier(name)]);
 
 interface ViewColumns {
   columns(schema: SchemaInfo, view: ViewInfo): readonly ColumnInfo[];
@@ -176,9 +180,8 @@ function snapshotCatalog(
       );
       return lists.flat();
     });
-  const same = (a: string, b: string): boolean => a.toLowerCase() === b.toLowerCase();
   const entryNamed = async (schema: string, name: string): Promise<SqlEntry | undefined> =>
-    (await entries()).find((e) => same(e.schema.name, schema) && same(nameOf(e), name));
+    (await entries()).find((e) => sameIdentifier(e.schema.name, schema) && sameIdentifier(nameOf(e), name));
   const tableNamed = async (schema: string, table: string): Promise<TableInfo | undefined> => {
     const entry = await entryNamed(schema, table);
     return entry?.kind === 'table' ? entry.table : undefined;
@@ -200,7 +203,7 @@ function snapshotCatalog(
     viewsTrusted: () => viewSource.trusted(),
     macros: (schema) =>
       once(`macros:${schema}`, async () => {
-        const found = (await schemas()).find((s) => same(s.name, schema));
+        const found = (await schemas()).find((s) => sameIdentifier(s.name, schema));
         return found ? reader.macros(found.id, snapshot) : [];
       }),
     snapshots: () => once('snapshots', () => reader.snapshots()),

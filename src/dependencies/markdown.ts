@@ -1,6 +1,6 @@
 import { capRows, code, markdownTable, reportTitle } from '../markdown';
 import { scopeSchema } from '../shell/scope';
-import { markdownText } from '../tree/format';
+import { markdownText } from '../markdown';
 import {
   BROKEN_KIND,
   DIRECTIONS,
@@ -9,9 +9,7 @@ import {
   MAX_DEPTH,
   REASON_TEXT,
   brokenName,
-  dropImpact,
   edgeVerb,
-  impactText,
   issuesOf,
   lakeRows,
   limitNote,
@@ -19,7 +17,7 @@ import {
   traverse,
 } from './model';
 import type { DependenciesData, Direction } from './model';
-import { picture } from './picture';
+import { connectedObjects, picture } from './picture';
 import type { GraphReach, Picture, PictureItem } from './picture';
 
 /** The choices on the page that the document repeats; the extension fits them to the data. */
@@ -28,14 +26,13 @@ export interface DependenciesMarkdownView {
   readonly depth: number;
   /** The filter of the lake list. */
   readonly text: string;
-  /** What the graph of an object holds; connected objects without it. */
+  /** What the graph of an object holds besides what it uses and what uses it; nothing more without it. */
   readonly reach?: GraphReach | undefined;
 }
 
 // The page shows more rows; a smaller depth or a filter reaches the others.
 const MARKDOWN_ROWS = 200;
 const MARKDOWN_OBJECTS = 100;
-const MARKDOWN_NAMES = 50;
 const MARKDOWN_ISSUES = 100;
 // Larger graphs are unreadable as a diagram, and Mermaid refuses more than 500 edges.
 const MARKDOWN_GRAPH_ITEMS = 150;
@@ -176,9 +173,7 @@ function lakeMarkdown(data: DependenciesData, text: string): string {
           ...(omitted > 0 ? ['', `… ${omitted} more omitted (limit: ${MARKDOWN_OBJECTS}).`] : []),
         ]),
     '',
-    ...(data.nodes.length > 0
-      ? graphSection(picture(data, { directions: DIRECTIONS, depth: MAX_DEPTH, reach: 'all' }))
-      : []),
+    ...(data.nodes.length > 0 ? graphSection(picture(data, { depth: MAX_DEPTH, reach: 'all' })) : []),
     ...issueTables(data),
     '',
   ].join('\n');
@@ -192,12 +187,8 @@ export function dependenciesMarkdown(data: DependenciesData, view?: Dependencies
     return lakeMarkdown(data, view?.text.trim() ?? '');
   }
   const depth = Math.min(Math.max(Math.trunc(view?.depth ?? MAX_DEPTH), 1), MAX_DEPTH);
-  const shown = new Set([start]);
   const lists = (view ? [view.direction] : DIRECTIONS).flatMap((direction) => {
     const { rows, cycle } = traverse(data, start, direction, depth);
-    for (const { node } of rows) {
-      shown.add(node);
-    }
     const listed = capRows(rows, MARKDOWN_ROWS);
     return [
       `## ${DIRECTION_LABEL[direction]}`,
@@ -224,11 +215,6 @@ export function dependenciesMarkdown(data: DependenciesData, view?: Dependencies
       '',
     ];
   });
-  const impact = dropImpact(data, start);
-  const names = capRows(
-    impact.objects.map((node) => `- ${code(nameAt(data, node))}`),
-    MARKDOWN_NAMES,
-  );
   const note = limitNote(data);
   return [
     reportTitle('Dependencies of', nameAt(data, start)),
@@ -247,19 +233,9 @@ export function dependenciesMarkdown(data: DependenciesData, view?: Dependencies
     ),
     '',
     ...lists,
-    ...graphSection(
-      picture(data, {
-        directions: view ? [view.direction] : DIRECTIONS,
-        depth,
-        reach: view?.reach ?? 'connected',
-      }),
-    ),
-    `## If you drop ${code(nameAt(data, start))}`,
-    '',
-    impactText(code(nameAt(data, start)), impact),
-    ...(impact.objects.length > 0 ? ['', ...names.shown, ...names.omitted] : []),
-    '',
-    ...issueTables(data, shown),
+    ...graphSection(picture(data, { depth, reach: view?.reach ?? 'connected' })),
+    // The problems of what the graph connects, whatever direction the lists have; not of the faint objects.
+    ...issueTables(data, connectedObjects(data, depth)),
     '',
   ].join('\n');
 }

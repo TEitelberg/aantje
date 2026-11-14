@@ -1,11 +1,12 @@
 import { CLEANUP_OVERDUE_DAYS, SMALL_FILES } from '../catalog/thresholds';
 import { capRows, code, markdownTable, reportTitle } from '../markdown';
-import { count, files, formatBytes, formatUtc, plural, tableLabel } from '../shell/model';
+import { GROWTH_MERGED_NOTE, growthLabel, growthTime } from '../shell/file-growth';
+import { approximateCount, count, files, formatBytes, plural, tableLabel } from '../shell/model';
 import { expirableLine, expirableNote, scheduledLine, scheduledNote } from '../shell/scheduled-text';
 import { lakeWide, scopeSchema } from '../shell/scope';
-import { GROWTH_MERGED_NOTE, growthLabel } from '../stats/model';
 import {
   DEFAULT_SORT,
+  LAKE_WIDE_NOTE,
   GROWTH_ROWS,
   MARKDOWN_TABLES,
   TABLE_LIMIT,
@@ -32,7 +33,7 @@ export function storageMarkdown(data: StorageData, view?: StorageView): string {
     ['Snapshot', `@${data.snapshot}`],
     ['Data files', totals(storage.dataFiles)],
     ['Delete files', totals(storage.deleteFiles)],
-    ['Rows', `${data.approximate ? '~' : ''}${count(data.rows)}`],
+    ['Rows', approximateCount(data.rows, data.approximate)],
     [
       lake('Scheduled for deletion'),
       scheduled.oldest === undefined
@@ -52,7 +53,7 @@ export function storageMarkdown(data: StorageData, view?: StorageView): string {
     reportTitle('Storage of', data.connection, scopeSchema(data.scope)),
     '',
     data.scope.kind === 'schema'
-      ? `The tables of the schema ${code(data.scope.name)}: the files, rows and growth are the schema's. The data path, the encryption, the files scheduled for deletion and the snapshots to expire are lake-wide. Files that are visible at the shown snapshot; the figures of a table cover its data files and delete files.`
+      ? `The tables of the schema ${code(data.scope.name)}: the files, rows and growth are the schema's. ${LAKE_WIDE_NOTE} Files that are visible at the shown snapshot; the figures of a table cover its data files and delete files.`
       : 'Files that are visible at the shown snapshot; the figures of a table cover its data files and delete files.',
     '',
     ...markdownTable(['Property', 'Value'], summary),
@@ -148,7 +149,7 @@ function growthSection(data: StorageData): string[] {
       ['Snapshot', 'Time', 'Size', 'Files', 'Note'],
       newest.shown.map((point) => [
         growthLabel(point),
-        point.time === null ? 'expired' : formatUtc(point.time),
+        growthTime(point),
         formatBytes(point.sizeBytes),
         count(point.files),
         point.compaction ? 'Compaction' : '',

@@ -391,6 +391,22 @@ function actionButtons(
           'Run "aantje: Set S3 Credentials...": it asks for the key id and the secret in its own masked prompts, and the quick check runs again afterwards. This page never sees the keys',
         ),
       ),
+    editConnection: () =>
+      idle(
+        actionButton(
+          'Edit Connection...',
+          () => act('editConnection', finding.id),
+          'Run "aantje: Edit Connection...": the steps include the storage of this connection, and the quick check runs again afterwards',
+        ),
+      ),
+    setStorageSignIn: () =>
+      idle(
+        actionButton(
+          'Set Storage Sign-in...',
+          () => act('setStorageSignIn', finding.id),
+          'Run "aantje: Set Storage Sign-in...": it asks for the keys or tokens in its own masked prompts, and the quick check runs again afterwards. This page never sees them',
+        ),
+      ),
     script: () =>
       actionButton(
         script?.label ?? '',

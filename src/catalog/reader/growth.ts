@@ -2,17 +2,17 @@ import { parseChanges } from '../changes';
 import type { Row } from '../drivers/driver';
 import type { CatalogReader, GrowthChange, GrowthChanges, LakeGrowth } from '../model';
 import * as queries from '../queries/growth';
-import { INLINED_TABLE, inlinedTables } from '../queries/maintenance';
 import { GROWTH_POINT_LIMIT, growth } from '../statistics';
 import type { GrowthDelta } from '../statistics';
-import { toIsoUtcOrNull, toNumber, toText, toTextOrNull } from './rows';
+import { readInlinedTables } from './maintenance';
+import { toIsoUtcOrNull, toNumber, toTextOrNull } from './rows';
 import type { Attempt, Run } from './rows';
 
 // Inlined tables (one per table and schema version) whose rows `growthChanges` counts; the rest are left out.
 const INLINED_GROWTH_TABLES = 200;
 
 /**
- * Deltas from the rows of `growthDeltas` or `lakeGrowthDeltas`. A snapshot compacted only when `merge_adjacent` is an
+ * Deltas from the rows of `lakeGrowthDeltas`. A snapshot compacted only when `merge_adjacent` is an
  * entry of one of `tables` (a table id, or a set of them; every table when absent), not part of a table name.
  */
 export function growthDeltasOf(rows: readonly Row[], tables?: number | ReadonlySet<number>): GrowthDelta[] {
@@ -77,21 +77,17 @@ export function growthReads(run: Run, attempt: Attempt): GrowthReads {
     },
 
     async growthChanges(first, signal): Promise<GrowthChanges> {
-      const found = (await attempt(inlinedTables({}, INLINED_GROWTH_TABLES + 1), signal)) ?? [];
-      // The name is part of the statement: only names DuckLake writes are used.
-      const inlined = found
-        .slice(0, INLINED_GROWTH_TABLES)
-        .map((row) => ({ tableId: toNumber(row.table_id), name: toText(row.table_name) }))
-        .filter(({ name }) => INLINED_TABLE.test(name));
+      const listed = await readInlinedTables(attempt, {}, INLINED_GROWTH_TABLES, signal);
+      const inlined = listed?.tables ?? [];
       const [files, rows] = await Promise.all([
         run(queries.growthChanges(first), signal),
         inlined.length === 0 ? [] : attempt(queries.inlinedGrowthChanges(inlined, first), signal),
       ]);
       return {
         changes: sumChanges([...files, ...(rows ?? [])]),
-        ...(found.length > INLINED_GROWTH_TABLES ? { inlinedMore: true as const } : {}),
+        ...(listed?.more ? { inlinedMore: true as const } : {}),
         // Rows of the data files are still counted.
-        ...(rows === undefined ? { inlinedFailed: true as const } : {}),
+        ...(rows === undefined || listed === undefined ? { inlinedFailed: true as const } : {}),
       };
     },
   };

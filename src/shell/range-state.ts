@@ -14,15 +14,23 @@ export function boundsOf(snapshots: readonly { readonly id: number }[]): Bounds 
   return { first: snapshots[0]?.id ?? 0, last: snapshots.at(-1)?.id ?? 0 };
 }
 
+interface Range {
+  readonly from: number;
+  readonly to: number;
+}
+
+const clamp = (value: number, bounds: Bounds): number => Math.min(Math.max(value, bounds.first), bounds.last);
+
+/** The range with both ends inside the bounds; without a range, all of them. */
+export const fitRange = (range: Range | undefined, bounds: Bounds): Range =>
+  range
+    ? { from: clamp(range.from, bounds), to: clamp(range.to, bounds) }
+    : { from: bounds.first, to: bounds.last };
+
 /** An end at the old last snapshot follows the new one; other ends are clamped. */
-export function restoredRange(
-  range: { readonly from: number; readonly to: number },
-  was: Bounds,
-  now: Bounds,
-): { readonly from: number; readonly to: number } {
-  const fit = (value: number): number => Math.min(Math.max(value, now.first), now.last);
+export function restoredRange(range: Range, was: Bounds, now: Bounds): Range {
   return {
-    from: range.from === was.first ? now.first : fit(range.from),
-    to: range.to === was.last ? now.last : fit(range.to),
+    from: range.from === was.first ? now.first : clamp(range.from, now),
+    to: range.to === was.last ? now.last : clamp(range.to, now),
   };
 }

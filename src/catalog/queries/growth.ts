@@ -1,5 +1,6 @@
 import type { HealthScopeRef } from '../model';
 import { inlinedTable } from './maintenance';
+import type { InlinedTable } from './maintenance';
 import { inScope } from './shared';
 import type { Query } from './shared';
 
@@ -12,56 +13,6 @@ const earlierEnd = (own: string, other: string): string =>
 // A delete file (`d`) ends at its own end or the end of its data file (`f`), whichever is earlier.
 const DELETE_FILE_END = earlierEnd('d.end_snapshot', 'f.end_snapshot');
 
-/**
- * Files and bytes each snapshot added or removed. Rows whose `changes_made` text matches `merge_adjacent` mark
- * compactions; `changed` is 0 when only the text matched (a table name can hold it).
- */
-export function growthDeltas(tableId: number, snapshot: number): Query {
-  return {
-    sql: `SELECT e.snapshot_id, s.snapshot_time, CAST(SUM(e.files) AS BIGINT) AS files, CAST(COALESCE(SUM(e.bytes), 0) AS BIGINT) AS bytes,
-  CAST(SUM(e.changed) AS BIGINT) AS changed, c.changes_made
-FROM (
-  SELECT f.begin_snapshot AS snapshot_id, 1 AS files, f.file_size_bytes AS bytes, 1 AS changed
-  FROM ducklake_data_file f WHERE f.table_id = ? AND f.begin_snapshot <= ?
-  UNION ALL
-  SELECT f.end_snapshot, -1, -f.file_size_bytes, 1
-  FROM ducklake_data_file f WHERE f.table_id = ? AND f.end_snapshot <= ?
-  UNION ALL
-  SELECT d.begin_snapshot, 0, d.file_size_bytes, 1
-  FROM ducklake_delete_file d WHERE d.table_id = ? AND d.begin_snapshot <= ?
-  UNION ALL
-  SELECT x.end_snapshot, 0, -x.file_size_bytes, 1
-  FROM (
-    SELECT d.file_size_bytes,
-      ${DELETE_FILE_END} AS end_snapshot
-    FROM ducklake_delete_file d JOIN ducklake_data_file f ON f.data_file_id = d.data_file_id
-    WHERE d.table_id = ?
-  ) x WHERE x.end_snapshot <= ?
-  UNION ALL
-  SELECT c.snapshot_id, 0, 0, 0
-  FROM ducklake_snapshot_changes c
-  WHERE (c.changes_made LIKE ? OR c.changes_made LIKE ?) AND c.snapshot_id <= ?
-) e
-LEFT JOIN ducklake_snapshot s ON s.snapshot_id = e.snapshot_id
-LEFT JOIN ducklake_snapshot_changes c ON c.snapshot_id = e.snapshot_id
-GROUP BY e.snapshot_id, s.snapshot_time, c.changes_made
-ORDER BY e.snapshot_id`,
-    params: [
-      tableId,
-      snapshot,
-      tableId,
-      snapshot,
-      tableId,
-      snapshot,
-      tableId,
-      snapshot,
-      `%merge_adjacent:${tableId},%`,
-      `%merge_adjacent:${tableId}`,
-      snapshot,
-    ],
-  };
-}
-
 /** The ids of the tables the schema has or had. */
 export function schemaTableIds(schemaId: number): Query {
   return {
@@ -70,7 +21,11 @@ export function schemaTableIds(schemaId: number): Query {
   };
 }
 
-/** The `growthDeltas` of every table in one statement, for the whole lake or the tables in `scope`. */
+/**
+ * Files and bytes each snapshot up to `snapshot` added or removed, for the whole lake or the tables in `scope`. Rows
+ * whose `changes_made` text matches `merge_adjacent` mark compactions; `changed` is 0 when only the text matched (a
+ * table name can hold it, or the merge was of a table outside the scope), so `growthDeltasOf` confirms them.
+ */
 export function lakeGrowthDeltas(snapshot: number, scope: HealthScopeRef = {}): Query {
   const data = inScope('f.table_id', scope);
   const deletes = inScope('d.table_id', scope);
@@ -179,10 +134,7 @@ ${summedFrom(`    SELECT f.table_id, f.begin_snapshot AS snapshot_id, f.record_c
  * `growthChanges` for inlined rows. DuckLake leaves the rows of a dropped table without an end snapshot, so they end
  * with the table. `inlinedTable` checks the names.
  */
-export function inlinedGrowthChanges(
-  inlined: readonly { readonly tableId: number; readonly name: string }[],
-  first: number,
-): Query {
+export function inlinedGrowthChanges(inlined: readonly InlinedTable[], first: number): Query {
   // A table with a version lacking an end snapshot still exists; the versions of a renamed one end one after another.
   const ended = `SELECT table_id, MAX(end_snapshot) AS end_snapshot FROM ducklake_table GROUP BY table_id HAVING COUNT(*) = COUNT(end_snapshot)`;
   const end = earlierEnd('t._ducklake_end_snapshot', 'x.end_snapshot');

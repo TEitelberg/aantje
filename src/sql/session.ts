@@ -2,27 +2,34 @@ import { stat } from 'node:fs/promises';
 import type * as Duckdb from '@duckdb/node-api';
 import { quoteIdentifier } from '../catalog/ddl';
 import {
-  azureSecretStatement,
   dataPathQuery,
   firstSchemaQuery,
   postgresSecretStatement,
   setupStatements,
   USE_LAKE,
 } from '../data/attach';
-import { kindOf, toGridValue } from '../data/engine';
-import { EXTENSION_HINT, firstLine, MISSING_LOCAL_FILE, MISSING_OBJECT, secretsOf } from '../data/errors';
+import { MISSING_LOCAL_FILE, MISSING_OBJECT, secretsOf } from '../data/errors';
 import type { Phase } from '../data/errors';
-import { closeAll, guardedOpen, interruptRepeatedly, loadEngine } from '../data/open-lake';
-import type { Engine } from '../data/open-lake';
+import { kindOf, toGridValue } from '../data/grid-values';
+import { closeAll, openLakeSession } from '../data/open-lake';
 import { startRenewal } from '../data/renewal';
 import { DEFAULT_MAX_ROWS } from '../data/settings';
 import type { DataAccess, GridColumn, GridValue } from '../data/types';
+import { interruptRepeatedly, loadEngine } from '../duckdb/engine';
+import type { Engine } from '../duckdb/engine';
+import { extensionFailure, firstLine, scrubbed } from '../duckdb/messages';
 import { AantjeError, messageOf } from '../errors';
 import { maskSecrets } from '../secrets';
+import { storageSecretStatement } from '../storage/statements';
+import { storageContextOf } from '../storage/diagnose';
 import { translateSqlError } from './errors';
 import type { SessionMode, SqlErrorContext } from './errors';
-import { caretRange, splitScript, utf16Offsets, withoutBom } from './script';
-import type { Range, ScriptStatement, Token } from './script';
+import { serializeSql, tokenRows } from './parser-engine';
+import { caretRange, splitScript, statementSpans, withoutBom } from './script';
+import type { Range, ScriptStatement } from './script';
+import { statementKind } from './statement-kind';
+import { syntaxErrorsOf } from './syntax';
+import type { Diagnostic } from './syntax';
 
 export type { SessionMode } from './errors';
 
@@ -53,6 +60,8 @@ export type SqlEvent =
       readonly statementType: string;
       readonly sql: string;
       readonly offset: number;
+      /** The statement may change the catalog, judged by its tokens (`statement-kind.ts`). */
+      readonly changesCatalog: boolean;
     }
   | {
       readonly kind: 'resultSet';
@@ -70,11 +79,9 @@ export type SqlEvent =
       readonly rowsAffected?: number;
       readonly elapsedMs: number;
     }
-  | { readonly kind: 'error'; readonly index: number; readonly message: string; readonly position?: Range };
-
-export interface Diagnostic extends Range {
-  readonly message: string;
-}
+  | { readonly kind: 'error'; readonly index: number; readonly message: string; readonly position?: Range }
+  /** The profile of Statistics as DuckDB's profiler wrote it (JSON); the results show it as a table, as charts and as text. */
+  | { readonly kind: 'profile'; readonly index: number; readonly json: string };
 
 /**
  * A long-lived DuckDB with the DuckLake attached; one session per editor. It runs any SQL its credentials allow;
@@ -95,11 +102,18 @@ export interface SqlSession {
   cancel(): void;
   /** Rolls back an open transaction, then closes the connections and the instance. */
   close(): Promise<void>;
+  /** The text with the secrets of the connection masked, as in the session's own messages. */
+  mask(text: string): string;
 }
 
 interface Limits {
   readonly maxRows: number;
   readonly maxCells: number;
+}
+
+/** A statement of a script and whether it may change the catalog. */
+interface Planned extends ScriptStatement {
+  readonly changesCatalog: boolean;
 }
 
 const STARTS_TRANSACTION = new Set(['BEGIN', 'START']);
@@ -120,7 +134,7 @@ export async function openSqlSession(options: SqlSessionOptions): Promise<SqlSes
     );
   }
   const engine = await loadEngine();
-  return guardedOpen({
+  return openLakeSession({
     engine,
     access,
     signal,
@@ -130,8 +144,6 @@ export async function openSqlSession(options: SqlSessionOptions): Promise<SqlSes
     activity: 'Opening the DuckLake',
     // An immediate reconnect must not fail with "being used by another process".
     lockingFile: profile.kind === 'duckdb',
-    keepOpen: true,
-    parser: true,
     use: ({ instance, connection, parser, temporary }) =>
       new LiveSession({
         engine,
@@ -166,16 +178,16 @@ async function useLake(connection: Duckdb.DuckDBConnection): Promise<void> {
 }
 
 function openError(cause: unknown, phase: Phase, access: DataAccess, mode: SessionMode): AantjeError {
-  const raw = maskSecrets(messageOf(cause), secretsOf(access));
-  const safeCause = new Error(firstLine(raw));
+  const { text: raw, line } = scrubbed(cause, secretsOf(access));
+  const safeCause = new Error(line);
   if (phase === 'extension') {
-    return new AantjeError(
-      'CONNECTION_FAILED',
-      `A DuckDB extension that aantje needs for the SQL editor could not be installed or loaded (${safeCause.message}). ${EXTENSION_HINT}`,
-      { cause: safeCause },
-    );
+    return extensionFailure('A DuckDB extension that aantje needs for the SQL editor', line);
   }
-  const { code, message } = translateSqlError(raw, { mode, kind: access.profile.kind });
+  const { code, message } = translateSqlError(raw, {
+    mode,
+    kind: access.profile.kind,
+    storage: storageContextOf(access.storage),
+  });
   // A rule has a code of its own; for the rest, the attach failed.
   return new AantjeError(
     code === 'QUERY_FAILED' ? 'CONNECTION_FAILED' : code,
@@ -228,7 +240,11 @@ class LiveSession implements SqlSession {
       parser: this.parser,
       temporary: this.temporary,
     } = options);
-    this.context = { mode: options.mode, kind: options.access.profile.kind };
+    this.context = {
+      mode: options.mode,
+      kind: options.access.profile.kind,
+      storage: storageContextOf(options.access.storage),
+    };
     this.secrets = secretsOf(options.access);
     this.keepAzureTokenFresh(options.access);
   }
@@ -271,6 +287,10 @@ class LiveSession implements SqlSession {
     return this.closing;
   }
 
+  mask(text: string): string {
+    return maskSecrets(text, this.secrets);
+  }
+
   // The azure extension never renews an access token, so the secret is replaced from time to time; so is the PostgreSQL
   // secret of an Entra login. The second connection does it, because the first may be running a statement; secrets
   // belong to the instance, not to a connection.
@@ -278,9 +298,7 @@ class LiveSession implements SqlSession {
     const renewals = tokenRenewals(access, this.secrets, (sql) => this.parser.run(sql));
     if (renewals.length === 0) return;
     this.azureRefresh = startRenewal(renewals, (error) => {
-      access.log?.warn(
-        `A token of the SQL session could not be renewed: ${maskSecrets(messageOf(error), this.secrets)}`,
-      );
+      access.log?.warn(`A token of the SQL session could not be renewed: ${this.scrubbed(error)}`);
     });
   }
 
@@ -302,7 +320,7 @@ class LiveSession implements SqlSession {
 
   private async *execute(script: string, maxRows: number, maxCells: number): AsyncGenerator<SqlEvent> {
     let cellsLeft = maxCells;
-    let statements: ScriptStatement[];
+    let statements: Planned[];
     try {
       statements = await this.split(script);
     } catch (cause) {
@@ -334,6 +352,7 @@ class LiveSession implements SqlSession {
         statementType: statement.keyword,
         sql: statement.sql,
         offset: statement.offset,
+        changesCatalog: statement.changesCatalog,
       };
       if (this.cancelRequested) {
         yield { kind: 'error', index, message: withRest('The run was cancelled.', rest + 1) };
@@ -373,14 +392,14 @@ class LiveSession implements SqlSession {
   }
 
   // Splits by tokenizing; the parser has to agree on the number of statements.
-  private async split(script: string): Promise<ScriptStatement[]> {
-    const tokens = (
-      await this.parser.runAndReadAll('SELECT start, token_type, word FROM sql_tokenize($1)', [script])
-    ).getRowsJson() as unknown as [number, string, string][];
-    const statements = splitScript(
-      script,
-      tokens.map(([start, type, word]): Token => ({ start, type, word })),
-    );
+  private async split(script: string): Promise<Planned[]> {
+    const tokens = await tokenRows(this.parser, script);
+    // Both cut the tokens alike, so the n-th span is the n-th statement.
+    const spans = statementSpans(tokens);
+    const statements = splitScript(script, tokens).map((statement, index) => ({
+      ...statement,
+      changesCatalog: statementKind(spans[index]?.tokens ?? []) === 'writes',
+    }));
     if (statements.length > 0) {
       const parsed = await this.parser.extractStatements(script);
       if (parsed.count !== statements.length) {
@@ -477,7 +496,7 @@ class LiveSession implements SqlSession {
   }
 
   private scrubbed(cause: unknown): string {
-    return maskSecrets(messageOf(cause), this.secrets);
+    return this.mask(messageOf(cause));
   }
 
   // A failed COMMIT or ROLLBACK also leaves no transaction. A failure inside an open one may have aborted it;
@@ -505,29 +524,25 @@ async function syntaxErrors(parser: Duckdb.DuckDBConnection, original: string): 
   return syntaxErrorsOf(await serializeSql(parser, text), text);
 }
 
-/** The `json_serialize_sql` document of a text: its statements, or the error that parsing or serializing it gave. */
-export async function serializeSql(parser: Duckdb.DuckDBConnection, text: string): Promise<string> {
-  const reader = await parser.runAndReadAll('SELECT json_serialize_sql($1)', [text]);
-  return reader.getRowsJson()[0]?.[0] as string;
-}
-
 /**
- * The jobs that replace the tokens of a session: the storage token of an Azure lake, the password of an Entra login.
+ * The jobs that replace the tokens of a session: the storage token of an Azure or OneLake storage, the password of an
+ * Entra login.
  * Each new token joins `secrets` before it is used, so that an error quoting it is masked; the old ones stay there,
  * because a statement that started with one may still report it.
  */
 export function tokenRenewals(
-  { azure, profile, renewPassword }: DataAccess,
+  { storage, profile, renewPassword }: DataAccess,
   secrets: string[],
   run: (sql: string) => Promise<unknown>,
 ): (() => Promise<void>)[] {
   const renewals: (() => Promise<void>)[] = [];
-  if (azure?.refresh) {
-    const { accountName, refresh } = azure;
+  if (storage?.refresh) {
+    const { refresh } = storage;
     renewals.push(async () => {
-      const token = await refresh();
-      secrets.push(token);
-      await run(azureSecretStatement(accountName, token));
+      const accessToken = await refresh();
+      secrets.push(accessToken);
+      const renewed = storageSecretStatement({ ...storage, values: { ...storage.values, accessToken } });
+      if (renewed) await run(renewed);
     });
   }
   if (renewPassword && profile.kind === 'postgres') {
@@ -538,32 +553,6 @@ export function tokenRenewals(
     });
   }
   return renewals;
-}
-
-/** The syntax errors that a `json_serialize_sql` document of the text reports. */
-export function syntaxErrorsOf(serialized: string, text: string): Diagnostic[] {
-  const json = JSON.parse(serialized) as {
-    error?: boolean;
-    error_type?: string;
-    error_message?: string;
-    position?: string;
-    location?: string;
-  };
-  // A valid non-SELECT statement answers with a serialization error, which is no syntax error.
-  if (!json.error || json.error_type !== 'parser' || json.position === undefined) return [];
-  const unitOf = utf16Offsets(text);
-  const [start = Number(json.position), bytes = 1] = json.location
-    ? (JSON.parse(json.location) as number[])
-    : [];
-  const offset = unitOf(start);
-  const message = json.error_message ?? 'Syntax error';
-  return [
-    {
-      offset,
-      length: Math.max(unitOf(start + bytes) - offset, 1),
-      message: message.charAt(0).toUpperCase() + message.slice(1),
-    },
-  ];
 }
 
 function withRest(message: string, rest: number): string {

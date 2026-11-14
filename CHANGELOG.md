@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.5] - 2026-11-14
+
+Storage per connection: where the data files of a lake live, and how aantje signs in there, is now part of the connection.
+
+- A `postgres`, `sqlite` or `duckdb` profile can carry `storage`: AWS S3, an S3-compatible store (MinIO, RustFS, Cloudflare R2, Wasabi), Azure ADLS Gen2 or Blob, or Microsoft Fabric OneLake, each with its own sign-in (keys, credential chain, Entra ID, account key, SAS or service principal). The sign-in values live in the secret storage of that connection, never in the settings. A Quack profile has none, because the server reads the files.
+- Add Connection and Edit Connection ask for the storage; Set Storage Sign-in... changes the values later; Test Connection checks the catalog and then the storage.
+- Profiles without `storage` keep working: they use the `aantje.s3.*` settings and the global keys as before, and a legacy `azureAccount` is read as Azure with Entra ID.
+- Create and Import Azure DuckLake write `storage` into the profile. A lake that was saved but never attached, and a deployment that was interrupted by closing the editor, are reported at the next start with a button to finish them.
+- SQLite and DuckDB: when the file of a new connection does not exist, the wizard offers to create a DuckLake there.
+- Notebooks for Azure lakes sign in with a device code and renew the storage secret with `refresh_storage_secret()`.
+- The Oog Docker stack preconfigures the connection "Oog Lakehouse S3", which uses its own storage.
+
 ## [0.2.1] - 2026-11-04
 
 The first release from this repository. Open VSX had 0.1.0 to 0.1.21 and 0.2.0 before; this release has everything they had and the fixes since.
@@ -20,4 +32,5 @@ The first release from this repository. Open VSX had 0.1.0 to 0.1.21 and 0.2.0 b
 - DuckDB + Quack as a fourth catalog kind: a catalog served by a DuckDB server over Quack, with the token in the secret storage and the server certificate pinned after you confirm its fingerprint. The explorer stays connected while a SQL editor session writes; there is no read-only switch, because the server decides what the token may do. Quack is experimental in DuckDB 2.0.0.
 - DuckLake specification 1.x, VS Code 1.140 or newer, desktop VS Code and code-server, Windows x64 and Linux x64. No telemetry.
 
+[0.2.5]: https://github.com/TEitelberg/aantje/releases/tag/v0.2.5
 [0.2.1]: https://github.com/TEitelberg/aantje/releases/tag/v0.2.1

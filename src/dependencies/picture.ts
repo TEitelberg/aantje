@@ -1,14 +1,14 @@
+import { groupBy } from '../order';
 import type { DependencyEdge, NodeKind } from './graph';
-import { brokenName, nameAt, traverse } from './model';
-import type { DependenciesData, Direction } from './model';
+import { DIRECTIONS, brokenName, nameAt, traverse } from './model';
+import type { DependenciesData } from './model';
 
 /** What the graph of one object shows: the objects connected to it, or every object with dependencies. */
 export type GraphReach = 'connected' | 'all';
 export const GRAPH_REACHES: readonly GraphReach[] = ['connected', 'all'];
 
 export interface PictureInput {
-  /** The directions in which an object counts as connected to the object of the report. */
-  readonly directions: readonly Direction[];
+  /** How many levels the graph of an object follows, on each side of it. */
   readonly depth: number;
   readonly reach: GraphReach;
 }
@@ -39,14 +39,17 @@ export interface Picture {
   readonly edges: readonly PictureEdge[];
 }
 
-// The objects connected to the object of the report, itself included; undefined for a lake or a schema.
-function connected(data: DependenciesData, input: PictureInput): ReadonlySet<number> | undefined {
+/**
+ * The objects that the graph of an object connects: the object, what it uses and what uses it, each up to `depth`.
+ * The problem tables cover the same objects. Undefined for a lake or a schema.
+ */
+export function connectedObjects(data: DependenciesData, depth: number): ReadonlySet<number> | undefined {
   const start = data.target;
   if (start === null) return undefined;
   return new Set([
     start,
-    ...input.directions.flatMap((direction) =>
-      traverse(data, start, direction, input.depth).rows.map(({ node }) => node),
+    ...DIRECTIONS.flatMap((direction) =>
+      traverse(data, start, direction, depth).rows.map(({ node }) => node),
     ),
   ]);
 }
@@ -90,11 +93,11 @@ function rowsOf(columns: readonly number[], uses: ReadonlyMap<number, readonly n
 
 /**
  * The graph as boxes in columns along the data flow. For the lake or a schema it holds every object of the data; for
- * an object the objects connected to it in the directions and the depth, or every object on Show all. The names that no
- * object has hang on the objects that name them.
+ * an object what it uses and what uses it, each up to the depth, or every object on Show all. The names that no object
+ * has hang on the objects that name them.
  */
 export function picture(data: DependenciesData, input: PictureInput): Picture {
-  const near = connected(data, input);
+  const near = connectedObjects(data, input.depth);
   const shown =
     near && input.reach === 'connected'
       ? [...near].sort((a, b) => a - b)
@@ -124,10 +127,11 @@ export function picture(data: DependenciesData, input: PictureInput): Picture {
     }
     edges.push({ from: item, to: user, kind: 'missing' });
   }
-  const uses = new Map<number, number[]>();
-  for (const { from, to } of edges) {
-    uses.set(to, [...(uses.get(to) ?? []), from]);
-  }
+  const uses = groupBy(
+    edges,
+    (edge) => edge.to,
+    (edge) => edge.from,
+  );
   const columns = columnsOf(boxes.length, uses);
   const rows = rowsOf(columns, uses);
   return {

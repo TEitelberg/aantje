@@ -1,3 +1,4 @@
+import { groupBy } from '../../order';
 import type { Row } from '../drivers/driver';
 import type {
   CatalogReader,
@@ -7,7 +8,7 @@ import type {
   PartitionStatistics,
   TableStatistics,
 } from '../model';
-import * as growthQueries from '../queries/growth';
+import { lakeGrowthDeltas } from '../queries/growth';
 import * as objectQueries from '../queries/objects';
 import * as queries from '../queries/statistics';
 import {
@@ -33,14 +34,16 @@ interface Range {
   readonly max: string | null;
 }
 
-// Ranges by column id; `partial` when they cover only part of the files.
+// Ranges by column id; `partial` when they cover only part of the files, `unread` when they could not be read.
 interface Ranges {
   readonly byColumn: Map<number, Range>;
   readonly partial: boolean;
+  readonly unread: boolean;
 }
 
+// The partition values may fail to read (`unread`): the partitioning still shows, without partitions.
 async function partitionStatistics(
-  attempt: Attempt,
+  { run, attempt }: { readonly run: Run; readonly attempt: Attempt },
   tableId: number,
   snapshot: number,
   partitioning: PartitioningInfo,
@@ -52,7 +55,7 @@ async function partitionStatistics(
       queries.partitionBuckets(tableId, snapshot, partitioning.id, keyCount, PARTITION_READ_LIMIT + 1),
       signal,
     ),
-    attempt(queries.otherPartitionFiles(tableId, snapshot, partitioning.id), signal),
+    run(queries.otherPartitionFiles(tableId, snapshot, partitioning.id), signal),
   ]);
   const buckets: PartitionBucket[] = (rows ?? []).slice(0, PARTITION_READ_LIMIT).map((row) => ({
     values: Array.from({ length: keyCount }, (_, key) => toTextOrNull(row[`key${key}`])),
@@ -79,8 +82,9 @@ async function partitionStatistics(
         }
       : {}),
     evenness: evenness(buckets.map((bucket) => bucket.sizeBytes)),
-    earlierFiles: earlier?.[0] ? toNumber(earlier[0].file_count) : 0,
+    earlierFiles: earlier[0] ? toNumber(earlier[0].file_count) : 0,
     ...((rows?.length ?? 0) > PARTITION_READ_LIMIT ? { partial: true as const } : {}),
+    ...(rows === undefined ? { unread: true as const } : {}),
     ...(partitioning.columns.length > keyCount
       ? { keysLeftOut: partitioning.columns.length - keyCount }
       : {}),
@@ -93,14 +97,15 @@ async function latestRanges(
   tableId: number,
   signal: AbortSignal | undefined,
 ): Promise<Ranges> {
+  const rows = await attempt(queries.tableColumnRanges(tableId), signal);
   const byColumn = new Map<number, Range>();
-  for (const row of (await attempt(queries.tableColumnRanges(tableId), signal)) ?? []) {
+  for (const row of rows ?? []) {
     byColumn.set(toNumber(row.column_id), {
       min: toTextOrNull(row.min_value),
       max: toTextOrNull(row.max_value),
     });
   }
-  return { byColumn, partial: false };
+  return { byColumn, partial: false, unread: rows === undefined };
 }
 
 // At an older snapshot: ranges of the visible files, as many as `RANGE_ROW_LIMIT` allows.
@@ -111,21 +116,17 @@ async function fileRanges(
   flat: ReturnType<typeof flatten>,
   signal: AbortSignal | undefined,
 ): Promise<Ranges> {
-  const rows =
-    (await attempt(queries.fileColumnRanges(tableId, snapshot, RANGE_ROW_LIMIT + 1), signal)) ?? [];
-  const perColumn = new Map<number, Range[]>();
-  for (const row of rows.slice(0, RANGE_ROW_LIMIT)) {
-    const id = toNumber(row.column_id);
-    perColumn.set(id, [
-      ...(perColumn.get(id) ?? []),
-      { min: toTextOrNull(row.min_value), max: toTextOrNull(row.max_value) },
-    ]);
-  }
+  const rows = await attempt(queries.fileColumnRanges(tableId, snapshot, RANGE_ROW_LIMIT + 1), signal);
+  const perColumn = groupBy((rows ?? []).slice(0, RANGE_ROW_LIMIT), (row) => toNumber(row.column_id));
   const byColumn = new Map<number, Range>();
   for (const [id, files] of perColumn) {
-    byColumn.set(id, foldRange(flat.find(({ column }) => column.id === id)?.column.type ?? '', files));
+    const ranges = files.map((row) => ({
+      min: toTextOrNull(row.min_value),
+      max: toTextOrNull(row.max_value),
+    }));
+    byColumn.set(id, foldRange(flat.find(({ column }) => column.id === id)?.column.type ?? '', ranges));
   }
-  return { byColumn, partial: rows.length > RANGE_ROW_LIMIT };
+  return { byColumn, partial: (rows?.length ?? 0) > RANGE_ROW_LIMIT, unread: rows === undefined };
 }
 
 function columnStatistics(
@@ -159,7 +160,8 @@ type StatisticsReads = Pick<CatalogReader, 'tableStatistics'>;
 export function statisticsReads(run: Run, attempt: Attempt): StatisticsReads {
   return {
     async tableStatistics(tableId, snapshot, signal): Promise<TableStatistics> {
-      // Two waves: independent figures first, then those that need the columns or partitioning.
+      // Two waves: independent figures first, then those that need the columns or partitioning. The statistics of the
+      // columns and the partition values may fail to read: the figures of the files still show, with a flag.
       const [[summary], bins, partitionKeys, tree, nulls, info, deltas] = await Promise.all([
         run(queries.fileSummary(tableId, snapshot), signal),
         run(queries.fileSizeBins(tableId, snapshot), signal),
@@ -167,7 +169,7 @@ export function statisticsReads(run: Run, attempt: Attempt): StatisticsReads {
         readColumns(run, tableId, snapshot, signal),
         attempt(queries.columnNulls(tableId, snapshot), signal),
         readInfo(run, signal),
-        run(growthQueries.growthDeltas(tableId, snapshot), signal),
+        run(lakeGrowthDeltas(snapshot, { tableId }), signal),
       ]);
       const flat = flatten(tree);
       const partitioning = partitioningOf(partitionKeys ?? [], columnPaths(tree));
@@ -175,7 +177,9 @@ export function statisticsReads(run: Run, attempt: Attempt): StatisticsReads {
         snapshot >= info.latestSnapshot
           ? latestRanges(attempt, tableId, signal)
           : fileRanges(attempt, tableId, snapshot, flat, signal),
-        partitioning ? partitionStatistics(attempt, tableId, snapshot, partitioning, signal) : undefined,
+        partitioning
+          ? partitionStatistics({ run, attempt }, tableId, snapshot, partitioning, signal)
+          : undefined,
       ]);
       const largest = toNumber(summary?.largest);
       const { points, merged } = growth(growthDeltasOf(deltas, tableId));
@@ -201,6 +205,7 @@ export function statisticsReads(run: Run, attempt: Attempt): StatisticsReads {
         ...(partitionStats ? { partitioning: partitionStats } : {}),
         columns: columnStatistics(flat, nulls ?? [], ranges.byColumn),
         ...(ranges.partial ? { columnsPartial: true as const } : {}),
+        ...(nulls === undefined || ranges.unread ? { columnsUnread: true as const } : {}),
         growth: points,
         ...(merged ? { growthMerged: true as const } : {}),
       };

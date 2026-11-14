@@ -1,6 +1,7 @@
 import { code, markdownTable, reportTitle } from '../markdown';
-import { shortUtc } from '../shell/model';
-import { markdownText } from '../tree/format';
+import { kindsText, markdownText } from '../markdown';
+import { shortUtc, tableLabel } from '../shell/model';
+import { boundsOf, fitRange } from '../shell/range-state';
 import {
   CELL_KINDS,
   SCHEMA_HISTORY_KIND_LABEL,
@@ -9,7 +10,6 @@ import {
   OLDER_NOTE,
   columnLabel,
   eventText,
-  tableLabel,
   schemaHistoryViewOf,
 } from './model';
 import type { CellKind, SchemaHistoryData } from './model';
@@ -23,12 +23,9 @@ export interface SchemaHistoryMarkdownView {
 
 /** The filtered matrix, snapshots and legend as Markdown; without a view, everything. Catalog text is code. */
 export function schemaHistoryMarkdown(data: SchemaHistoryData, view?: SchemaHistoryMarkdownView): string {
-  const first = data.snapshots[0]?.id ?? 0;
-  const last = data.snapshots.at(-1)?.id ?? 0;
-  const fit = (value: number): number => Math.min(Math.max(value, first), last);
   const kinds = view ? CELL_KINDS.filter((kind) => view.kinds.includes(kind)) : CELL_KINDS;
   const text = view?.text.trim() ?? '';
-  const range = view?.range ? { from: fit(view.range.from), to: fit(view.range.to) } : undefined;
+  const range = view?.range ? fitRange(view.range, boundsOf(data.snapshots)) : undefined;
   const shown = schemaHistoryViewOf(data, { kinds, text, ...(range ? { range } : {}) });
   const heads = shown.snapshots.map(({ id }) => `@${id}`);
   const events = shown.snapshots.map(({ events: own }) =>
@@ -47,12 +44,7 @@ export function schemaHistoryMarkdown(data: SchemaHistoryData, view?: SchemaHist
   const summary = [
     ['Table', code(tableLabel(data))],
     ['Snapshots in the matrix', `${shown.snapshots.length} of ${data.snapshots.length}`],
-    [
-      'Kinds of change',
-      kinds.length === CELL_KINDS.length
-        ? 'all'
-        : kinds.map((kind) => SCHEMA_HISTORY_KIND_LABEL[kind]).join(', ') || 'none',
-    ],
+    ['Kinds of change', kindsText(kinds, CELL_KINDS, SCHEMA_HISTORY_KIND_LABEL)],
     ['Column filter', text === '' ? 'none' : code(text)],
     ['Range', range ? `@${range.from} to @${range.to}` : 'all'],
   ];
