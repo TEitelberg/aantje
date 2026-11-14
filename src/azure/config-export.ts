@@ -1,3 +1,4 @@
+import { azureAccountOf, isAzureLake, signsInWithEntra } from '../connections/profile';
 import type { PostgresProfile } from '../connections/profile';
 
 /** The container and the folder of the data files that `deploy/azure/main.bicep` creates; the profile does not keep them. */
@@ -10,11 +11,12 @@ const DATA_PREFIX = 'data';
  * Azure lake.
  */
 export function azureNotebookConfig(profile: PostgresProfile): string | undefined {
-  if (profile.azureAccount === undefined) {
+  const azure = azureAccountOf(profile);
+  if (!isAzureLake(profile) || azure === undefined) {
     return undefined;
   }
   const config = {
-    storageAccount: profile.azureAccount,
+    storageAccount: azure.account,
     container: CONTAINER,
     dataPrefix: DATA_PREFIX,
     bronzePrefix: 'bronze',
@@ -24,8 +26,8 @@ export function azureNotebookConfig(profile: PostgresProfile): string | undefine
     pgDatabase: profile.database,
     pgUser: profile.user,
     auth: 'device_code',
-    pgAuth: profile.azureAuth === 'entra' ? 'entra' : 'password',
-    tenantId: profile.azureTenant ?? '',
+    pgAuth: signsInWithEntra(profile) ? 'entra' : 'password',
+    tenantId: azure.tenant ?? '',
   };
   return `${JSON.stringify(config, null, 2)}\n`;
 }

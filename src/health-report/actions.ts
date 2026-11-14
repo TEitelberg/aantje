@@ -1,6 +1,6 @@
 import type { HealthFinding } from '../health/model';
 import { maintenanceScriptOf } from '../health/maintenance-script';
-import type { MaintenanceKind } from '../maintenance';
+import type { MaintenanceKind } from '../maintenance/scripts';
 import { actionsOf, healthScriptOf } from './model';
 import type { FindingActionId, HealthData } from './model';
 import type { HealthAction } from './protocol';
@@ -18,7 +18,7 @@ export type HealthPlan =
   | { readonly action: 'maintenanceScript'; readonly text: string }
   | { readonly action: 'inspect'; readonly sql: string }
   | { readonly action: 'setting'; readonly key: string }
-  | { readonly action: 'setCredentials' }
+  | { readonly action: 'setCredentials' | 'editConnection' | 'setStorageSignIn' }
   | {
       readonly action: 'useEndpoint';
       readonly endpoint: string;
@@ -48,6 +48,10 @@ const FINDING_PLANS: Record<FindingActionId, (request: FindingRequest) => Health
     finding.settingKey === undefined ? undefined : { action: 'setting', key: finding.settingKey },
   setCredentials: ({ finding, running }) =>
     !running && actionsOf(finding).includes('setCredentials') ? { action: 'setCredentials' } : undefined,
+  editConnection: ({ finding, running }) =>
+    !running && actionsOf(finding).includes('editConnection') ? { action: 'editConnection' } : undefined,
+  setStorageSignIn: ({ finding, running }) =>
+    !running && actionsOf(finding).includes('setStorageSignIn') ? { action: 'setStorageSignIn' } : undefined,
   useEndpoint: ({ finding, running }) => {
     const { suggestion } = finding;
     return !running && suggestion && actionsOf(finding).includes('useEndpoint')

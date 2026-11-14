@@ -1,6 +1,6 @@
 import type { ConsistencyCheck, HealthScopeRef } from '../model';
 import { SMALL_FILES, SMALL_FILE_BYTES } from '../thresholds';
-import { WITH_SNAPSHOT, inScope, visible } from './shared';
+import { WITH_SNAPSHOT, inScope, placeholders, visible } from './shared';
 import type { Query } from './shared';
 
 /** Tables with data files below `SMALL_FILE_BYTES` at the snapshot, with their file count and small file count. */
@@ -172,6 +172,17 @@ LIMIT ${limit}`,
   };
 }
 
+// The data files that have a delete file at the newest state, once each, as `d.data_file_id`. A delete file counts
+// only through a data file that is valid too: a catalog can keep a delete file open whose data file has ended.
+const DELETED = `(SELECT DISTINCT od.data_file_id FROM ducklake_delete_file od WHERE od.end_snapshot IS NULL) d
+  ON d.data_file_id = f.data_file_id`;
+
+// `DeletedFiles` of the files `f` joined to `DELETED`; its one placeholder is `SMALL_FILE_BYTES`. A size below 1 byte
+// adds nothing, so a broken size cannot make the sum negative.
+const DELETED_COLUMNS = `CAST(SUM(CASE WHEN f.file_size_bytes < ? THEN 1 ELSE 0 END) AS BIGINT) AS deleted_small,
+  CAST(COUNT(*) AS BIGINT) AS deleted_files,
+  CAST(SUM(CASE WHEN f.file_size_bytes > 0 THEN f.file_size_bytes ELSE 0 END) AS BIGINT) AS deleted_bytes`;
+
 /**
  * Tables of small files (`SMALL_FILES`) at the newest state; thresholds sit in the SQL because `limit` cuts the list.
  */
@@ -195,6 +206,44 @@ LIMIT ${limit}`,
       SMALL_FILE_BYTES,
       Math.round(SMALL_FILES.ratio * 10_000),
     ],
+  };
+}
+
+/**
+ * The data files of these tables that have a delete file at the newest state, as `DeletedFiles`; a table without
+ * such a file has no row. It serves the tables of `smallFileTables`.
+ */
+export function tableDeletedFiles(tableIds: readonly number[]): Query {
+  return {
+    sql: `SELECT f.table_id,
+  ${DELETED_COLUMNS}
+FROM ducklake_data_file f
+JOIN ${DELETED}
+WHERE f.end_snapshot IS NULL AND f.table_id IN (${placeholders(tableIds)})
+GROUP BY f.table_id`,
+    params: [SMALL_FILE_BYTES, ...tableIds],
+  };
+}
+
+/**
+ * Tables with small data files that have a delete file at the newest state, with their names then; whatever the
+ * number of their files. A merge leaves such files alone.
+ */
+export function deletedSmallFiles(scope: HealthScopeRef, limit: number): Query {
+  const only = inScope('f.table_id', scope);
+  return {
+    sql: `SELECT f.table_id, s.schema_name, t.table_name,
+  ${DELETED_COLUMNS}
+FROM ducklake_data_file f
+JOIN ${DELETED}
+JOIN ducklake_table t ON t.table_id = f.table_id AND t.end_snapshot IS NULL
+JOIN ducklake_schema s ON s.schema_id = t.schema_id AND s.end_snapshot IS NULL
+WHERE f.end_snapshot IS NULL${only ? ` AND ${only.sql}` : ''}
+GROUP BY f.table_id, s.schema_name, t.table_name
+HAVING SUM(CASE WHEN f.file_size_bytes < ? THEN 1 ELSE 0 END) > 0
+ORDER BY f.table_id
+LIMIT ${limit}`,
+    params: [SMALL_FILE_BYTES, ...(only?.params ?? []), SMALL_FILE_BYTES],
   };
 }
 
@@ -250,10 +299,24 @@ export function inlinedTable(name: string): string {
   return `"${name}"`;
 }
 
-/** Count of the still valid rows in one inlined table; `inlinedTable` checks the name. */
-export function inlinedRows(tableName: string): Query {
+/** An inlined table as the catalog lists it: the table whose rows it holds, and its name. */
+export interface InlinedTable {
+  readonly tableId: number;
+  readonly name: string;
+}
+
+/**
+ * The still valid rows of each of these inlined tables in one statement: one row per inlined table, with `table_id`
+ * and `row_count`. `inlinedTable` checks the names; the list must not be empty.
+ */
+export function inlinedRows(tables: readonly InlinedTable[]): Query {
   return {
-    sql: `SELECT CAST(COUNT(*) AS BIGINT) AS row_count FROM ${inlinedTable(tableName)} WHERE _ducklake_end_snapshot IS NULL`,
+    sql: tables
+      .map(
+        ({ tableId, name }) =>
+          `SELECT ${Math.trunc(tableId)} AS table_id, CAST(COUNT(*) AS BIGINT) AS row_count FROM ${inlinedTable(name)} WHERE _ducklake_end_snapshot IS NULL`,
+      )
+      .join('\nUNION ALL\n'),
     params: [],
   };
 }

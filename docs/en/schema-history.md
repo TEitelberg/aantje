@@ -43,13 +43,13 @@ At most 100 rows are drawn; a note says how many were left out, and the column f
 
 A click on a cell selects its snapshot and column; a click on a heading selects the snapshot. The pane shows time, author, commit message, what the snapshot did to the table and every change of the snapshot, with the selected column in bold. The buttons run the implementations of the commands of the same name with an explicit target.
 
-| Button                          | What happens                                                                                            | Offered when                                                        |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| Show catalog at @N              | The tree shows the catalog at snapshot N                                                                | always                                                              |
-| Query...                        | Top 1000 Rows, Create Notebook or Open as SQL for the table at N, under the name it had then            | the table exists after N                                            |
-| Compare Schema with previous @P | Diff editor over the `CREATE TABLE` of two snapshots and the summary, as **Compare Schema**             | the table exists after N and a version precedes it                  |
-| Compare Schema with latest @L   | The same against the newest snapshot                                                                    | the table exists after N and at the newest snapshot, which is later |
-| Script as ALTER                 | The **Script as ALTER** template for the newest state, in an SQL editor of the connection; nothing runs | the table exists at the newest snapshot                             |
+| Button                          | What happens                                                                                                | Offered when                                                        |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| Show catalog at @N              | The tree shows the catalog at snapshot N                                                                    | always                                                              |
+| Query...                        | Top 1000 Rows, Create Notebook or Open as SQL for the table at N, under the name it had then                | the table exists after N                                            |
+| Compare Schema with previous @P | Diff editor over the `CREATE TABLE` of two snapshots and the summary, as **Compare Table at Two Snapshots** | the table exists after N and a version precedes it                  |
+| Compare Schema with latest @L   | The same against the newest snapshot                                                                        | the table exists after N and at the newest snapshot, which is later |
+| Script as ALTER                 | The **Script as ALTER** template for the newest state, in an SQL editor of the connection; nothing runs     | the table exists at the newest snapshot                             |
 
 `previous` is the snapshot of the version before the selected one, not necessarily N-1. See [Time travel](time-travel.md) for the commands.
 

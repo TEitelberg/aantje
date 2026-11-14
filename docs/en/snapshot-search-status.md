@@ -1,6 +1,6 @@
 # Snapshot selection, catalog search and status bar
 
-`src/snapshot.ts`, `src/search.ts` and `src/status.ts` hold the logic behind three explorer features: time travel with a snapshot picker, the catalog search and the status bar item. They are pure functions without a `vscode` import. The wiring in `src/commands.vscode.ts` (the two pickers, built on `createQuickPick`) and `src/extension.ts` (the status bar item) only turns their results into UI.
+`src/snapshot.ts`, `src/search.ts` and `src/status.ts` hold the logic behind three explorer features: time travel with a snapshot picker, the catalog search and the status bar item. They are pure functions without a `vscode` import. The wiring in `src/time-travel.vscode.ts` and `src/commands.vscode.ts` (the two pickers, built on `createQuickPick`) and `src/extension.ts` (the status bar item) only turns their results into UI.
 
 ## What the user gets
 
@@ -15,19 +15,34 @@ The cursor starts on the current selection (`picked`): "Latest" while the tree f
 
 ### Search Catalog
 
-`aantje: Search Catalog...` (`aantje.search`) lists every table and view of the connected catalog at the selected snapshot as `<schema>.<name>` with `table` or `view` as description, sorted by schema and then name, ignoring case and comparing numbers by value (`part_2` before `part_10`), like the tree. VS Code filters the list while you type. After a pick the tree opens the connection, schema and folder, selects the node and takes the focus.
+`aantje: Search Catalog...` (`aantje.search`) lists the tables, views and columns of the connected catalog at the selected snapshot:
 
-`treeNodeId` gives the id of that node: `<connectionId>/s<schemaId>/tables/t<tableId>` for a table and `.../views/v<viewId>` for a view; `folderNodeId` gives the folder. The connection id is URI-encoded like the connection node's id. The id builders live in `src/tree/nodes.ts` and are shared with the tree.
+- **Tables and views** as `<schema>.<name>` with `table` or `view` as description, sorted by schema and then name, ignoring case and comparing numbers by value (`part_2` before `part_10`), like the tree.
+- **Columns of tables**, one row per column, right after their table and in the order of the tree: `<schema>.<table>.<column>` with `column` and the type as description (`column · int32`). The fields of `struct`, `list` and `map` columns are rows too, with their path as the tree shows it: `sales.orders.customer.name`, `sales.orders.customer.tags.element`, `sales.orders.attrs.key`.
+
+VS Code filters the list while you type and puts the best matches first, so typing `customer_id` lists every table that has that column. Only names are searched; comments and tags are not. A table, view or column that was dropped before the selected snapshot or added after it is not listed.
+
+After a pick the tree opens the connection, the schema and the folder, for a column also the table, its Columns folder and, for a field, the columns above it. Then it selects the node and takes the focus.
+
+`treeNodePath` gives the ids of the nodes from the schema down to the hit: `<connectionId>/s<schemaId>/tables/t<tableId>` for a table, `.../views/v<viewId>` for a view and `.../tables/t<tableId>/columns/c<columnId>` for a column, plus `/c<fieldId>` for each level of a nested field. The connection id is URI-encoded like the connection node's id. The id builders live in `src/tree/nodes.ts` and are shared with the tree.
+
+#### One read for all columns
+
+The search reads the tables and views in one statement and the columns of all tables in a second one (`columnEntries` of the [catalog reader](catalog-reader.md)), not one per table. Both run on the same read-only driver as the tree, on every kind of catalog: no DuckDB engine, no trust confirmation, no access to the data files.
+
+#### No columns of views
+
+DuckLake stores no columns for a view, only its SQL. The columns exist only when DuckDB binds the view, which runs the view's SQL and needs the trust confirmation ([Columns of views](tree.md#columns-of-views)). The search does not do that, so a view is found by its name only. The tree shows its columns after the confirmation.
 
 ### Status bar item
 
-| State                           | Text                                                | Tooltip                                                                          |
-| ------------------------------- | --------------------------------------------------- | -------------------------------------------------------------------------------- |
-| Connected, following the latest | `$(database) example · DuckLake 1.1 · latest (@13)` | `Select snapshot. Following the latest snapshot (@13).`                          |
-| Connected, snapshot 6 pinned    | `$(database) example · DuckLake 1.1 · @6 (pinned)`  | `Select snapshot. Pinned to snapshot @6, not following the latest (@13).`        |
-| Connecting                      | `$(sync~spin) example · connecting…`                | `Connecting to example…`                                                         |
-| Disconnected                    | `$(debug-disconnect) example · disconnected`        | `example is not connected.`                                                      |
-| Error                           | `$(error) example · connection failed`              | `The connection to example failed. See the "aantje" output channel for details.` |
+| State                           | Text                                                   | Tooltip                                                                          |
+| ------------------------------- | ------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| Connected, following the latest | `$(aantje-duck) example · DuckLake 1.1 · latest (@13)` | `Select snapshot. Following the latest snapshot (@13).`                          |
+| Connected, snapshot 6 pinned    | `$(aantje-duck) example · DuckLake 1.1 · @6 (pinned)`  | `Select snapshot. Pinned to snapshot @6, not following the latest (@13).`        |
+| Connecting                      | `$(sync~spin) example · connecting…`                   | `Connecting to example…`                                                         |
+| Disconnected                    | `$(debug-disconnect) example · disconnected`           | `example is not connected.`                                                      |
+| Error                           | `$(error) example · connection failed`                 | `The connection to example failed. See the "aantje" output channel for details.` |
 
 - Unknown parts are left out: without a spec version the `DuckLake 1.1` part is missing; without the latest snapshot id the text says `latest`. Snapshot `0` is a known id.
 - Only a connected item has a click command (`aantje.selectSnapshot`); the other states have none, because there is no catalog to pick from.
@@ -64,5 +79,6 @@ Without a node (view title, Command Palette, status bar) the commands act on the
 - **Only the commit message is shown.** `author` and `commitExtraInfo` of `SnapshotInfo` are left out.
 - **The time must be UTC.** A value with an offset would show its local time labelled `UTC`.
 - **Tables and views are mixed** in the search; the tree lists tables first, then views. VS Code re-orders the list by match quality as soon as you type.
-- **Names are not escaped** in the status bar text and in search row labels: a name that contains `$(` shows an icon where the text should be.
+- **A dot in a name** reads like a level of the path in a search row: a column `a.b` and a field `b` of a column `a` look the same.
+- **Names are not escaped** in the status bar text: a name that contains `$(` shows an icon where the text should be. The search escapes them.
 - **Wording of newer tokens.** The specification does not describe `created_tag`, `dropped_tag` or `expired_snapshot`; "snapshot tag" and "expired snapshot" follow the DuckLake source.

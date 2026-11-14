@@ -60,7 +60,7 @@ const textOf = (token: SqlToken): string =>
   token.type === 'STRING_LITERAL' ? token.word.replace(/^'/, '').replace(/'$/, '') : unquote(token.word);
 
 /** COPY takes the format from the file's extension when no FORMAT is given, CSV otherwise. */
-export function formatOf(path: string): string {
+function formatOf(path: string): string {
   const name = path.toLowerCase();
   if (/\.parquet(\.\w+)?$/.test(name)) return 'parquet';
   return /\.(json|ndjson|jsonl)(\.\w+)?$/.test(name) ? 'json' : 'csv';

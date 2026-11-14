@@ -1,5 +1,7 @@
-import type { ColumnInfo, SchemaInfo } from '../catalog/model';
-import { quoteIdentifier } from '../catalog/ddl';
+import { compareText } from '../order';
+import { quoteName } from './tokens';
+import type { ColumnInfo, MacroInfo, SchemaInfo } from '../catalog/model';
+import { foldIdentifier, quoteIdentifier, sameIdentifier } from '../catalog/ddl';
 import {
   columnDescription,
   columnTooltip,
@@ -9,7 +11,7 @@ import {
   viewColumnTooltip,
   viewTooltip,
 } from '../tree/format';
-import { nameOf } from './catalog';
+import { DEFAULT_SCHEMA, nameOf } from './catalog';
 import type { SqlCatalog, SqlEntry } from './catalog';
 import {
   clauseSnippetDrafts,
@@ -29,30 +31,16 @@ import {
   QUERY_KEYWORDS,
   STATEMENT_KEYWORDS,
 } from './completion-keywords';
-import { callAt, contextAt, DEFAULT_SCHEMA } from './context';
+import type { CompletionKind, Draft, Env, Quote } from './completion-env';
+import { callAt, contextAt } from './context';
 import type { CallContext, CursorContext } from './context';
 import type { SqlToken } from './tokens';
 import { functionDocumentation, signatureLabel } from './help';
-import { namedBy, openLookup, same, typeText } from './lookup';
+import { namedBy, openLookup, typeText } from './lookup';
 import type { Lookup, Named } from './lookup';
 import type { Position } from './position';
 import type { Range } from './script';
 import type { FunctionInfo, Vocabulary } from './vocabulary';
-
-export type CompletionKind =
-  | 'keyword'
-  | 'function'
-  | 'type'
-  | 'schema'
-  | 'table'
-  | 'view'
-  | 'column'
-  | 'macro'
-  | 'snapshot'
-  | 'setting'
-  | 'snippet'
-  | 'parameter'
-  | 'hint';
 
 export interface CompletionItem {
   readonly label: string;
@@ -86,20 +74,6 @@ export interface Completions {
 // Spacing between the ranks of two tables, so columns of the first table sort ahead of the second.
 const RANKS_PER_TABLE = 100_000;
 
-export interface Draft {
-  readonly label: string;
-  readonly kind: CompletionKind;
-  readonly insertText: string;
-  readonly snippet?: boolean;
-  readonly detail?: string | undefined;
-  readonly documentation?: string | undefined;
-  readonly filterText?: string | undefined;
-  /** Items of a lower group come first. */
-  readonly group: number;
-  /** Within a group by this, then by the label. */
-  readonly rank?: number;
-}
-
 /** The ordered completion items at an offset; undefined inside a string literal, a comment or a number. */
 export async function completionsAt(
   tokens: readonly SqlToken[],
@@ -132,22 +106,6 @@ export async function completionsAt(
   };
 }
 
-type Quote = (name: string) => string;
-
-export interface Env {
-  readonly drafts: Draft[];
-  readonly context: CursorContext;
-  readonly vocabulary: Vocabulary;
-  readonly lookup: Lookup;
-  /** The call whose arguments the cursor is in. */
-  readonly call: CallContext | undefined;
-  readonly quote: Quote;
-  /** Keywords in list order; one listed by an earlier group is skipped. */
-  keywords(names: readonly string[], group: number): void;
-  allKeywords(group: number): void;
-  functions(group: number, wanted: (fn: FunctionInfo) => boolean): void;
-}
-
 function envOf(
   context: CursorContext,
   vocabulary: Vocabulary,
@@ -167,8 +125,7 @@ function envOf(
     vocabulary,
     lookup,
     call,
-    quote: (name) =>
-      context.quoted || needsQuotes(name, vocabulary.reserved) ? quoteIdentifier(name) : name,
+    quote: (name) => quoteName(name, vocabulary.reserved, context.quoted),
     keywords: (names, group) => {
       for (const [rank, name] of names.entries()) keyword(name, group, rank);
     },
@@ -242,15 +199,7 @@ async function draftsAt(
 }
 
 // Case-insensitive and locale-independent: the order is the same everywhere.
-function compareIgnoringCase(a: string, b: string): number {
-  const [first, second] = [a.toLowerCase(), b.toLowerCase()];
-  return first < second ? -1 : first > second ? 1 : 0;
-}
-
-/** Whether a name must be quoted: not a plain word, or a word that DuckDB reserves. */
-export function needsQuotes(name: string, reserved: ReadonlySet<string>): boolean {
-  return !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || reserved.has(name.toLowerCase());
-}
+const compareIgnoringCase = (a: string, b: string): number => compareText(a.toLowerCase(), b.toLowerCase());
 
 // A function of DuckLake that takes the lake's name is inserted with it.
 function functionDraft(fn: FunctionInfo, group: number, lake: string): Draft {
@@ -304,15 +253,30 @@ function lakeDraft(lake: string, group: number, quote: Quote): Draft {
   return { label: lake, kind: 'schema', insertText: quote(lake), detail: 'DuckLake catalog', group };
 }
 
-function macroDraft(name: string, detail: string, quote: Quote, group: number): Draft {
-  return { label: name, kind: 'macro', insertText: quote(name), detail, group };
+// The macros of one kind in a schema: table macros after FROM, scalar macros in an expression.
+async function macroDrafts(
+  { drafts, lookup, quote }: Env,
+  schema: string,
+  kind: MacroInfo['kind'],
+  group: number,
+): Promise<void> {
+  for (const macro of await lookup.catalog.macros(schema)) {
+    if (macro.kind !== kind) continue;
+    drafts.push({
+      label: macro.name,
+      kind: 'macro',
+      insertText: quote(macro.name),
+      detail: `${kind} macro`,
+      group,
+    });
+  }
 }
 
 function schemaDrafts({ drafts, context, lookup, quote }: Env): void {
   const [first, ...more] = context.qualifier;
   if (
     first === undefined ||
-    (more.length === 0 && context.position === 'schema' && same(first, lookup.lake))
+    (more.length === 0 && context.position === 'schema' && sameIdentifier(first, lookup.lake))
   ) {
     for (const schema of lookup.schemas) drafts.push(schemaDraft(schema, quote(schema.name), 0));
   }
@@ -350,7 +314,7 @@ function callDrafts({ drafts, context, vocabulary, lookup, quote }: Env): void {
     for (const fn of vocabulary.functions.values()) {
       if (fn.procedure) drafts.push(functionDraft(fn, 1, lookup.lake));
     }
-  } else if (context.qualifier.length === 1 && same(first, lookup.lake)) {
+  } else if (context.qualifier.length === 1 && sameIdentifier(first, lookup.lake)) {
     for (const fn of vocabulary.lakeFunctions.values()) {
       if (fn.procedure) drafts.push(functionDraft(fn, 0, lookup.lake));
     }
@@ -362,7 +326,8 @@ async function relationDrafts(env: Env): Promise<void> {
   else await qualifiedRelationDrafts(env);
 }
 
-async function unqualifiedRelationDrafts({ drafts, context, vocabulary, lookup, quote }: Env): Promise<void> {
+async function unqualifiedRelationDrafts(env: Env): Promise<void> {
+  const { drafts, context, vocabulary, lookup, quote } = env;
   const from = context.position === 'from';
   for (const name of context.ctes) {
     drafts.push({
@@ -376,7 +341,7 @@ async function unqualifiedRelationDrafts({ drafts, context, vocabulary, lookup, 
   for (const schema of lookup.schemas) drafts.push(schemaDraft(schema, quote(schema.name), 1));
   if (from) drafts.push(lakeDraft(lookup.lake, 1, quote));
   for (const entry of lookup.entries) {
-    if (same(entry.schema.name, DEFAULT_SCHEMA)) {
+    if (sameIdentifier(entry.schema.name, DEFAULT_SCHEMA)) {
       drafts.push(entryDraft(entry, quote(nameOf(entry)), 2));
     } else {
       const label = `${entry.schema.name}.${nameOf(entry)}`;
@@ -384,9 +349,7 @@ async function unqualifiedRelationDrafts({ drafts, context, vocabulary, lookup, 
     }
   }
   if (!from) return;
-  for (const macro of await lookup.catalog.macros(DEFAULT_SCHEMA)) {
-    if (macro.kind === 'table') drafts.push(macroDraft(macro.name, 'table macro', quote, 2));
-  }
+  await macroDrafts(env, DEFAULT_SCHEMA, 'table', 2);
   for (const fn of vocabulary.functions.values()) {
     if (fn.relation) drafts.push(functionDraft(fn, 4, lookup.lake));
   }
@@ -430,15 +393,10 @@ function lakeRelationDrafts({ drafts, context, vocabulary, lookup, quote }: Env)
   }
 }
 
-async function schemaRelationDrafts(
-  { drafts, context, lookup, quote }: Env,
-  schema: SchemaInfo,
-): Promise<void> {
+async function schemaRelationDrafts(env: Env, schema: SchemaInfo): Promise<void> {
+  const { drafts, context, lookup, quote } = env;
   for (const entry of lookup.entriesOf(schema.name)) drafts.push(entryDraft(entry, quote(nameOf(entry)), 0));
-  if (context.position !== 'from') return;
-  for (const macro of await lookup.catalog.macros(schema.name)) {
-    if (macro.kind === 'table') drafts.push(macroDraft(macro.name, 'table macro', quote, 1));
-  }
+  if (context.position === 'from') await macroDrafts(env, schema.name, 'table', 1);
 }
 
 async function expressionDrafts(env: Env): Promise<void> {
@@ -458,12 +416,13 @@ async function expressionColumnDrafts(env: Env): Promise<void> {
   const { context, lookup } = env;
   const { qualifier } = context;
   if (context.position === 'value') {
-    if (qualifier.length === 0) await macroDrafts(env);
+    // Scalar macros of the default schema are called without a schema.
+    if (qualifier.length === 0) await macroDrafts(env, DEFAULT_SCHEMA, 'scalar', 2);
     return;
   }
   if (qualifier.length > 0) {
     // A lambda parameter hides a relation of the same name.
-    if (context.locals.some((local) => same(local, qualifier[0] ?? ''))) return;
+    if (context.locals.some((local) => sameIdentifier(local, qualifier[0] ?? ''))) return;
     for (const named of await namedBy(qualifier, context.scope, lookup)) await namedDrafts(env, named);
     return;
   }
@@ -483,9 +442,10 @@ async function scopeDrafts(env: Env, { columnsOnly = false } = {}): Promise<void
   // A column name shared by two relations of the query needs its qualifier.
   const counts = new Map<string, number>();
   for (const { columns } of lists) {
-    for (const { name } of columns) counts.set(name.toLowerCase(), (counts.get(name.toLowerCase()) ?? 0) + 1);
+    for (const { name } of columns)
+      counts.set(foldIdentifier(name), (counts.get(foldIdentifier(name)) ?? 0) + 1);
   }
-  const shared = (column: string): boolean => (counts.get(column.toLowerCase()) ?? 0) > 1;
+  const shared = (column: string): boolean => (counts.get(foldIdentifier(column)) ?? 0) > 1;
   for (const [index, list] of lists.entries()) {
     const { name } = list;
     const qualifierOf = (column: string): string | undefined =>
@@ -503,8 +463,8 @@ async function scopeDrafts(env: Env, { columnsOnly = false } = {}): Promise<void
   if (columnsOnly) return;
   const seen = new Set<string>();
   for (const { entry, name } of lists) {
-    if (!entry || seen.has(name.toLowerCase())) continue;
-    seen.add(name.toLowerCase());
+    if (!entry || seen.has(foldIdentifier(name))) continue;
+    seen.add(foldIdentifier(name));
     drafts.push({
       label: name,
       kind: entry.kind,
@@ -513,7 +473,7 @@ async function scopeDrafts(env: Env, { columnsOnly = false } = {}): Promise<void
       group: 1,
     });
   }
-  await macroDrafts(env);
+  await macroDrafts(env, DEFAULT_SCHEMA, 'scalar', 2);
 }
 
 async function namedDrafts(env: Env, named: Named): Promise<void> {
@@ -528,9 +488,7 @@ async function namedDrafts(env: Env, named: Named): Promise<void> {
     case 'schema':
       for (const entry of lookup.entriesOf(named.schema.name))
         drafts.push(entryDraft(entry, quote(nameOf(entry)), 1));
-      for (const macro of await lookup.catalog.macros(named.schema.name)) {
-        if (macro.kind === 'scalar') drafts.push(macroDraft(macro.name, 'scalar macro', quote, 2));
-      }
+      await macroDrafts(env, named.schema.name, 'scalar', 2);
       break;
     case 'lake':
       for (const schema of lookup.schemas) drafts.push(schemaDraft(schema, quote(schema.name), 1));
@@ -540,13 +498,6 @@ async function namedDrafts(env: Env, named: Named): Promise<void> {
       break;
     case 'text-column':
       break;
-  }
-}
-
-// Scalar macros of the default schema are called without a schema.
-async function macroDrafts({ drafts, lookup, quote }: Env): Promise<void> {
-  for (const macro of await lookup.catalog.macros(DEFAULT_SCHEMA)) {
-    if (macro.kind === 'scalar') drafts.push(macroDraft(macro.name, 'scalar macro', quote, 2));
   }
 }
 

@@ -1,9 +1,8 @@
 import type * as vscode from 'vscode';
-import { shownSnapshot } from '../actions';
+import { catalogAt, shownSnapshot } from '../actions';
 import { showConnectFirst } from '../command.vscode';
 import type { Register } from '../command.vscode';
 import type { SnapshotId } from '../catalog/model';
-import { connectionClosed } from '../messages';
 import { withCancel } from '../progress.vscode';
 import type { ReportPanels } from '../shell/panels';
 import type { CatalogTree } from '../tree/model';
@@ -27,10 +26,7 @@ export async function showStatistics(
   snapshot: SnapshotId,
 ): Promise<void> {
   const { tree, panels } = env;
-  const reader = tree.reader(target.connectionId);
-  if (!reader) {
-    throw connectionClosed(GOAL);
-  }
+  const { reader } = catalogAt(tree, target.connectionId, GOAL);
   const name = `${target.schema}.${target.table}`;
   const key = statisticsKey(target, snapshot);
   const statistics = await panels.read(key, (outer) =>

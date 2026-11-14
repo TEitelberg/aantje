@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
 import { findEntryNode } from '../actions';
 import type { CatalogEntry } from '../catalog/model';
-import { maintenanceScript } from '../maintenance';
-import type { MaintenanceKind } from '../maintenance';
+import { maintenanceScript } from '../maintenance/scripts';
+import type { MaintenanceKind } from '../maintenance/scripts';
+import type { DeletedRead } from '../maintenance/deletes';
 import { scriptTarget } from '../script-target';
 import type { ReportTable } from '../script-target';
 import type { StatisticsTarget } from '../stats/target';
@@ -18,9 +19,16 @@ export interface TableActionEnv {
   readonly showStatistics: (target: StatisticsTarget, snapshot: number) => Promise<void>;
 }
 
+/** The script of a table or the lake; `deleted` are the small files with deleted rows that the report counted. */
+interface ScriptPlan {
+  readonly kind: MaintenanceKind;
+  readonly table?: ReportTable;
+  readonly deleted?: DeletedRead;
+}
+
 type TableActionPlan =
   | { readonly action: 'showStatistics' | 'revealTable'; readonly table: ReportTable }
-  | { readonly action: 'script'; readonly kind: MaintenanceKind; readonly table?: ReportTable };
+  | ({ readonly action: 'script' } & ScriptPlan);
 
 /** Carries out a table action; `snapshot` is the one the report was read at. */
 export async function performTableAction(
@@ -65,14 +73,14 @@ export async function revealEntry(
   }
 }
 
-/** Opens the plan's maintenance script in an SQL document. */
+/** Opens the plan's maintenance script in an SQL document; without counts of the report a merge reads them. */
 export async function openTableScript(
   env: Pick<TableActionEnv, 'tree' | 'openSql'>,
   connectionId: string,
-  plan: { readonly kind: MaintenanceKind; readonly table?: ReportTable },
+  plan: ScriptPlan,
 ): Promise<void> {
   const { kind, ref } = scriptTarget(connectionId, plan);
-  const text = await maintenanceScript(env.tree, kind, ref);
+  const text = await maintenanceScript(env.tree, kind, ref, plan.deleted);
   if (text !== undefined) {
     await env.openSql(connectionId, text);
   }

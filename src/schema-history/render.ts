@@ -1,8 +1,17 @@
 /// <reference lib="dom" />
 // DOM builders of the Schema History report; user input comes back through callbacks.
-import { actionButton, empty, kindCheckbox, note, rangeField, searchBox, toolbar } from '../shell/blocks';
+import {
+  actionButton,
+  empty,
+  kindBoxes,
+  note,
+  rangeFields,
+  searchBox,
+  toolbar,
+  whoLine,
+} from '../shell/blocks';
 import { el } from '../shell/dom';
-import { shortUtcMinutes } from '../shell/model';
+import { shortUtcMinutes, tableLabel } from '../shell/model';
 import { schemaHistoryCompareTargets } from './actions';
 import type { SchemaHistoryActionRequest, SchemaHistoryCompareTarget } from './actions';
 import {
@@ -13,7 +22,6 @@ import {
   eventText,
   omittedRowsNote,
   schemaHistoryDetailOf,
-  tableLabel,
 } from './model';
 import type { CellKind, SchemaHistoryData, SchemaHistoryView } from './model';
 
@@ -33,14 +41,14 @@ export interface MatrixParts {
 
 interface FilterView {
   readonly data: SchemaHistoryData;
-  /** The set is the page's own: the checkboxes change it. */
-  readonly kinds: Set<CellKind>;
+  /** Read on every change of a checkbox. */
+  readonly kinds: () => ReadonlySet<CellKind>;
   readonly text: string;
   readonly range: () => { readonly from: number; readonly to: number };
 }
 
 interface FilterHandlers {
-  readonly onKinds: () => void;
+  readonly onKinds: (kinds: Set<CellKind>) => void;
   readonly onText: (text: string) => void;
   readonly onRange: (end: 'from' | 'to', value: number) => void;
 }
@@ -62,7 +70,6 @@ export function detailChildren(
     return [note('Select a cell or a snapshot in the matrix to see what changed.')];
   }
   const { snapshot } = facts;
-  const who = [snapshot.author, snapshot.message].filter((part) => part !== null && part !== '');
   const targets = schemaHistoryCompareTargets(facts, data.latest);
   const actions = el('div', 'actions');
   actions.append(
@@ -104,7 +111,7 @@ export function detailChildren(
   }
   return [
     el('h2', undefined, `@${snapshot.id} · ${facts.timeText}`),
-    ...(who.length > 0 ? [el('p', 'who', who.join(' · '))] : []),
+    ...whoLine(snapshot.author, snapshot.message),
     ...snapshot.events.map((event) => el('p', undefined, `Table ${eventText(event)}`)),
     actions,
     ...(facts.changes.length > 0 ? [el('h3', undefined, 'Changes'), changes] : []),
@@ -133,7 +140,7 @@ function matrixTable(
   const cells: MatrixCell[] = [];
   const headings = new Map<number, HTMLElement>();
   const head = el('tr');
-  const events = el('tr');
+  const events = el('tr', 'events-row');
   head.append(el('th', undefined, 'Column'), el('th', undefined, 'Now'));
   events.append(el('th', undefined, 'Table'), el('th'));
   for (const snapshot of view.snapshots) {
@@ -206,21 +213,9 @@ export function matrixContent(
 export function filters(view: FilterView, on: FilterHandlers): HTMLElement {
   const first = view.data.snapshots[0]?.id ?? 0;
   const last = view.data.snapshots.at(-1)?.id ?? 0;
-  const kindsBox = el('div', 'kinds');
-  kindsBox.append(
-    ...CELL_KINDS.map((kind) => kindCheckbox(SCHEMA_HISTORY_KIND_LABEL[kind], kind, view.kinds, on.onKinds)),
-  );
   return toolbar(
     searchBox('Column', view.text, on.onText),
-    kindsBox,
-    ...(['from', 'to'] as const).map((end) =>
-      rangeField(
-        end === 'from' ? 'From' : 'To',
-        first,
-        last,
-        () => view.range()[end],
-        (next) => on.onRange(end, next),
-      ),
-    ),
+    kindBoxes(CELL_KINDS, SCHEMA_HISTORY_KIND_LABEL, view.kinds, on.onKinds),
+    ...rangeFields(first, last, (end) => view.range()[end], on.onRange),
   );
 }

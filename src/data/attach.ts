@@ -1,11 +1,10 @@
 import { quoteIdentifier, quoteLiteral } from '../catalog/ddl';
+import { quackSecretStatement, quackUri } from '../duckdb/quack';
+import { storageExtensions, storageSecretStatement } from '../storage/statements';
 import { CHANGE_COLUMNS, PREVIEW_LIMIT } from './types';
-import type { DataAccess, S3Credentials, S3Settings, TableRef } from './types';
+import type { DataAccess, TableRef } from './types';
 
 const PG_SECRET = 'aantje_pg';
-const S3_SECRET = 'aantje_s3';
-const AZURE_SECRET = 'aantje_azure';
-const QUACK_SECRET = 'aantje_quack';
 
 /** Name under which the DuckLake is attached. */
 export const LAKE = 'lake';
@@ -27,30 +26,25 @@ export function setupStatements(
   session?: { readonly readOnly: boolean; readonly dataPath?: string },
   platform?: NodeJS.Platform,
 ): string[] {
-  const { profile, s3, s3Credentials, azure } = access;
+  const { profile, storage } = access;
   const statements = ['INSTALL ducklake', 'LOAD ducklake'];
   const metadataExtension = METADATA_EXTENSIONS[profile.kind];
   if (metadataExtension) {
     statements.push(`INSTALL ${metadataExtension}`, `LOAD ${metadataExtension}`);
   }
-  // A local lake needs no httpfs (offline extension directories may hold only ducklake and the metadata extension).
-  // Only an endpoint or credentials (stored, or from the environment) make an S3 secret and load httpfs here; a region
-  // or URL style alone does not, because the manifest has defaults for both and every connection would then load httpfs.
-  // Without them ATTACH of a lake with an S3 data path autoloads httpfs before autoload is switched off. Quack sends
-  // its requests through httpfs, so a Quack catalog always loads it.
-  const s3Secret = s3SecretStatement(s3, s3Credentials);
-  if (s3Secret || profile.kind === 'quack') {
+  // A local lake needs no httpfs (offline extension directories may hold only ducklake and the metadata extension), so
+  // a connection without a storage loads nothing for it. Without an S3 secret, ATTACH of a lake with an S3 data path
+  // autoloads httpfs before autoload is switched off. Quack sends its requests through httpfs, so a Quack catalog
+  // always loads it. The extensions load before the autoload switches go off after the ATTACH, so they need no
+  // allow-list entry.
+  const extensions = storageExtensions(storage, platform);
+  if (profile.kind === 'quack' && !extensions.includes('LOAD httpfs')) {
     statements.push('INSTALL httpfs', 'LOAD httpfs');
   }
-  // The extension is loaded before the autoload switches go off after the ATTACH, so it needs no allow-list entry.
-  if (azure) {
-    statements.push(...azureExtension(platform));
-  }
-  if (s3Secret) {
-    statements.push(s3Secret);
-  }
-  if (azure) {
-    statements.push(azureSecretStatement(azure.accountName, azure.accessToken));
+  statements.push(...extensions);
+  const secret = storage === undefined ? undefined : storageSecretStatement(storage);
+  if (secret) {
+    statements.push(secret);
   }
 
   // A writable ATTACH would turn any DuckDB file or PostgreSQL schema into a DuckLake.
@@ -188,26 +182,6 @@ function selectAll(table: TableRef): string {
   return `SELECT * FROM ${LAKE}.${quoteIdentifier(table.schema)}.${quoteIdentifier(table.table)}`;
 }
 
-/**
- * The `azure` extension. Its default transport looks for the CA bundle only where Red Hat keeps it, so on Debian and
- * Ubuntu every request fails with "Problem with the SSL CA cert"; curl looks in the usual places. Windows keeps WinHTTP
- * and its trust store.
- */
-function azureExtension(platform: NodeJS.Platform = process.platform): string[] {
-  const load = ['INSTALL azure', 'LOAD azure'];
-  return platform === 'linux' ? [...load, "SET azure_transport_option_type = 'curl'"] : load;
-}
-
-/** The secret of an Azure lake; the same statement replaces it when the token is renewed. */
-export function azureSecretStatement(accountName: string, accessToken: string): string {
-  return `CREATE OR REPLACE SECRET ${AZURE_SECRET} (TYPE azure, PROVIDER access_token, ACCESS_TOKEN ${quoteLiteral(accessToken)}, ACCOUNT_NAME ${quoteLiteral(accountName)})`;
-}
-
-/** The address of a Quack server for DuckDB; the explorer attaches it as is, the data engine behind `ducklake:`. */
-export function quackUri(profile: { readonly host: string; readonly port: number }): string {
-  return `quack:${profile.host}:${profile.port}`;
-}
-
 // A pinned fingerprint replaces the trust store for this server only; `ca_cert_file` would replace it for every HTTPS
 // request of the engine.
 function quackAttach(
@@ -226,11 +200,6 @@ function quackAttach(
         : []),
     ],
   };
-}
-
-/** The secret that carries the token of a Quack server; its scope keeps the token away from any other server. */
-export function quackSecretStatement(uri: string, token: string): string {
-  return `CREATE OR REPLACE TEMPORARY SECRET ${QUACK_SECRET} (TYPE quack, TOKEN ${quoteLiteral(token)}, SCOPE ${quoteLiteral(uri)})`;
 }
 
 /** The secret of the PostgreSQL catalog; the same statement replaces it when the Entra token is renewed. */
@@ -252,38 +221,4 @@ export function postgresSecretStatement(
       : [`SSLMODE ${quoteLiteral('disable')}`]),
   ];
   return `CREATE OR REPLACE SECRET ${PG_SECRET} (${fields.join(', ')})`;
-}
-
-// Undefined without an endpoint and without credentials: DuckDB then uses its own defaults, or none for a public bucket.
-// The region and the URL style only complete a secret that exists for one of those two reasons.
-function s3SecretStatement(s3: S3Settings, credentials: S3Credentials | undefined): string | undefined {
-  const endpoint = s3.endpoint?.trim() ?? '';
-  if (!credentials && endpoint === '') {
-    return undefined;
-  }
-  const fields = ['TYPE s3'];
-  if (credentials) {
-    fields.push(`KEY_ID ${quoteLiteral(credentials.keyId)}`, `SECRET ${quoteLiteral(credentials.secretKey)}`);
-  }
-  if (s3.region) {
-    fields.push(`REGION ${quoteLiteral(s3.region)}`);
-  }
-  if (endpoint !== '') {
-    const { host, useSsl } = splitEndpoint(endpoint);
-    fields.push(`ENDPOINT ${quoteLiteral(host)}`);
-    if (useSsl !== undefined) {
-      fields.push(`USE_SSL ${useSsl}`);
-    }
-  }
-  if (s3.urlStyle) {
-    fields.push(`URL_STYLE ${quoteLiteral(s3.urlStyle)}`);
-  }
-  return `CREATE OR REPLACE SECRET ${S3_SECRET} (${fields.join(', ')})`;
-}
-
-// DuckDB wants the endpoint without a scheme; the scheme decides `USE_SSL`, else TLS applies.
-function splitEndpoint(endpoint: string): { host: string; useSsl: boolean | undefined } {
-  const match = /^(https?):\/\/(.*)$/i.exec(endpoint);
-  const host = (match?.[2] ?? endpoint).replace(/\/+$/, '');
-  return { host, useSsl: match ? match[1]?.toLowerCase() === 'https' : undefined };
 }

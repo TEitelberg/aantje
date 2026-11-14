@@ -1,8 +1,9 @@
 import { HEALTH_GROUPS } from '../health/model';
 import type { FindingScope, HealthFinding, HealthSeverity } from '../health/model';
 import { capRows, code, markdownTable, reportTitle } from '../markdown';
+import { codeBlock } from '../markdown';
 import { count } from '../shell/model';
-import { codeBlock } from '../tree/format';
+import { formatDuration } from '../shell/numbers';
 import {
   DEFAULT_FILTER,
   GROUP_LABEL,
@@ -10,7 +11,6 @@ import {
   SEVERITY_LABEL,
   actionsOf,
   coverage,
-  formatDuration,
   groupLine,
   matchingFindings,
   healthScopeLabel,
@@ -49,6 +49,8 @@ const scopeText = (data: HealthData): string => {
 const ACTION_HINT = {
   useEndpoint: 'Use suggested endpoint (writes the settings after you confirm)',
   setCredentials: 'Set S3 Credentials... (asks for the keys in a masked prompt)',
+  editConnection: 'Edit Connection... (the storage of the connection)',
+  setStorageSignIn: 'Set Storage Sign-in... (asks for the keys or tokens in a masked prompt)',
 } as const;
 
 const findingBlock = (finding: HealthFinding): string[] => [
@@ -67,7 +69,7 @@ const findingBlock = (finding: HealthFinding): string[] => [
         `- Suggested endpoint: ${code(finding.suggestion.endpoint)} (from ${code(finding.suggestion.source)})${finding.suggestion.urlStyle ? `, URL style ${code(finding.suggestion.urlStyle)}` : ''}`,
       ]),
   ...actionsOf(finding).flatMap((id) =>
-    id === 'useEndpoint' || id === 'setCredentials' ? [`- Action in the panel: ${ACTION_HINT[id]}`] : [],
+    id in ACTION_HINT ? [`- Action in the panel: ${ACTION_HINT[id as keyof typeof ACTION_HINT]}`] : [],
   ),
   ...(finding.inspectSql === undefined
     ? []

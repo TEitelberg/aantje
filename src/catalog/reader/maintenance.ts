@@ -8,11 +8,13 @@ import type {
   ConsistencyReport,
   ConsistencySample,
   DeleteHeavyTable,
+  DeletedFiles,
   FileLocations,
   HealthScopeRef,
   MaintenanceFacts,
   SmallFileTable,
   StoredFile,
+  TableDeletedFiles,
 } from '../model';
 import * as queries from '../queries/maintenance';
 import { toBoolean, toNumber, toNumberOrNull, toText, toTextOrNull } from './rows';
@@ -28,27 +30,70 @@ function consistencySample(row: Row): ConsistencySample {
   };
 }
 
-// Inlined rows per table, summed over the inlined tables of its schema versions.
+/**
+ * The first `limit` inlined tables of the scope (one per table and schema version) and whether the catalog has more;
+ * undefined when the list cannot be read. Only names that DuckLake writes are kept: the name is part of the statements
+ * that read them.
+ */
+export async function readInlinedTables(
+  attempt: Attempt,
+  scope: HealthScopeRef,
+  limit: number,
+  signal?: AbortSignal,
+): Promise<{ tables: queries.InlinedTable[]; more: boolean } | undefined> {
+  // One extra table tells whether the list was cut.
+  const found = await attempt(queries.inlinedTables(scope, limit + 1), signal);
+  return (
+    found && {
+      tables: found
+        .slice(0, limit)
+        .map((row) => ({ tableId: toNumber(row.table_id), name: toText(row.table_name) }))
+        .filter(({ name }) => queries.INLINED_TABLE.test(name)),
+      more: found.length > limit,
+    }
+  );
+}
+
+// The still valid rows of the inlined tables in one statement. A table that the list names but that is gone fails it:
+// then each table is counted alone, and only those that fail are left out.
+async function countInlined(
+  attempt: Attempt,
+  tables: readonly queries.InlinedTable[],
+  signal?: AbortSignal,
+): Promise<{ counts: Row[]; failed: boolean }> {
+  if (tables.length === 0) return { counts: [], failed: false };
+  const all = await attempt(queries.inlinedRows(tables), signal);
+  if (all) return { counts: all, failed: false };
+  // A single table has just failed on its own.
+  if (tables.length === 1) return { counts: [], failed: true };
+  const counts: Row[] = [];
+  let failed = false;
+  for (const table of tables) {
+    const one = await attempt(queries.inlinedRows([table]), signal);
+    if (one) counts.push(...one);
+    else failed = true;
+  }
+  return { counts, failed };
+}
+
+// Inlined rows per table, summed over the inlined tables of its schema versions; `failed` when some were not counted.
 async function inlinedRowsPerTable(
   attempt: Attempt,
   scope: HealthScopeRef,
   limit: number,
   signal?: AbortSignal,
-): Promise<{ inlined: { tableId: number; rows: number }[]; more: boolean }> {
+): Promise<{ inlined: { tableId: number; rows: number }[]; more: boolean; failed: boolean }> {
+  const listed = await readInlinedTables(attempt, scope, limit, signal);
+  const { counts, failed } = await countInlined(attempt, listed?.tables ?? [], signal);
   const rows = new Map<number, number>();
-  // One extra table tells whether the list was cut.
-  const found = (await attempt(queries.inlinedTables(scope, limit + 1), signal)) ?? [];
-  for (const table of found.slice(0, limit)) {
-    const name = toText(table.table_name);
-    // The name is part of the statement: only names DuckLake writes are used.
-    if (!queries.INLINED_TABLE.test(name)) continue;
-    const count = await attempt(queries.inlinedRows(name), signal);
-    const id = toNumber(table.table_id);
-    rows.set(id, (rows.get(id) ?? 0) + toNumber(count?.[0]?.row_count ?? 0));
+  for (const row of counts) {
+    const id = toNumber(row.table_id);
+    rows.set(id, (rows.get(id) ?? 0) + toNumber(row.row_count));
   }
   return {
     inlined: [...rows].filter(([, count]) => count > 0).map(([id, count]) => ({ tableId: id, rows: count })),
-    more: found.length > limit,
+    more: listed?.more === true,
+    failed: failed || listed === undefined,
   };
 }
 
@@ -103,12 +148,66 @@ function directoryOf(
   return schema ? schemaDirectory(dataPath, stored(schema.schema_path, schema.schema_relative)) : null;
 }
 
+const deletedFiles = (row: Row): DeletedFiles => ({
+  small: toNumber(row.deleted_small),
+  files: toNumber(row.deleted_files),
+  bytes: toNumber(row.deleted_bytes),
+});
+
+const NO_DELETED_FILES: DeletedFiles = { small: 0, files: 0, bytes: 0 };
+
+// PostgreSQL gives a sum beyond 2^53 as text; the other drivers refuse it, and the statement fails.
+const isCount = (value: Value | undefined): value is number =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+
+function countsOrNull(row: Row): DeletedFiles | null {
+  const [small, files, bytes] = [row.deleted_small, row.deleted_files, row.deleted_bytes];
+  return isCount(small) && isCount(files) && isCount(bytes) ? { small, files, bytes } : null;
+}
+
+// The tables of small files, then their files with a delete file in a statement of their own: a broken size there
+// costs only those figures, which become null, and never the tables.
+async function smallFileTables(
+  { run, attempt }: { readonly run: Run; readonly attempt: Attempt },
+  scope: HealthScopeRef,
+  limit: number,
+  signal?: AbortSignal,
+): Promise<MaintenanceFacts['smallFiles']> {
+  const tables = await run(queries.smallFileTables(scope, limit), signal);
+  const ids = tables.map((row) => toNumber(row.table_id));
+  const deleted = ids.length === 0 ? [] : await attempt(queries.tableDeletedFiles(ids), signal);
+  const byTable = new Map((deleted ?? []).map((row) => [toNumber(row.table_id), countsOrNull(row)]));
+  const deletedOf = (tableId: number): DeletedFiles | null => {
+    if (deleted === undefined) return null;
+    const found = byTable.get(tableId);
+    return found === undefined ? NO_DELETED_FILES : found;
+  };
+  return tables.map((row) => {
+    const tableId = toNumber(row.table_id);
+    return {
+      tableId,
+      files: toNumber(row.file_count),
+      small: toNumber(row.small_count),
+      smallBytes: toNumber(row.small_bytes),
+      deleted: deletedOf(tableId),
+    };
+  });
+}
+
 type MaintenanceReads = Pick<
   CatalogReader,
-  'smallFiles' | 'consistency' | 'maintenanceFacts' | 'deleteHeavyTables' | 'fileLocations'
+  | 'smallFiles'
+  | 'consistency'
+  | 'maintenanceFacts'
+  | 'deletedSmallFiles'
+  | 'deleteHeavyTables'
+  | 'fileLocations'
 >;
 
-/** Reads for the health check and maintenance advisor: consistency, small and delete-heavy files, file locations. */
+/**
+ * Reads for the health check, the maintenance advisor and the Merge script: consistency, small and delete-heavy files,
+ * file locations.
+ */
 export function maintenanceReads(run: Run, attempt: Attempt): MaintenanceReads {
   return {
     async smallFiles(snapshot, signal): Promise<SmallFileTable[]> {
@@ -144,35 +243,41 @@ export function maintenanceReads(run: Run, attempt: Attempt): MaintenanceReads {
     },
 
     async maintenanceFacts(scope, limit, signal): Promise<MaintenanceFacts> {
-      const [gaps, small, { inlined, more }] = await Promise.all([
-        scope.tableId === undefined ? attempt(queries.snapshotGaps(limit), signal) : [],
-        attempt(queries.smallFileTables(scope, limit), signal),
+      // The file and snapshot tables are in every catalog: a failed statement there fails the read.
+      const [gaps, smallFiles, { inlined, more, failed }] = await Promise.all([
+        scope.tableId === undefined ? run(queries.snapshotGaps(limit), signal) : [],
+        smallFileTables({ run, attempt }, scope, limit, signal),
         inlinedRowsPerTable(attempt, scope, limit, signal),
       ]);
       return {
         snapshotGaps: {
-          count: toNumber(gaps?.[0]?.total ?? 0),
-          missing: toNumber(gaps?.[0]?.missing ?? 0),
-          first: (gaps ?? []).map((row) => ({ after: toNumber(row.after_id), next: toNumber(row.next_id) })),
+          count: toNumber(gaps[0]?.total ?? 0),
+          missing: toNumber(gaps[0]?.missing ?? 0),
+          first: gaps.map((row) => ({ after: toNumber(row.after_id), next: toNumber(row.next_id) })),
         },
-        smallFiles: (small ?? []).map((row) => ({
-          tableId: toNumber(row.table_id),
-          files: toNumber(row.file_count),
-          small: toNumber(row.small_count),
-          smallBytes: toNumber(row.small_bytes),
-        })),
+        smallFiles,
         inlined,
         ...(more ? { inlinedMore: true as const } : {}),
+        ...(failed ? { inlinedFailed: true as const } : {}),
       };
+    },
+
+    async deletedSmallFiles(scope, limit, signal): Promise<TableDeletedFiles[]> {
+      return (await run(queries.deletedSmallFiles(scope, limit), signal)).map((row) => ({
+        tableId: toNumber(row.table_id),
+        schema: toText(row.schema_name),
+        table: toText(row.table_name),
+        ...deletedFiles(row),
+      }));
     },
 
     async deleteHeavyTables(scope, floor, threshold, limit, signal): Promise<DeleteHeavyTable[]> {
       const basisPoints = (share: number): number => Math.round(share * 10_000);
-      const rows = await attempt(
+      const rows = await run(
         queries.deleteHeavyTables(scope, basisPoints(floor), basisPoints(threshold), limit),
         signal,
       );
-      return (rows ?? []).map((row) => ({
+      return rows.map((row) => ({
         tableId: toNumber(row.table_id),
         files: toNumber(row.heavy_files),
         atThreshold: toNumber(row.threshold_files),

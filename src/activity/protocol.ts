@@ -1,10 +1,19 @@
-import { isArrayOf, isCount, isObject, isOneOf, isOptional, isShape, isString, own } from '../guards';
-import { isSnapshot } from '../snapshot-report/protocol';
-import { POINT_KINDS } from '../snapshot-report/model';
+import {
+  isArrayOf,
+  isCount,
+  isExactShape,
+  isObject,
+  isOneOf,
+  isOptional,
+  isShape,
+  isString,
+  own,
+} from '../guards';
+import type { Test } from '../guards';
 import { actionGuard } from '../shell/protocol';
-import { isReportScope } from '../shell/scope';
-import type { ACTION_IDS } from './actions';
-import type { ActivityActionRequest } from './actions';
+import { POINT_KINDS } from '../snapshot-changes/model';
+import { SCOPED_WINDOW_FIELDS } from '../snapshot-changes/protocol';
+import type { ActivityActionId, ActivityActionRequest } from './actions';
 import type { ActivityMarkdownView } from './markdown';
 import type { ActivityData } from './model';
 
@@ -13,21 +22,14 @@ export type ActivityPageRequest = { readonly type: 'action' } & ActivityActionRe
 
 type ActivityMessage = { readonly type: 'activity'; readonly data: ActivityData };
 
-const isData = isShape({
-  connection: isString,
-  scope: isReportScope,
-  latest: isCount,
-  snapshots: isArrayOf(isSnapshot),
-  more: (value) => typeof value === 'boolean',
-  read: isOptional(isCount),
-});
+const isData = isShape(SCOPED_WINDOW_FIELDS);
 
 /** Guard for the messages the extension sends to the page. */
 export function isActivityMessage(value: unknown): value is ActivityMessage {
   return isObject(value) && own(value, 'type') === 'activity' && isData(own(value, 'data'));
 }
 
-const FIELDS: Record<(typeof ACTION_IDS)[number], Record<string, (value: unknown) => boolean>> = {
+const FIELDS: Readonly<Record<ActivityActionId, Readonly<Record<string, Test>>>> = {
   showSnapshotReport: {},
   showCatalog: { snapshot: isCount },
   rowsChanged: { snapshot: isCount, table: isCount },
@@ -35,10 +37,10 @@ const FIELDS: Record<(typeof ACTION_IDS)[number], Record<string, (value: unknown
 };
 
 /** A known action with exactly its fields; `planActivityAction` checks that they name something sent. */
-export const isActivityAction = actionGuard(FIELDS) as (value: unknown) => value is ActivityPageRequest;
+export const isActivityAction: (value: unknown) => value is ActivityPageRequest = actionGuard(FIELDS);
 
 /** The choices that Open as Markdown may name; the extension fits them to the data. */
-export const isActivityView: (value: unknown) => value is ActivityMarkdownView = isShape({
+export const isActivityView: (value: unknown) => value is ActivityMarkdownView = isExactShape({
   author: isOptional(isString),
   table: isOptional(isString),
   kinds: isArrayOf(isOneOf(...POINT_KINDS)),

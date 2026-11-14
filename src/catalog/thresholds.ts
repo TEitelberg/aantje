@@ -17,6 +17,12 @@ export const hasManySmallFiles = ({
 export const manySmallFilesText = (): string =>
   `at least ${SMALL_FILES.minFiles} data files, ${SMALL_FILES.ratio * 100} % or more of them`;
 
+/** More snapshots than this gets the health check's hint to expire some. */
+export const MANY_SNAPSHOTS = 10_000;
+
+/** A table with more inlined rows than this gets the hint of the health check and the advisor to flush them to Parquet. */
+export const LARGE_INLINED_ROWS = 10_000;
+
 /** Files scheduled for deletion are overdue when the oldest waits longer than this many days. */
 export const CLEANUP_OVERDUE_DAYS = 7;
 

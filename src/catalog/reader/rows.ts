@@ -11,6 +11,12 @@ export type Run = (query: Query, signal?: AbortSignal) => Promise<Row[]>;
  */
 export type Attempt = (query: Query, signal?: AbortSignal) => Promise<Row[] | undefined>;
 
+/**
+ * Runs the statement that `build` makes with the commit columns of `ducklake_snapshot_changes` (author, commit
+ * message), or without them on a catalog that lacks them.
+ */
+export type WithCommits = (build: (commitColumns: boolean) => Query, signal?: AbortSignal) => Promise<Row[]>;
+
 /** Drivers return INTEGER and BIGINT as numbers; an unrepresentable value fails instead of rounding. */
 export function toNumber(value: Value | undefined): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {

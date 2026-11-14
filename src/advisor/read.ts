@@ -2,10 +2,9 @@ import { queryCancelled } from '../catalog/drivers/limits';
 import { DEFAULT_EXPIRE_OLDER_THAN } from '../catalog/expirable';
 import { globalValue } from '../catalog/model';
 import type { CatalogReader, HealthScopeRef, MetadataEntry } from '../catalog/model';
-import { SMALL_FILES } from '../catalog/thresholds';
+import { LARGE_INLINED_ROWS, hasManySmallFiles } from '../catalog/thresholds';
 import type { DataAccess } from '../data/types';
 import { LAKE_SCOPE } from '../shell/scope';
-import { LARGE_INLINED_ROWS } from '../health/catalog-checks';
 import { measureDryRuns } from './measure';
 import {
   CANDIDATE_LIMIT,
@@ -127,9 +126,7 @@ export async function readAdvisor(
       return table ? [{ item, table }] : [];
     });
   const merge = named(
-    facts.smallFiles.filter(
-      ({ files, small }) => files >= SMALL_FILES.minFiles && small / files >= SMALL_FILES.ratio,
-    ),
+    facts.smallFiles.filter(({ files, small }) => hasManySmallFiles({ files, smallFiles: small })),
   )
     .toSorted((a, b) => b.item.files - a.item.files || a.table.id - b.table.id)
     .map(({ item, table }) => ({
@@ -138,6 +135,8 @@ export async function readAdvisor(
       smallFiles: item.small,
       smallBytes: item.smallBytes,
       estimatedAfter: estimatedFilesAfterMerge(item.files, item.small, item.smallBytes, policy.target.bytes),
+      // Null when the figures could not be read (a broken size, a failed read): the scripts then say so.
+      ...(item.deleted === null || item.deleted.small > 0 ? { deleted: item.deleted } : {}),
     }));
   const more =
     facts.smallFiles.length > CANDIDATE_LIMIT ||
@@ -168,5 +167,6 @@ export async function readAdvisor(
       .slice(0, CANDIDATE_LIMIT)
       .map(({ item, table }) => ({ table, rows: item.rows })),
     ...(more ? { more: true as const } : {}),
+    ...(facts.inlinedFailed ? { inlinedFailed: true as const } : {}),
   };
 }

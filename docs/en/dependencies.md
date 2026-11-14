@@ -1,16 +1,16 @@
 # Dependencies
 
-**Dependencies** (`aantje.showDependencies`) opens a report that shows what depends on a table, view or macro and what it depends on, so you see what would break before you run **Script as DROP** or **Script as ALTER**. The data is the SQL text of the views and macros in the catalog. DuckDB parses it (never runs it), and the report follows the tables, views and macros the text names. What the parser cannot read is listed as such. A name the lake does not have at the snapshot is a **broken reference**, for example a view over a dropped table.
+**Dependencies** (`aantje.showDependencies`) opens a report that shows what depends on a table, view or macro and what it depends on, so you see what would break before you drop or change it. The data is the SQL text of the views and macros in the catalog. DuckDB parses it (never runs it), and the report follows the tables, views and macros the text names. What the parser cannot read is listed as such. A name the lake does not have at the snapshot is a **broken reference**, for example a view over a dropped table.
 
 ## Opening the report
 
 - **Where.** The **Reports** submenu (see [Reports](reports.md)) of an open connection (the whole lake), a schema, a table, a view or a macro. The command is hidden from the Command Palette.
 - **One panel per connection and object.** Titles: `Dependencies of shop.events · Lake` and `Dependencies · Lake`. Opening the same object again reveals the panel with fresh data.
-- **The snapshot is the one the tree shows when the report opens.** The report and its actions use it: **Script as CREATE** and **ALTER** write the columns the table had then, and **Dependencies** of another object opens at the same snapshot. **Script as DROP** and **ALTER** act on the newest state; when the report's snapshot is older, the script says so in a comment.
+- **The snapshot is the one the tree shows when the report opens.** The report and its actions use it: **Statistics** and **Dependencies** of another object open at the same snapshot.
 - **Progress and Cancel.** Reading and parsing run under `Reading the dependencies of "Lake"...` with a Cancel button; cancel stops before the next object. A closed connection gives `Connect to a catalog first to show its dependencies.`
 - **Parsed once per snapshot.** The graph is cached per connection for the last three snapshots asked for, so another object, a second panel and **Refresh** do not parse again. Panels that ask for a snapshot being read share the read; a failed or cancelled read is not kept. **Refresh** reads at the snapshot the tree shows now.
 - **A hidden panel keeps its choices** (list or graph, direction, depth, lake filter, Show all, selected object) with `getState` and `setState`.
-- **A removed or closed connection.** `The connection of this dependencies report was removed. Close the report.` or `The connection is closed. Connect again to use the dependencies.`
+- **A removed or closed connection.** When the connection was removed, **Refresh** and every icon but **Visualize** say `The connection of this dependencies report was removed. Close the report.` When it is closed, **Refresh** and **Dependencies** say `Connect to a catalog first to show its dependencies.`, **Statistics** says `The connection is closed. Connect again to show the statistics.`, and **Show in tree** gives its hint.
 
 ## For one schema
 
@@ -18,51 +18,52 @@ Opened on a schema node ([Reports](reports.md#reports-for-one-schema)), the repo
 
 ## Reading the lists
 
-The header has four key figures, then the list, the drop section, the selected object and the problems.
+The header has four key figures, then the list, the pane of the selected object and the problems.
 
-- **Used by and Depends on.** Two buttons switch the direction. **Used by** lists views and macros that read or call the object; **Depends on** lists what it reads or calls. Both follow the chain (a view of a view of the table is level 2).
+- **Used by and Depends on.** Two buttons switch the direction of the list. **Used by** lists views and macros that read or call the object; **Depends on** lists what it reads or calls. Both follow the chain (a view of a view of the table is level 2). **Used by** lists what a drop of the object would break, up to the set depth. The key figure **Used by** counts all of it, at any depth (`n in all`).
 - **Depth.** **Depth 1** to **Depth 5** (default 5). Key figures count everything behind the depth.
 - **Rows.** Each object is listed once, at the level where it is first reached, indented below the object it came from. A row shows a sign and kind (`◧ view`, `▦ table`, `ƒ scalar macro`, `ƒ▦ table macro`), the name and the edge (`reads` or `calls`; `read by` or `called by` in **Depends on**). Signs and words carry the meaning, not colour. A screen reader hears the level (`Level 2: view shop.big_events, reads shop.events`).
 - **Keyboard.** The list is one tab stop; arrows, Home and End move, Enter or Space selects. At most 500 rows are listed, with a note on how many were left out.
 - **A cycle.** The list ends where it returns to an object already reached, with the note `The dependencies contain a cycle.`
-- **The lake.** From the connection, the report lists every object that uses or is used by another, most used first (ties by name), with `used by n · depends on m`. A filter finds text in name or kind. At most 200 objects are listed; objects taking part in nothing are only counted. A selected object shows its direct neighbours (30 at most).
+- **The lake.** From the connection, the report lists every object that uses or is used by another, most used first (ties by name), with `used by n · depends on m`. A filter finds text in name or kind. At most 200 objects are listed; objects taking part in nothing are only counted.
+- **The selected object.** A click in the list or the graph selects an object and shows its pane: the sign, name and kind, the icons of its [actions](#actions) at the end of that line, and its direct neighbours, **Used by (n)** and **Depends on (m)**, 30 names at most each. Every report shows them, the report of an object also for that object itself. Without a selection there is no pane; a filter that hides the selected object takes the selection away.
+- **Which problems.** For an object, the problems of the objects that its graph connects: the object, what it uses and what uses it, each up to the set depth, whatever direction the list shows. The faint objects of **Show all** are left out. For the lake or a schema, the problems of every object of the report.
 - **Broken references.** The object, the name it looks for (`shop.old_stuff`, `legacy_fee()`) and what it looked for. A function DuckDB does not have built in is `macro or unknown function`, because an extension function looks the same as a dropped macro. Cut at 100 rows.
 - **Not followed.** The object, the reason and the catalog text: another SQL dialect, a text too long, a text DuckDB cannot parse or read as a SELECT, a name in another catalog, a name only the macro's schema has, a file or URL after FROM, a run-time lookup (`query_table`). A text that makes the analysis fail is listed with the message and does not stop the others. Their dependencies are unknown, so the report is incomplete for them.
 - **Unread objects.** With more than 2000 views and macros the rest is not read: `Only 2,000 of 2,500 views and macros were read.`
 
 ## The graph
 
-**List** and **Graph** at the start of the toolbar switch the view; the direction, the depth, the selected object and the snapshot stay. **Visualize** in the pane of the selected object opens the graph and zooms in on that object.
+**List** and **Graph** at the start of the toolbar switch the view; the depth, the selected object and the snapshot stay. The direction belongs to the list: the graph view does not show it. **Visualize** in the pane of the selected object opens the graph and zooms in on that object.
 
 - **Columns along the data flow.** What uses nothing the graph shows stands on the left, every other object right of everything it reads or calls. Arrows point from the object read or called to the object that uses it. A read is a solid line, a call of a macro a dashed one.
 - **Shape and colour.** A table is a square, a view a rounded square, a scalar macro a circle and a table macro a diamond, each in its own colour; the label starts with the sign of the list. A name that no object of the lake has is a red dashed triangle with a red dashed arrow to the object that names it.
-- **What it holds.** For an object, the objects connected to it in the set direction and depth, the object drawn larger. **Show all** adds every other object of the lake that uses or is used by another, faint. For the lake or a schema, every object of the report.
+- **What it holds.** For an object, both directions: what it reads or calls, left of it, and what uses it, right of it, each up to the set depth; the object is drawn larger. **Show all** adds every other object of the lake that uses or is used by another, faint. For the lake or a schema, every object of the report.
 - **Mouse.** Hovering an object brings out its neighbours. A click selects it and shows its pane below; a double click also zooms in on it. The wheel zooms and dragging moves the graph. Labels that would overlap are hidden until you zoom in.
 - **The list stays the accessible view.** The graph is drawn on a canvas; a screen reader hears how many objects and dependencies it has.
 
-The report of an object holds every object of the lake with dependencies for **Show all**, but only the problems of the object and of the objects it reaches (`objectData` in `src/dependencies/read.ts`). `picture` (`src/dependencies/picture.ts`) places the boxes: the column is one more than the largest column of what an object uses (an edge back into a cycle is left out), the first column is in name order and every other one in the mean row of what its objects use. `graphOption` turns that into an ECharts graph series with fixed positions.
-
-## What a drop would break
-
-For an object, **If you drop shop.events** names everything that uses it, directly or through other views and macros, whatever depth is set: `Dropping shop.events breaks 9 objects: 8 views, 1 table macro.` It names the first ten and counts the rest. An unused object says `Nothing in this lake uses shop.events; dropping it breaks no view or macro.` A view that already has a broken reference is listed under **Broken references**, not counted here. **Open Script as DROP** opens the script in an SQL editor of the connection; nothing runs.
+The report of an object holds every object of the lake with dependencies for **Show all**, but only the problems of the object and of the objects it reaches (`objectData` in `src/dependencies/read.ts`). `connectedObjects` (`src/dependencies/picture.ts`) gives the objects that the graph of an object connects; the page and the document show the problems of those. `picture` places the boxes: the column is one more than the largest column of what an object uses (an edge back into a cycle is left out), the first column is in name order and every other one in the mean row of what its objects use. `graphOption` turns that into an ECharts graph series with fixed positions.
 
 ## Actions
 
-Select an object; a pane shows what you can do with it. The buttons send an action id and the object's index.
+The actions of the selected object are small icons at the end of its heading line, in this order:
 
-| Button                          | What happens                                                                            | Offered when                          |
-| ------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------- |
-| Visualize                       | The graph, zoomed in on the object.                                                     | the list shows                        |
-| Show in tree                    | Shows and selects the node (a macro in the folder Macros); a hint when it is not shown. | always                                |
-| Statistics                      | The statistics report of the table at the report's snapshot.                            | the object is a table                 |
-| Dependencies                    | That object's report in its own panel.                                                  | the object is not the one of the page |
-| Script as CREATE / ALTER / DROP | The tree command's script, opened in an SQL editor of the connection. Nothing runs.     | always                                |
+| Icon      | Tooltip      | What happens                                                                            | Offered when                          |
+| --------- | ------------ | --------------------------------------------------------------------------------------- | ------------------------------------- |
+| Graph     | Visualize    | The graph, zoomed in on the object.                                                     | the list shows                        |
+| Hierarchy | Dependencies | That object's report in its own panel.                                                  | the object is not the one of the page |
+| Bar chart | Statistics   | The statistics report of the table at the report's snapshot.                            | the object is a table                 |
+| Tree      | Show in tree | Shows and selects the node (a macro in the folder Macros); a hint when it is not shown. | always                                |
 
-The extension does not trust the page. `planDependenciesAction` checks the index against the data it sent and offers statistics for tables only. Scripts are made from the object at the report's snapshot (`scriptOf` of the tree commands); when it is not there, the hint says `"shop.tmp_view" does not exist at snapshot @56, so there is no script for it.` A request with a command id, an undeclared field or an index not in the data is ignored and logged as a warning.
+- **Buttons.** Tab reaches each icon, Enter or Space runs it, and the focus ring of the theme shows. A screen reader hears the action with the name (`Show shop.events in the tree`).
+- **Drawn inline.** The icons are SVG in the style of the VS Code codicons, in the theme's icon colour (`iconButton` in `src/dependencies/icons.ts`); there is no icon font.
+- **No scripts.** **Script as CREATE**, **ALTER** and **DROP** are in the context menu of the tree, not in the report.
+
+An icon sends an action id and the object's index. The extension does not trust the page. A request with a command id, a script action, an undeclared field or no index fails the guard (`isDependenciesAction`) and is ignored without a log. `planDependenciesAction` checks the index against the data it sent and offers statistics for tables only. A request with an index not in the data, or for the statistics of a view or macro, is ignored and logged as a warning.
 
 ## Open as Markdown
 
-**Open as Markdown** opens an untitled document: the object, the lists for the set direction and depth (both directions, to the deepest level, when there is no view), the graph, what a drop breaks, and the broken and unresolved references of the listed objects. For the lake it is the filtered object list and the whole lake's problems. `dependenciesMarkdown` (`src/dependencies/markdown.ts`) builds it from the data and the page's view (`direction`, `depth`, `text`, `reach`); the extension fits the depth to 1..5. The graph is a Mermaid flowchart (a `mermaid` code block that GitHub and Mermaid previews draw) of what the page's graph holds, Show all included; for the lake it has every object of the report. Catalog text in its labels becomes Mermaid entity codes. A graph of more than 150 objects or 400 dependencies is only counted. Catalog text is code. Tables stop at 200 rows (lists), 100 objects (lake), 50 names (drop) and 100 rows (problems), each with `… n more omitted (limit: m).`
+**Open as Markdown** opens an untitled document: the object, the lists for the set direction and depth (both directions, to the deepest level, when there is no view), the graph, and the broken and unresolved references of the objects that the graph connects, as on the page. For the lake it is the filtered object list and the whole lake's problems. `dependenciesMarkdown` (`src/dependencies/markdown.ts`) builds it from the data and the page's view (`direction`, `depth`, `text`, `reach`); the extension fits the depth to 1..5. The graph is a Mermaid flowchart (a `mermaid` code block that GitHub and Mermaid previews draw) of what the page's graph holds: for an object both directions to the set depth, whatever direction the lists have, Show all included; for the lake every object of the report. Catalog text in its labels becomes Mermaid entity codes. A graph of more than 150 objects or 400 dependencies is only counted. Catalog text is code. Tables stop at 200 rows (lists), 100 objects (lake) and 100 rows (problems), each with `… n more omitted (limit: m).`
 
 ## How the references are found
 
@@ -100,4 +101,4 @@ The approach reads text, so it has the limits of text.
 
 ## Security
 
-The page uses the policy of the other reports (`default-src 'none'`, nonce for style and script, `localResourceRoots` `dist`), and data arrives by `postMessage` after `ready`. Catalog text is put in with `textContent`. The page asks for an action by id and one index (`isDependenciesAction` accepts exactly the six ids with one number; the extension checks the number against the data it sent). The page validates what it receives (`isDependenciesMessage`). The parser runs in its own in-memory DuckDB with external access off and no extensions, never executes the text, and its answer is only read as JSON.
+The page uses the policy of the other reports (`default-src 'none'`, nonce for style and script, `localResourceRoots` `dist`), and data arrives by `postMessage` after `ready`. Catalog text is put in with `textContent`. The page asks for an action by id and one index (`isDependenciesAction` accepts exactly the three ids with one number; the extension checks the number against the data it sent). The page validates what it receives (`isDependenciesMessage`). The parser runs in its own in-memory DuckDB with external access off and no extensions, never executes the text, and its answer is only read as JSON.

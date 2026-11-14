@@ -1,13 +1,12 @@
 /// <reference lib="dom" />
 // Browser side of the Health check: state and events; the DOM is built in render.ts, the texts and lists in model.ts.
-import { HEALTH_GROUPS } from '../health/model';
 import { isArrayOf, isCount, isOneOf, isShape, isString } from '../guards';
-import type { Page, PageContext, PageKind } from '../shell/page';
+import { reportPage } from '../shell/report-page';
 import { readTheme } from '../shell/theme';
 import type { Theme } from '../shell/theme';
-import { DEFAULT_FILTER, MAX_DEEP_FILES, SEVERITIES, applyEvents, healthScopeLabel } from './model';
+import { DEFAULT_DEEP_FILES, DEFAULT_FILTER, MAX_DEEP_FILES, applyEvents, healthScopeLabel } from './model';
 import type { HealthData, HealthFilter, PanelEvent } from './model';
-import { isHealthMessage, isWholeData } from './protocol';
+import { isHealthMessage, isHealthView, isWholeData } from './protocol';
 import type { HealthMessage } from './protocol';
 import {
   countFilters,
@@ -35,11 +34,7 @@ const isSaved = isShape({
   identity: isString,
   depth: isOneOf('quick', 'deep'),
   deepFiles: isCount,
-  filter: isShape({
-    text: isString,
-    severities: isArrayOf(isOneOf(...SEVERITIES)),
-    groups: isArrayOf(isOneOf(...HEALTH_GROUPS)),
-  }),
+  filter: isHealthView,
   expanded: isArrayOf(isString),
 }) as (value: unknown) => value is Saved;
 
@@ -67,11 +62,11 @@ const savedOf = (data: HealthData, choices: Choices): Saved => ({
   expanded: [...choices.expanded],
 });
 
-function createHealthPage(context: PageContext): Page<HealthMessage['data']> {
+export const healthPage = reportPage<HealthMessage['data']>('health', isHealthMessage, ({ context }) => {
   let data: HealthData | undefined;
   let filter: HealthFilter = DEFAULT_FILTER;
   let depth: 'quick' | 'deep' = 'quick';
-  let deepFiles = 200;
+  let deepFiles = DEFAULT_DEEP_FILES;
   let expanded = new Set<string>();
   let limit = PAGE_SIZE;
   let theme: Theme;
@@ -224,15 +219,9 @@ function createHealthPage(context: PageContext): Page<HealthMessage['data']> {
       invalid = false;
       renderAll(message);
     },
+    // A batch of events can come before the data: it is applied to nothing.
     redraw() {
       if (data) renderAll(data);
     },
-    resize() {},
   };
-}
-
-export const healthPage: PageKind<HealthMessage['data']> = {
-  type: 'health',
-  isMessage: isHealthMessage,
-  create: createHealthPage,
-};
+});

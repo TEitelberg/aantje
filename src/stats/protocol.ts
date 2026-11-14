@@ -1,5 +1,6 @@
 import {
   isArrayOf,
+  isBoolean,
   isCount,
   isFiniteNumber,
   isNullOr,
@@ -9,6 +10,7 @@ import {
   isString,
   isTrue,
 } from '../guards';
+import { isGrowthPoint } from '../shell/file-growth';
 import type { StatisticsData } from './model';
 
 export type StatisticsMessage = { readonly type: 'statistics'; readonly data: StatisticsData };
@@ -33,24 +35,17 @@ const isPartitioning = isShape({
   earlierFiles: isCount,
   partial: isOptional(isTrue),
   keysLeftOut: isOptional(isCount),
+  unread: isOptional(isTrue),
 });
 const isColumn = isShape({
   id: isCount,
   path: isArrayOf(isString),
   type: isString,
-  nullable: (value) => typeof value === 'boolean',
+  nullable: isBoolean,
   nullRatio: isNullOr((value) => isFiniteNumber(value) && (value as number) >= 0 && (value as number) <= 1),
   min: isNullOr(isString),
   max: isNullOr(isString),
 });
-export const isGrowthPoint = isShape({
-  snapshot: isCount,
-  time: isNullOr(isString),
-  files: isCount,
-  sizeBytes: isCount,
-  compaction: (value) => typeof value === 'boolean',
-});
-
 const isStatistics = isShape({
   snapshot: isCount,
   rows: isCount,
@@ -66,6 +61,7 @@ const isStatistics = isShape({
   partitioning: isOptional(isPartitioning),
   columns: isArrayOf(isColumn),
   columnsPartial: isOptional(isTrue),
+  columnsUnread: isOptional(isTrue),
   growth: isArrayOf(isGrowthPoint),
   growthMerged: isOptional(isTrue),
 });

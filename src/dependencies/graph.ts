@@ -1,9 +1,11 @@
+import { foldIdentifier } from '../catalog/ddl';
 import type { CatalogEntry, MacroInfo, SchemaInfo, ViewInfo } from '../catalog/model';
 import { LAKE } from '../data/attach';
+import { messageOf } from '../errors';
 import type { SqlParser } from './parser';
 import { compareText } from '../order';
-import { extract, lower, messageLine } from './references';
-import type { Reference } from './references';
+import { extract, messageLine } from './references';
+import type { Reference } from '../sql/parse-tree';
 
 export const NODE_KINDS = ['table', 'view', 'scalarMacro', 'tableMacro'] as const;
 export type NodeKind = (typeof NODE_KINDS)[number];
@@ -16,6 +18,16 @@ export interface DependencyNode {
   readonly schema: string;
   readonly name: string;
 }
+
+/** A table, view or macro as the graph names it: Generate Scripts and Script as Update order theirs by it. */
+export type GraphKey = Pick<DependencyNode, 'kind' | 'id'>;
+
+/** The text of a graph key: the key of the panel and of the saved state of an object, and of a selection. */
+export const nodeKey = ({ kind, id }: GraphKey): string => `${kind}:${id}`;
+
+/** The kind of node of a macro. */
+export const macroNodeKind = (macro: Pick<MacroInfo, 'kind'>): 'scalarMacro' | 'tableMacro' =>
+  macro.kind === 'scalar' ? 'scalarMacro' : 'tableMacro';
 
 /** `from` uses `to`: a view reads a table or view, a view or macro calls a macro. */
 export interface DependencyEdge {
@@ -101,8 +113,8 @@ const rank: Record<NodeKind, number> = { table: 0, view: 1, scalarMacro: 2, tabl
 
 function compareNodes(a: DependencyNode, b: DependencyNode): number {
   return (
-    compareText(lower(a.schema), lower(b.schema)) ||
-    compareText(lower(a.name), lower(b.name)) ||
+    compareText(foldIdentifier(a.schema), foldIdentifier(b.schema)) ||
+    compareText(foldIdentifier(a.name), foldIdentifier(b.name)) ||
     rank[a.kind] - rank[b.kind] ||
     a.id - b.id
   );
@@ -125,7 +137,7 @@ function collectNodes(objects: CatalogObjects): {
   for (const macro of objects.macros) {
     const expression = macro.kind === 'scalar';
     const node = {
-      kind: expression ? ('scalarMacro' as const) : ('tableMacro' as const),
+      kind: macroNodeKind(macro),
       id: macro.id,
       schemaId: macro.schemaId,
       schema: schemaNames.get(macro.schemaId) ?? '',
@@ -150,15 +162,15 @@ function indexNodes(nodes: readonly DependencyNode[]): Names {
   const relations = new Map<string, Map<string, number>>();
   const macros = new Map<string, Map<string, MacroSlots>>();
   for (const [index, node] of nodes.entries()) {
-    const schema = lower(node.schema);
+    const schema = foldIdentifier(node.schema);
     if (node.kind === 'table' || node.kind === 'view') {
       relations.set(
         schema,
-        (relations.get(schema) ?? new Map<string, number>()).set(lower(node.name), index),
+        (relations.get(schema) ?? new Map<string, number>()).set(foldIdentifier(node.name), index),
       );
     } else {
       const byName = macros.get(schema) ?? new Map<string, MacroSlots>();
-      byName.set(lower(node.name), { ...byName.get(lower(node.name)), [node.kind]: index });
+      byName.set(foldIdentifier(node.name), { ...byName.get(foldIdentifier(node.name)), [node.kind]: index });
       macros.set(schema, byName);
     }
   }
@@ -197,7 +209,7 @@ function searched(scope: Scope, reference: Reference): string[] {
 
 function find<T>(scope: Scope, table: Map<string, Map<string, T>>, reference: Reference): T | undefined {
   for (const schema of searched(scope, reference)) {
-    const found = table.get(lower(schema))?.get(lower(reference.name));
+    const found = table.get(foldIdentifier(schema))?.get(foldIdentifier(reference.name));
     if (found !== undefined) return found;
   }
   return undefined;
@@ -207,27 +219,30 @@ function find<T>(scope: Scope, table: Map<string, Map<string, T>>, reference: Re
 function ownOnly(scope: Scope, reference: Reference): boolean {
   const { node, names } = scope;
   if (node.kind === 'view' || reference.schema !== '') return false;
-  const own = lower(node.schema);
+  const own = foldIdentifier(node.schema);
   const has =
     reference.kind === 'relation'
-      ? names.relations.get(own)?.has(lower(reference.name))
-      : names.macros.get(own)?.get(lower(reference.name))?.[reference.kind] !== undefined;
+      ? names.relations.get(own)?.has(foldIdentifier(reference.name))
+      : names.macros.get(own)?.get(foldIdentifier(reference.name))?.[reference.kind] !== undefined;
   return has === true;
 }
 
 function miss(scope: Scope, reference: Reference): void {
   const schema = reference.kind === 'relation' ? (searched(scope, reference)[0] ?? '') : reference.schema;
-  scope.broken.set(`${scope.from}|${reference.kind}|${lower(schema)}|${lower(reference.name)}`, {
-    from: scope.from,
-    kind: reference.kind,
-    schema,
-    name: reference.name,
-  });
+  scope.broken.set(
+    `${scope.from}|${reference.kind}|${foldIdentifier(schema)}|${foldIdentifier(reference.name)}`,
+    {
+      from: scope.from,
+      kind: reference.kind,
+      schema,
+      name: reference.name,
+    },
+  );
 }
 
 function resolveRelation(scope: Scope, reference: Reference): void {
-  if (SYSTEM_SCHEMAS.has(lower(reference.schema))) return;
-  const catalog = lower(reference.catalog);
+  if (SYSTEM_SCHEMAS.has(foldIdentifier(reference.schema))) return;
+  const catalog = foldIdentifier(reference.catalog);
   const found = OTHER_CATALOGS.has(catalog) ? undefined : find(scope, scope.names.relations, reference);
   if (found !== undefined) {
     connect(scope, found, 'reads');
@@ -241,7 +256,7 @@ function resolveRelation(scope: Scope, reference: Reference): void {
     );
   } else if (!OTHER_CATALOGS.has(catalog) && ownOnly(scope, reference)) {
     complain(scope, 'callerSchema', `${scope.node.schema}.${reference.name}`);
-  } else if (reference.schema === '' && scope.builtin.table.has(lower(reference.name))) {
+  } else if (reference.schema === '' && scope.builtin.table.has(foldIdentifier(reference.name))) {
     return; // `FROM duckdb_tables` is a function without parentheses
   } else if (FILE_NAME.test(reference.name)) {
     complain(scope, 'file', reference.name);
@@ -251,7 +266,7 @@ function resolveRelation(scope: Scope, reference: Reference): void {
 }
 
 function resolveMacro(scope: Scope, reference: Reference & { readonly kind: keyof MacroSlots }): void {
-  const catalog = lower(reference.catalog);
+  const catalog = foldIdentifier(reference.catalog);
   const found = OTHER_CATALOGS.has(catalog)
     ? undefined
     : find(scope, scope.names.macros, reference)?.[reference.kind];
@@ -261,8 +276,8 @@ function resolveMacro(scope: Scope, reference: Reference & { readonly kind: keyo
     complain(scope, 'callerSchema', `${scope.node.schema}.${reference.name}`);
   } else if (
     catalog === '' &&
-    (reference.schema === '' || scope.lakeSchemas.has(lower(reference.schema))) &&
-    !scope.builtin.all.has(lower(reference.name))
+    (reference.schema === '' || scope.lakeSchemas.has(foldIdentifier(reference.schema))) &&
+    !scope.builtin.all.has(foldIdentifier(reference.name))
   ) {
     miss(scope, reference);
   }
@@ -289,7 +304,7 @@ async function analyseBody(
   } catch (error) {
     // One text that DuckDB or the analysis cannot handle must not take the report of the lake down with it.
     signal?.throwIfAborted();
-    complain(scope, 'unsupported', messageLine(error instanceof Error ? error.message : String(error)));
+    complain(scope, 'unsupported', messageLine(messageOf(error)));
   }
 }
 
@@ -307,7 +322,7 @@ export async function buildGraph(
   const shared = {
     ...found,
     names: indexNodes(nodes),
-    lakeSchemas: new Set(objects.schemas.map(({ name }) => lower(name))),
+    lakeSchemas: new Set(objects.schemas.map(({ name }) => foldIdentifier(name))),
     builtin: await parser.functions(),
   };
   const limit = options.limit ?? OBJECT_LIMIT;

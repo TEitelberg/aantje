@@ -1,7 +1,7 @@
 import { isBelowDataPath } from '../catalog/locations';
 import type { FileLocations, StoredFile } from '../catalog/model';
-import { LakeFailure } from '../data/engine';
-import type { LakeSession } from '../data/engine';
+import { LakeFailure } from '../data/lake-session';
+import type { LakeSession } from '../data/lake-session';
 import {
   chooseDeepFiles,
   deepFindings,
@@ -13,7 +13,9 @@ import {
 } from './deep-checks';
 import type { KnownColumns } from './deep-checks';
 import type { HealthFinding } from './model';
-import { fileKey, failureMessageOf, PATH_MISSING } from './run-context';
+import { fileKey } from './finding';
+import { failureMessageOf } from '../data/lake-session';
+import { PATH_MISSING } from './run-context';
 import type { CatalogOutcome, RunContext } from './run-context';
 import type { GroupResult } from './run-state';
 import { missingFinding } from './storage-checks';
@@ -175,7 +177,7 @@ function deepFailure(
   file: StoredFile,
 ): { findings: HealthFinding[]; stop?: string } {
   const { text } = failure;
-  switch (failureKind(text)) {
+  switch (failureKind(text, ctx.deps.access.storage?.config.kind)) {
     case 'busy':
       return {
         findings: [],
@@ -184,7 +186,7 @@ function deepFailure(
     case 'store':
       return {
         findings: [],
-        stop: 'The object store did not answer the request for a file (see the group Connection).',
+        stop: 'The storage did not answer the request for a file (see the group Connection).',
       };
     case 'gone':
       // The storage check reports it; the deep check does when that did not run.

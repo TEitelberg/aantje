@@ -1,8 +1,7 @@
 import type { CatalogReader } from '../catalog/model';
-import { ACTIVITY_LIMIT } from '../catalog/thresholds';
 import { LAKE_SCOPE } from '../shell/scope';
 import type { ReportScope } from '../shell/scope';
-import { activityOfSchema } from '../shell/schema-scope';
+import { readNewest, scopedWindow } from '../snapshot-changes/window';
 import type { ActivityData } from './model';
 
 /**
@@ -15,15 +14,5 @@ export async function readActivity(
   signal?: AbortSignal,
   scope: ReportScope = LAKE_SCOPE,
 ): Promise<ActivityData> {
-  const page = await reader.snapshotActivity(ACTIVITY_LIMIT, undefined, signal);
-  // The page starts with the newest snapshot; only a catalog without snapshots needs the info.
-  const latest = page.snapshots[0]?.id ?? (await reader.info()).latestSnapshot;
-  return {
-    connection,
-    scope,
-    latest,
-    snapshots: scope.kind === 'schema' ? activityOfSchema(page.snapshots, scope.name) : page.snapshots,
-    more: page.more,
-    ...(scope.kind === 'schema' ? { read: page.snapshots.length } : {}),
-  };
+  return scopedWindow(connection, scope, await readNewest(reader, signal));
 }

@@ -112,8 +112,6 @@ export interface SchemaHistoryData {
   readonly columns: readonly HistoryColumn[];
 }
 
-export { tableLabel };
-
 const qualified = ({ schemaName, name }: { schemaName: string | null; name: string }): string =>
   tableLabel({ schema: schemaName, name });
 

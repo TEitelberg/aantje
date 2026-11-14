@@ -1,10 +1,11 @@
 import { isBelowDataPath } from '../catalog/locations';
 import { quoteLiteral } from '../catalog/ddl';
 import { LAKE } from '../data/attach';
-import { LakeFailure, withLakeSession } from '../data/engine';
-import type { LakeSession } from '../data/engine';
+import { LakeFailure, failureMessageOf, withLakeSession } from '../data/lake-session';
+import type { LakeSession } from '../data/lake-session';
 import type { DataAccess } from '../data/types';
-import { escapeGlob } from '../health/storage-checks';
+import { escapeGlob } from '../data/store-sql';
+import { isAantjeError } from '../errors';
 import { SIZED_FILES } from './model';
 import type { ExpiryMeasure, FileMeasure, Measured, Policy } from './model';
 
@@ -25,10 +26,9 @@ const statements = {
     `SELECT count(*), sum(size) FROM read_blob([${paths.map((path) => quoteLiteral(escapeGlob(path))).join(', ')}])`,
 };
 
-// The first line of a failed statement for the page: short and free of secrets (the engine scrubs them).
+// The reason on the page, as the health check words a failure: short and free of secrets (the engine scrubs them).
 function reasonOf(error: unknown): string {
-  const text = error instanceof Error ? error.message : String(error);
-  const line = text.split(/\r?\n/)[0]?.trim() ?? '';
+  const line = failureMessageOf(error).trim();
   return line.length > 300 ? `${line.slice(0, 300)}…` : line;
 }
 
@@ -115,7 +115,8 @@ export async function measureDryRuns(
       return { expiry, cleanup, orphans };
     });
   } catch (error) {
-    if (signal?.aborted) throw error;
+    // A lake that cannot be opened skips all three; anything else is a fault that the command reports.
+    if (signal?.aborted || !(error instanceof LakeFailure || isAantjeError(error))) throw error;
     const skipped = { state: 'skipped', reason: reasonOf(error) } as const;
     return { expiry: skipped, cleanup: skipped, orphans: skipped };
   }

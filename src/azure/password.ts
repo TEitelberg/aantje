@@ -6,7 +6,7 @@ const DIGITS = '23456789';
 // Only characters that need no quoting in a connection string or a SQL literal.
 const SYMBOLS = '-_';
 
-export const PASSWORD_LENGTH = 32;
+const PASSWORD_LENGTH = 32;
 
 /**
  * A random password with characters of all four classes, which satisfies the complexity rule of Azure Database for

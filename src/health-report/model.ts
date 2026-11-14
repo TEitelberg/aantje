@@ -1,4 +1,4 @@
-import { DEFAULT_LIMITS, HEALTH_GROUPS, compareFindings } from '../health/model';
+import { DEFAULT_LIMITS, FIXES, HEALTH_GROUPS, compareFindings } from '../health/model';
 import type {
   CheckId,
   FindingScope,
@@ -9,13 +9,15 @@ import type {
   HealthSeverity,
   HealthSummary,
 } from '../health/model';
-import type { MaintenanceKind } from '../maintenance';
-import { MAINTENANCE_LABEL } from '../maintenance-labels';
+import type { MaintenanceKind } from '../maintenance/scripts';
+import { groupBy } from '../order';
+import { MAINTENANCE_LABEL } from '../maintenance/labels';
+import type { MaintenanceScript } from '../maintenance/labels';
 import { count, plural } from '../shell/model';
 import { formatDuration } from '../shell/numbers';
 import type { Card } from '../shell/model';
 
-export const DEFAULT_DEEP_FILES = 200;
+export const DEFAULT_DEEP_FILES = DEFAULT_LIMITS.deepFiles;
 /** The most files a page may ask the deep check to open. */
 export const MAX_DEEP_FILES = 10_000;
 
@@ -173,11 +175,9 @@ export const lakeSectionLabel = (reportScope: FindingScope): string =>
 
 /** The lakehouse first, then the schema and the tables by name; the findings keep their order. */
 export function sections(findings: readonly HealthFinding[], lakeLabel = 'Lakehouse'): FindingSection[] {
-  const byLabel = new Map<string, HealthFinding[]>();
-  for (const finding of findings) {
-    const label = finding.scope.kind === 'lake' ? lakeLabel : healthScopeLabel(finding.scope);
-    byLabel.set(label, [...(byLabel.get(label) ?? []), finding]);
-  }
+  const byLabel = groupBy(findings, (finding) =>
+    finding.scope.kind === 'lake' ? lakeLabel : healthScopeLabel(finding.scope),
+  );
   return [...byLabel]
     .map(([label, list]) => ({ label, findings: list }))
     .toSorted((a, b) => {
@@ -201,8 +201,6 @@ export function counts(findings: readonly HealthFinding[]): {
   };
 }
 
-export { formatDuration };
-
 /** How a group stands, in words and with a sign. */
 export function groupLine(status: GroupStatus | undefined, progress: HealthData['progress']): string {
   if (!status) {
@@ -223,7 +221,7 @@ export function groupLine(status: GroupStatus | undefined, progress: HealthData[
 }
 
 /** Notes on what a cap or a gap left out, one per group that has something to say. */
-export function limitNotes(groups: readonly GroupStatus[]): string[] {
+function limitNotes(groups: readonly GroupStatus[]): string[] {
   return groups.flatMap((status) => {
     const label = GROUP_LABEL[status.group];
     return [
@@ -331,7 +329,15 @@ export function healthCards(data: HealthData): Card[] {
 }
 
 export type FindingActionId =
-  'inspect' | 'setting' | 'useEndpoint' | 'setCredentials' | 'script' | 'revealTable' | 'showStatistics';
+  | 'inspect'
+  | 'setting'
+  | 'useEndpoint'
+  | 'setCredentials'
+  | 'editConnection'
+  | 'setStorageSignIn'
+  | 'script'
+  | 'revealTable'
+  | 'showStatistics';
 
 interface ScriptEntry {
   readonly kind: MaintenanceKind;
@@ -343,35 +349,30 @@ interface ScriptEntry {
   readonly warning?: string;
 }
 
-const SCRIPTS: Readonly<Partial<Record<CheckId, ScriptEntry>>> = {
-  'catalog.cleanup-overdue': { kind: 'cleanup', level: 'lake', label: MAINTENANCE_LABEL.cleanup },
-  'catalog.cleanup-pending': { kind: 'cleanup', level: 'lake', label: MAINTENANCE_LABEL.cleanup },
-  'catalog.many-snapshots': { kind: 'expire', level: 'lake', label: MAINTENANCE_LABEL.expire },
-  'catalog.small-files': { kind: 'merge', level: 'table', label: MAINTENANCE_LABEL.merge },
-  'catalog.large-inlined-data': { kind: 'flush', level: 'table', label: MAINTENANCE_LABEL.flush },
-  'storage.file-orphaned': {
-    kind: 'orphans',
-    level: 'lake',
-    label: MAINTENANCE_LABEL.orphans,
-    warning:
-      'A writer that is running at the moment may have uploaded these files and not committed yet; deleting them breaks its commit',
-  },
+const SCRIPT_WARNING: Readonly<Partial<Record<MaintenanceScript, string>>> = {
+  orphans:
+    'A writer that is running at the moment may have uploaded these files and not committed yet; deleting them breaks its commit',
 };
 
 /** Whether the findings include one that a script of the Maintenance menu fixes. */
 export const hasMaintenanceScript = (findings: readonly HealthFinding[]): boolean =>
   findings.some((finding) => finding.fixSql !== undefined && finding.fixStep !== undefined);
 
-/** The script for a finding; a table script needs a finding of a table. */
+/** The script for a finding (`FIXES` of the health model); a table script needs a finding of a table. */
 export function healthScriptOf(finding: HealthFinding): ScriptEntry | undefined {
-  const entry = SCRIPTS[finding.check];
-  return entry && (entry.level === 'lake' || finding.scope.kind === 'table') ? entry : undefined;
+  const fix = FIXES[finding.check];
+  if (!fix || (fix.level === 'table' && finding.scope.kind !== 'table')) {
+    return undefined;
+  }
+  const warning = SCRIPT_WARNING[fix.kind];
+  return { ...fix, label: MAINTENANCE_LABEL[fix.kind], ...(warning === undefined ? {} : { warning }) };
 }
 
 const CREDENTIAL_CHECKS: readonly CheckId[] = [
   'connection.credentials-missing',
   'connection.store-access-denied',
   'connection.endpoint-not-set',
+  'connection.sign-in-expired',
 ];
 
 /** The actions that a finding offers; the extension checks a request against this list again. */
@@ -381,7 +382,11 @@ export function actionsOf(finding: HealthFinding): FindingActionId[] {
     ...(finding.check === 'connection.endpoint-not-set' && finding.suggestion
       ? (['useEndpoint'] as const)
       : []),
-    ...(CREDENTIAL_CHECKS.includes(finding.check) ? (['setCredentials'] as const) : []),
+    // A finding that points to the connection's own storage offers the connection, not the machine's S3 keys.
+    ...(CREDENTIAL_CHECKS.includes(finding.check) && finding.connectionActions === undefined
+      ? (['setCredentials'] as const)
+      : []),
+    ...(finding.connectionActions ?? []),
     ...(finding.settingKey === undefined ? [] : (['setting'] as const)),
     ...(healthScriptOf(finding) ? (['script'] as const) : []),
     ...(finding.scope.kind === 'table' ? (['revealTable', 'showStatistics'] as const) : []),

@@ -12,3 +12,16 @@ export function failureLog(logger: Logger): FailureLog {
     }
   };
 }
+
+/** What `pending` gives, or `fallback` once it failed; the failure goes to `failed` as `kind`. */
+export function withFallback<T, F>(
+  failed: FailureLog,
+  kind: string,
+  pending: Promise<T>,
+  fallback: F,
+): Promise<T | F> {
+  return pending.catch((error: unknown) => {
+    failed(kind, error);
+    return fallback;
+  });
+}

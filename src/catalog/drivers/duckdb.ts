@@ -1,10 +1,18 @@
 import { open } from 'node:fs/promises';
 import type * as Duckdb from '@duckdb/node-api';
-import { interruptRepeatedly, loadEngine } from '../../data/open-lake';
-import type { Engine } from '../../data/open-lake';
+import { interruptRepeatedly, loadEngine } from '../../duckdb/engine';
+import type { Engine } from '../../duckdb/engine';
 import { AantjeError, isErrnoException, messageOf } from '../../errors';
 import type { Driver, QueryOptions, Row, Value } from './driver';
-import { catalogClosed, NO_ENGINE_ADVICE, queryLimits, track } from './limits';
+import {
+  catalogClosed,
+  NO_ENGINE_ADVICE,
+  queryFailed,
+  queryLimits,
+  track,
+  unreadableFile,
+  unsafeInteger,
+} from './limits';
 
 interface DuckdbOptions {
   /** DuckDB file that holds the `ducklake_*` tables. */
@@ -78,9 +86,7 @@ async function assertReadable(path: string): Promise<void> {
     await (await open(path, 'r')).close();
   } catch (cause) {
     const code = isErrnoException(cause) ? cause.code : undefined;
-    throw code === 'EBUSY'
-      ? lockedError(path, cause)
-      : new AantjeError('FILE_NOT_FOUND', `Cannot read "${path}": ${code ?? 'unknown error'}.`, { cause });
+    throw code === 'EBUSY' ? lockedError(path, cause) : unreadableFile(path, code, cause);
   }
 }
 
@@ -109,9 +115,7 @@ function openError(path: string, cause: unknown): AantjeError {
 }
 
 function queryError(cause: unknown): AantjeError {
-  return cause instanceof AantjeError
-    ? cause
-    : new AantjeError('QUERY_FAILED', `The catalog query failed: ${messageOf(cause)}`, { cause });
+  return cause instanceof AantjeError ? cause : queryFailed(messageOf(cause), cause);
 }
 
 export function toRow(engine: Engine, object: Record<string, Duckdb.DuckDBValue>): Row {
@@ -134,10 +138,7 @@ function toValue(engine: Engine, value: Duckdb.DuckDBValue): Value {
   if (typeof value === 'bigint') {
     const number = Number(value);
     if (!Number.isSafeInteger(number)) {
-      throw new AantjeError(
-        'QUERY_FAILED',
-        `The catalog returned the integer ${value}, which is larger than the largest exactly representable number (${Number.MAX_SAFE_INTEGER}).`,
-      );
+      throw unsafeInteger(value);
     }
     return number;
   }

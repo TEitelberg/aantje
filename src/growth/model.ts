@@ -1,26 +1,19 @@
-import type { GrowthChange, SnapshotActivity, SnapshotId } from '../catalog/model';
+import type { GrowthChange, SnapshotId } from '../catalog/model';
 import { compareText } from '../order';
-import { OTHER_LANE, buildModel } from '../snapshot-report/model';
-import type { Model } from '../snapshot-report/model';
-import { count, formatBytes, plural } from '../shell/model';
+import { count, formatBytes, tableLabel } from '../shell/model';
 import type { Card } from '../shell/model';
-import type { ReportScope } from '../shell/scope';
+import { OTHER_LANE, buildModel } from '../snapshot-changes/model';
+import type { Model } from '../snapshot-changes/model';
+import { olderNote, windowSubtitle } from '../snapshot-changes/window';
+import type { ScopedWindow } from '../snapshot-changes/window';
 
-/** What the extension reads and posts to the page; the page computes everything else. */
-export interface GrowthData {
-  readonly connection: string;
-  /** The lake, or one schema: then `snapshots`, `tables` and `changes` are those of its tables. */
-  readonly scope: ReportScope;
+/**
+ * What the extension reads and posts to the page; the page computes everything else. For a schema, `snapshots`,
+ * `tables` and `changes` are those of its tables.
+ */
+export interface GrowthData extends ScopedWindow {
   /** The table that the page starts with; null for the whole lake. */
   readonly focus: number | null;
-  /** Not necessarily among `snapshots`. */
-  readonly latest: SnapshotId;
-  /** Newest first. */
-  readonly snapshots: readonly SnapshotActivity[];
-  /** The catalog has older snapshots than these. */
-  readonly more: boolean;
-  /** For a schema: how many snapshots of the lake were read, of which `snapshots` are those that changed it. */
-  readonly read?: number;
   /** For a schema: whether snapshots expired, judged on all snapshots read; the ones of the schema have gaps anyway. */
   readonly expired?: boolean;
   /** The tables of the newest snapshot; the changes name dropped ones (see `growthTableChoices`). */
@@ -77,17 +70,16 @@ export function growthTableChoices(data: GrowthData, model: Model): TableChoice[
   const current = new Set(data.tables.map(({ id }) => id));
   const gone = model.lanes.flatMap((lane) =>
     lane.tableId !== null && !current.has(lane.tableId) && lane.schema !== null
-      ? [{ id: lane.tableId, schema: lane.schema, name: lane.name, label: `${lane.schema}.${lane.name}` }]
+      ? [{ id: lane.tableId, schema: lane.schema, name: lane.name, label: tableLabel(lane) }]
       : [],
   );
   const dropped = gone.map((table) => ({
     ...table,
     label: `${table.label} (dropped${gone.filter(({ label }) => label === table.label).length > 1 ? ` #${table.id}` : ''})`,
   }));
-  return [
-    ...data.tables.map((table) => ({ ...table, label: `${table.schema}.${table.name}` })),
-    ...dropped,
-  ].toSorted((a, b) => compareText(a.label, b.label));
+  return [...data.tables.map((table) => ({ ...table, label: tableLabel(table) })), ...dropped].toSorted(
+    (a, b) => compareText(a.label, b.label),
+  );
 }
 
 const ZERO: Totals = { rows: 0, bytes: 0, files: 0 };
@@ -224,11 +216,10 @@ export function growthCards(steps: readonly Step[], metric: Metric): Card[] {
 }
 
 export const growthOlderNote = (data: GrowthData): string =>
-  `${
-    data.scope.kind === 'schema' && data.read !== undefined
-      ? `Of the ${data.read} newest snapshots, the ${data.snapshots.length} that changed the schema are shown.`
-      : `The ${data.snapshots.length} newest snapshots are shown.`
-  } Older ones are not read; the first value is the state after the oldest snapshot shown, and its change is the change of that snapshot.`;
+  olderNote(
+    data,
+    'the first value is the state after the oldest snapshot shown, and its change is the change of that snapshot',
+  );
 
 /** Whether snapshots are missing between or ahead of the ones read, because they expired. */
 export function hasExpired(data: GrowthData): boolean {
@@ -261,5 +252,4 @@ export const growthScopeLabel = (choices: readonly TableChoice[], table: number 
 export const truncationNote = (shown: number, total: number): string =>
   `${shown} of ${total} snapshots are listed, the newest first. The chart has the others.`;
 
-export const subtitle = (data: GrowthData): string =>
-  `${data.connection} · ${plural(data.snapshots.length, 'snapshot', 'snapshots')} ${data.scope.kind === 'schema' ? 'of the schema' : 'read'}, latest @${data.latest}`;
+export const subtitle = (data: GrowthData): string => windowSubtitle(data);

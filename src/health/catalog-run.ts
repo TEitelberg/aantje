@@ -5,7 +5,7 @@ import { catalogFindings } from './catalog-checks';
 import { finding } from './finding';
 import type { TableNames } from './finding';
 import type { GroupStatus, HealthFinding } from './model';
-import { failureMessageOf } from './run-context';
+import { failureMessageOf } from '../data/lake-session';
 import type { CatalogOutcome, RunContext } from './run-context';
 
 // Rows read per consistency check; a finding's detail names the first few.
@@ -109,7 +109,10 @@ async function checkCatalog(ctx: RunContext, facts: CatalogOutcome): Promise<voi
     ...(scheduled.status === 'fulfilled' ? { scheduled: scheduled.value } : {}),
   });
   state.add(result.findings);
-  const unavailable = consistency.status === 'fulfilled' ? consistency.value.unavailable.length : 0;
+  // Checks that could not run: consistency checks without their tables, and the inlined rows when some were unread.
+  const unavailable =
+    (consistency.status === 'fulfilled' ? consistency.value.unavailable.length : 0) +
+    (maintenance.status === 'fulfilled' && maintenance.value.inlinedFailed ? 1 : 0);
   const status: GroupStatus = {
     group: 'catalog',
     state: reads.failures.length > 0 ? 'failed' : 'done',

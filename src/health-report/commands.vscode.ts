@@ -1,6 +1,6 @@
 import type * as vscode from 'vscode';
-import { shownSnapshot } from '../actions';
-import { guarded, showConnectFirst } from '../command.vscode';
+import { catalogAt, shownSnapshot } from '../actions';
+import { guarded, offerOnErrors, showConnectFirst } from '../command.vscode';
 import type { Register } from '../command.vscode';
 import type { S3CredentialStore } from '../data/credentials';
 import type { DataAccessFactory } from '../data/resolve';
@@ -9,13 +9,13 @@ import { runHealthCheck } from '../health/run';
 import type { HealthRun } from '../health/run';
 import { connectionClosed } from '../messages';
 import { reportPanels } from '../shell/host.vscode';
+import { scopeOfNode } from '../shell/scope';
 import type { ReportHostEnv } from '../shell/host.vscode';
 import type { TableActionEnv } from '../shell/table-actions.vscode';
 import { createHealthController } from './controller';
 import type { HealthTarget } from './controller';
-import { onHealthRequested } from './error-action.vscode';
 import { healthKind } from './kind';
-import { scopeForOffer } from './offer';
+import { offerFor, scopeForOffer } from './offer';
 import type { HealthOffer } from './offer';
 import { healthPerformer } from './perform.vscode';
 
@@ -47,13 +47,17 @@ export function registerHealthCommands(env: HealthCommandEnv): vscode.Disposable
     request: HealthRequest,
     run: HealthRun,
   ): Promise<HealthReport> {
+    const { reader } = catalogAt(tree, connectionId, GOAL);
     const profile = store.get(connectionId);
-    const reader = tree.reader(connectionId);
-    if (!profile || !reader) {
+    if (!profile) {
       throw connectionClosed(GOAL);
     }
     const access = await env.dataAccess(profile, undefined);
-    const credentialsFrom = await env.credentials.source();
+    // Only a connection on the machine's S3 settings asks where the keys come from; any other storage knows its own sign-in.
+    const credentialsFrom =
+      access.storage === undefined || access.storage.legacy === 'settings'
+        ? await env.credentials.source()
+        : undefined;
     return runHealthCheck(
       { reader, access, env: env.env, ...(credentialsFrom ? { credentialsFrom } : {}) },
       request,
@@ -100,13 +104,16 @@ export function registerHealthCommands(env: HealthCommandEnv): vscode.Disposable
   return [
     { dispose: () => controller.dispose() },
     { dispose: () => panels.dispose() },
-    onHealthRequested((offer) => guarded(env.logger, COMMAND, () => openFromError(offer))),
+    // A failed read that the check can look into gets its button: Check Health or Check Table Health.
+    offerOnErrors((error) => {
+      const offer = offerFor(error);
+      return (
+        offer && { label: offer.label, run: () => guarded(env.logger, COMMAND, () => openFromError(offer)) }
+      );
+    }),
     env.register(COMMAND, (node) => {
-      const ref = node?.ref;
-      if (ref?.kind === 'connection') openAndRun(targetOf(ref.connectionId, { kind: 'lake' }));
-      if (ref?.kind === 'schema') {
-        openAndRun(targetOf(ref.connectionId, { kind: 'schema', id: ref.schema.id, name: ref.schema.name }));
-      }
+      const scope = node && scopeOfNode(node.ref);
+      if (node && scope) openAndRun(targetOf(node.ref.connectionId, scope));
     }),
     env.register(TABLE_COMMAND, (node) => {
       if (node?.ref.kind !== 'table') return;

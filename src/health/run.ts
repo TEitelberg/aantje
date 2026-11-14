@@ -1,11 +1,12 @@
-import { withLakeSession } from '../data/engine';
+import { withLakeSession } from '../data/lake-session';
 import { runCatalogGroup } from './catalog-run';
 import { checkConnection, connectionFacts, reportSetupFailure, startConnectionGroup } from './connection-run';
 import type { ConnectionFacts } from './connection-checks';
 import { runDeepGroup } from './deep-run';
 import { compareFindings, HEALTH_GROUPS } from './model';
 import type { GroupStatus, HealthReport, HealthRequest, HealthSummary } from './model';
-import { createRunContext, failureMessageOf } from './run-context';
+import { failureMessageOf } from '../data/lake-session';
+import { createRunContext } from './run-context';
 import type { CatalogOutcome, HealthDeps, HealthRun, RunContext } from './run-context';
 import { runStorageGroup } from './storage-run';
 

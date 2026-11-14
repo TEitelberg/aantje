@@ -1,4 +1,5 @@
 import {
+  isBoolean,
   isArrayOf,
   isCount,
   isExactShape,
@@ -29,7 +30,7 @@ const isData = isShape({
     specVersion: isString,
     createdBy: isNullOr(isString),
     dataPath: isNullOr(isString),
-    encrypted: (value) => typeof value === 'boolean',
+    encrypted: isBoolean,
     metadata: isArrayOf(isEntry),
     snapshotCount: isCount,
     firstSnapshotTime: isNullOr(isString),

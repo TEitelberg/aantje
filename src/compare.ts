@@ -2,26 +2,29 @@ import { createTableDdl } from './catalog/ddl';
 import type { CatalogEntry, CatalogReader, ColumnInfo, SnapshotId, SnapshotInfo } from './catalog/model';
 import { diffColumns, diffEntries } from './catalog/schema-diff';
 import type { ColumnChange, EntryChange } from './catalog/schema-diff';
+import { inGroups } from './ddl-script/read';
 import { plural } from './shell/numbers';
 import { formatUtc } from './snapshot';
 import { namesAt } from './time-travel';
 import type { Subject } from './time-travel';
-import { inlineCode, markdownText } from './tree/format';
+import { inlineCode, markdownText } from './markdown';
 
-// Compare Schema and Compare Snapshots: counts, DDL documents and report; the commands only show them.
+// Compare Table at Two Snapshots and Compare Snapshots: counts, DDL documents and report; the commands only show them.
 
 interface DocumentKey {
   readonly connectionId: string;
   readonly tableId: number;
   readonly snapshot: SnapshotId;
+  /** Set for the documents of Schema Compare, which add the partitioning, the sort order and the comments. */
+  readonly full?: true;
 }
 
 /** The URI path and query of the DDL document; table names stay out of the path because a name can start with `//`. */
-export function documentAddress({ connectionId, tableId, snapshot }: DocumentKey): {
+export function documentAddress({ connectionId, tableId, snapshot, full }: DocumentKey): {
   readonly path: string;
   readonly query: string;
 } {
-  return { path: `/${tableId}@${snapshot}.sql`, query: connectionId };
+  return { path: `/${tableId}@${snapshot}${full ? '.full' : ''}.sql`, query: connectionId };
 }
 
 export interface SchemaDocument {
@@ -124,10 +127,8 @@ export interface CompareLimits {
   readonly changes: number;
 }
 
-const COMPARE_LIMITS: CompareLimits = { tables: 200, entries: 100, changes: 50 };
-
-// Tables whose columns are read at the same time, each at both snapshots.
-const READ_AT_ONCE = 4;
+/** The limits of Compare Snapshots; Schema Compare cuts its comparison and its report at the same. */
+export const COMPARE_LIMITS: CompareLimits = { tables: 200, entries: 100, changes: 50 };
 
 interface CatalogComparison {
   readonly entries: readonly EntryChange[];
@@ -150,32 +151,36 @@ export async function compareCatalog(
   const earlier = new Set(before.map(({ id }) => id));
   const both = after.filter(({ kind, id }) => kind === 'table' && earlier.has(id));
   const compared = both.slice(0, limits.tables);
-  const tables: { entry: CatalogEntry; changes: ColumnChange[] }[] = [];
-  for (let start = 0; start < compared.length; start += READ_AT_ONCE) {
-    const batch = await Promise.all(
-      compared.slice(start, start + READ_AT_ONCE).map(async (entry) => {
-        const [older, newer] = await Promise.all([
-          reader.columns(entry.id, from),
-          reader.columns(entry.id, to),
-        ]);
-        return { entry, changes: diffColumns(older, newer) };
-      }),
-    );
-    tables.push(...batch.filter(({ changes }) => changes.length > 0));
-  }
+  // Each table is read at both snapshots. The command has no Cancel.
+  const read = await inGroups(
+    compared,
+    async (entry) => {
+      const [older, newer] = await Promise.all([
+        reader.columns(entry.id, from),
+        reader.columns(entry.id, to),
+      ]);
+      return { entry, changes: diffColumns(older, newer) };
+    },
+    undefined,
+  );
   return {
     entries: diffEntries(before, after),
-    tables,
+    tables: read.filter(({ changes }) => changes.length > 0),
     compared: compared.length,
     omitted: both.length - compared.length,
   };
 }
 
 const code = (names: readonly string[]): string => inlineCode(names.join('.'));
-const valueOrNone = (value: string | null): string => (value === null ? 'none' : inlineCode(value));
 
-/** One column change as a Markdown line; catalog names and values render as code. */
-export function describeColumnChange(change: ColumnChange): string {
+/** A value of a report as code, or `none`. */
+export const valueOrNone = (value: string | null): string => (value === null ? 'none' : inlineCode(value));
+
+/** The type without its `id`, for each member of a union. */
+export type WithoutId<T> = T extends unknown ? Omit<T, 'id'> : never;
+
+/** One column change as a Markdown line; catalog names and values render as code. Schema Compare has no column id. */
+export function describeColumnChange(change: WithoutId<ColumnChange>): string {
   const name = code(change.path);
   switch (change.change) {
     case 'added':
@@ -204,7 +209,8 @@ function entryLine(change: EntryChange): string {
     : `${change.kind} ${now}`;
 }
 
-function capped(lines: readonly string[], limit: number): string[] {
+/** The list lines up to the limit, and a line that counts the rest. */
+export function capped(lines: readonly string[], limit: number): string[] {
   const rest = lines.length - limit;
   return rest > 0 ? [...lines.slice(0, limit), `- … ${rest} more omitted`] : [...lines];
 }

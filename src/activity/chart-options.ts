@@ -2,8 +2,8 @@ import { firstIndex, tip } from '../shell/chart-option';
 import type { ChartOption } from '../shell/chart-option';
 import { count, plural } from '../shell/model';
 import type { Palette } from '../shell/palette';
-import { colorOf } from '../snapshot-report/chart-options';
-import { SNAPSHOT_REPORT_KIND_LABEL, POINT_KINDS } from '../snapshot-report/model';
+import { colorOf } from '../snapshot-changes/colors';
+import { KIND_LABEL, POINT_KINDS } from '../snapshot-changes/model';
 import type { Day, TableRow } from './model';
 
 // Animation is off because the page redraws on every theme change; patterns (`aria.decal`) come from the theme.
@@ -62,7 +62,7 @@ export function kindsOption(days: readonly Day[], palette: Palette): ChartOption
           ? tip(
               day.day,
               POINT_KINDS.filter((kind) => day.kinds[kind] > 0).map(
-                (kind) => `${SNAPSHOT_REPORT_KIND_LABEL[kind]}: ${changes(day.kinds[kind])}`,
+                (kind) => `${KIND_LABEL[kind]}: ${changes(day.kinds[kind])}`,
               ),
             )
           : '';
@@ -74,7 +74,7 @@ export function kindsOption(days: readonly Day[], palette: Palette): ChartOption
     yAxis: { type: 'value', name: 'Changes', minInterval: 1 },
     series: POINT_KINDS.map((kind) => ({
       type: 'bar',
-      name: SNAPSHOT_REPORT_KIND_LABEL[kind],
+      name: KIND_LABEL[kind],
       stack: 'kinds',
       data: days.map((day) => day.kinds[kind]),
       itemStyle: { color: colorOf(kind, palette) },
@@ -101,7 +101,7 @@ export function activityTablesOption(tables: readonly TableRow[], palette: Palet
           ? tip(row.label, [
               changes(row.changes),
               ...POINT_KINDS.filter((kind) => row.kinds[kind] > 0).map(
-                (kind) => `${SNAPSHOT_REPORT_KIND_LABEL[kind]}: ${count(row.kinds[kind])}`,
+                (kind) => `${KIND_LABEL[kind]}: ${count(row.kinds[kind])}`,
               ),
             ])
           : '';

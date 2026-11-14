@@ -1,10 +1,11 @@
 import * as vscode from 'vscode';
-import { failureLog } from '../log-once';
+import { failureLog, withFallback } from '../log-once';
 import type { FailureLog } from '../log-once';
 import type { Logger } from '../log';
 import { EMPTY_CATALOG } from './catalog';
 import type { SqlCatalog } from './catalog';
-import type { CompletionKind } from './completion';
+import type { CompletionKind } from './completion-env';
+import { isSqlDocument, SQL_SELECTOR } from './glue.vscode';
 import type { LanguageService } from './language';
 import { quickFixes } from './problems';
 import type { Problem } from './problems';
@@ -31,11 +32,6 @@ interface Mark {
   readonly diagnostic: vscode.Diagnostic;
   readonly problem: Problem;
 }
-
-const SELECTOR: vscode.DocumentSelector = [
-  { language: 'sql', scheme: 'untitled' },
-  { language: 'sql', scheme: 'file' },
-];
 
 // A function, not a constant: unit tests load this file before the editor API exists.
 const kinds = (): Record<CompletionKind, vscode.CompletionItemKind> => ({
@@ -64,14 +60,11 @@ export function registerSqlLanguage(deps: SqlLanguageDeps): vscode.Disposable {
   const { service } = deps;
   const failed = failureLog(deps.logger);
   const answer = <T>(feature: string, pending: Promise<T | undefined>): Promise<T | undefined> =>
-    pending.catch((error: unknown) => {
-      failed(feature, error);
-      return undefined;
-    });
+    withFallback(failed, feature, pending, undefined);
   const catalogOf = (document: vscode.TextDocument): SqlCatalog => deps.catalogOf(document) ?? EMPTY_CATALOG;
 
   const completion = vscode.languages.registerCompletionItemProvider(
-    SELECTOR,
+    SQL_SELECTOR,
     {
       async provideCompletionItems(document, position, token) {
         if (deps.connectionOf(document) === undefined) return undefined;
@@ -108,7 +101,7 @@ export function registerSqlLanguage(deps: SqlLanguageDeps): vscode.Disposable {
     "'",
   );
 
-  const hover = vscode.languages.registerHoverProvider(SELECTOR, {
+  const hover = vscode.languages.registerHoverProvider(SQL_SELECTOR, {
     async provideHover(document, position) {
       if (deps.connectionOf(document) === undefined) return undefined;
       const result = await answer(
@@ -126,7 +119,7 @@ export function registerSqlLanguage(deps: SqlLanguageDeps): vscode.Disposable {
   });
 
   const signature = vscode.languages.registerSignatureHelpProvider(
-    SELECTOR,
+    SQL_SELECTOR,
     {
       async provideSignatureHelp(document, position) {
         if (deps.connectionOf(document) === undefined) return undefined;
@@ -182,9 +175,7 @@ function checks(deps: SqlLanguageDeps, failed: FailureLog, marks: Marks): vscode
     marks.delete(uri.toString());
   };
   const applies = (document: vscode.TextDocument): boolean =>
-    document.languageId === 'sql' &&
-    (document.uri.scheme === 'untitled' || document.uri.scheme === 'file') &&
-    deps.connectionOf(document) !== undefined;
+    isSqlDocument(document) && deps.connectionOf(document) !== undefined;
 
   const check = async (document: vscode.TextDocument): Promise<void> => {
     if (!applies(document)) {
@@ -193,12 +184,12 @@ function checks(deps: SqlLanguageDeps, failed: FailureLog, marks: Marks): vscode
     }
     const { version } = document;
     // Without a catalog (not connected, still connecting) only the syntax is checked.
-    const found = await service
-      .diagnose(document.getText(), document.uri.toString(), deps.catalogOf(document))
-      .catch((error: unknown) => {
-        failed('Syntax check', error);
-        return undefined;
-      });
+    const found = await withFallback(
+      failed,
+      'Syntax check',
+      service.diagnose(document.getText(), document.uri.toString(), deps.catalogOf(document)),
+      undefined,
+    );
     // `undefined` or a changed version means a newer text replaces this answer; a closed document keeps no marks.
     if (found === undefined || document.version !== version || document.isClosed) return;
     const shown = found.map((problem) => ({ problem, diagnostic: diagnosticOf(document, problem) }));
@@ -259,7 +250,7 @@ function diagnosticOf(document: vscode.TextDocument, problem: Problem): vscode.D
 // Offers the names that a warning names as nearest, for the marks of the text as it is now.
 function fixes(marks: Marks): vscode.Disposable {
   return vscode.languages.registerCodeActionsProvider(
-    SELECTOR,
+    SQL_SELECTOR,
     {
       provideCodeActions(document, _range, context) {
         const marked = marks.get(document.uri.toString());

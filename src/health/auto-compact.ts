@@ -1,12 +1,12 @@
 import type { MetadataEntry } from '../catalog/model';
 import { quoteLiteral } from '../catalog/ddl';
 import { LAKE } from '../data/attach';
-import { finding, qualified, tableScope } from './finding';
+import { capFindings, finding, qualified, tableScope } from './finding';
 import type { TableNames } from './finding';
 import type { HealthFinding, HealthScope } from './model';
 
 /** The facts of the check: the metadata rows, the schemas and tables of the newest snapshot, and the scope of the run. */
-export interface AutoCompactFacts {
+interface AutoCompactFacts {
   readonly metadata: readonly MetadataEntry[];
   readonly schemas: ReadonlyMap<number, string>;
   readonly tables: TableNames;
@@ -92,9 +92,9 @@ function offLevels(facts: AutoCompactFacts): Off[] {
 }
 
 export function autoCompactFindings(facts: AutoCompactFacts): { findings: HealthFinding[]; omitted: number } {
-  const off = offLevels(facts);
+  const { shown, omitted } = capFindings(offLevels(facts), facts.limit);
   return {
-    findings: off.slice(0, facts.limit).map(({ object, finding: found }) =>
+    findings: shown.map(({ object, finding: found }) =>
       finding('catalog.auto-compact-off', {
         severity: 'info',
         fixStep: 'option',
@@ -106,6 +106,6 @@ export function autoCompactFindings(facts: AutoCompactFacts): { findings: Health
         inspectSql: `SELECT * FROM ducklake_options('${LAKE}') WHERE option_name = 'auto_compact';`,
       }),
     ),
-    omitted: Math.max(off.length - facts.limit, 0),
+    omitted,
   };
 }

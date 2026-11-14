@@ -4,7 +4,7 @@ import { schemaHistoryDetailOf } from './model';
 import type { SchemaHistoryDetail, SchemaHistoryData } from './model';
 
 // The page names an action by id, never a command.
-type ActionId = 'showCatalog' | 'compareSchema' | 'query' | 'scriptAlter';
+export type SchemaHistoryActionId = 'showCatalog' | 'compareSchema' | 'query' | 'scriptAlter';
 
 type Against = 'previous' | 'latest';
 
@@ -26,7 +26,7 @@ export function schemaHistoryCompareTargets(
 
 /** What the webview asks for; the protocol guards have checked the shape. */
 export interface SchemaHistoryActionRequest {
-  readonly action: ActionId;
+  readonly action: SchemaHistoryActionId;
   readonly snapshot?: number | undefined;
   readonly against?: Against | undefined;
 }

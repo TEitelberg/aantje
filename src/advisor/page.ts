@@ -1,13 +1,12 @@
 /// <reference lib="dom" />
 // Browser side of the Maintenance Advisor; DOM only, the logic is in model.ts and recommend.ts.
 import { actionButton, cardGrid, empty, findingCard, note, pageHeader } from '../shell/blocks';
-import { MAINTENANCE_LABEL } from '../maintenance-labels';
+import { MAINTENANCE_LABEL } from '../maintenance/labels';
 import { el } from '../shell/dom';
 import { formatUtc, tableLabel } from '../shell/model';
-import type { Page, PageContext, PageKind } from '../shell/page';
+import { reportPage } from '../shell/report-page';
 import { readTheme, severityColor } from '../shell/theme';
-import type { Theme } from '../shell/theme';
-import { CANDIDATE_LIMIT, advisorCards, policyLines, skippedMeasures } from './model';
+import { CANDIDATE_LIMIT, INLINED_FAILED_NOTE, advisorCards, policyLines, skippedMeasures } from './model';
 import type { AdvisorData } from './model';
 import { isAdvisorMessage } from './protocol';
 import { levelText, recommendationsOf, riskText } from './recommend';
@@ -22,9 +21,8 @@ const SCRIPT_ACTION = {
   flush: 'scriptFlush',
 } as const satisfies Record<RecommendationKind, string>;
 
-function createAdvisorPage(context: PageContext): Page<AdvisorData> {
-  let data: AdvisorData | undefined;
-  let theme: Theme;
+export const advisorPage = reportPage<AdvisorData>('advisor', isAdvisorMessage, ({ context, mount }) => {
+  let data: AdvisorData;
 
   const act = (action: string, table?: number): void =>
     context.post({ type: 'action', action, ...(table === undefined ? {} : { table }) });
@@ -78,10 +76,7 @@ function createAdvisorPage(context: PageContext): Page<AdvisorData> {
   }
 
   function render(): void {
-    theme = readTheme();
-    if (!data) {
-      return;
-    }
+    const theme = readTheme();
     const advisor = data;
     const recommendations = recommendationsOf(advisor);
     const header = pageHeader(context, {
@@ -124,6 +119,7 @@ function createAdvisorPage(context: PageContext): Page<AdvisorData> {
       ...(advisor.more
         ? [note(`The lists of tables were cut at ${CANDIDATE_LIMIT} per kind; more tables may qualify.`)]
         : []),
+      ...(advisor.inlinedFailed ? [note(INLINED_FAILED_NOTE, 'warning')] : []),
     );
     if (skipped.length > 0) {
       const section = el('div', 'skipped');
@@ -137,8 +133,7 @@ function createAdvisorPage(context: PageContext): Page<AdvisorData> {
     const policy = el('ul', 'policy');
     policy.append(...policyLines(advisor.policy).map((line) => el('li', undefined, line)));
     main.append(el('h2', undefined, 'Policy'), policy);
-    context.app.replaceChildren(header.element, main);
-    header.settle();
+    mount(header, main);
   }
 
   return {
@@ -147,12 +142,5 @@ function createAdvisorPage(context: PageContext): Page<AdvisorData> {
       render();
     },
     redraw: render,
-    resize() {},
   };
-}
-
-export const advisorPage: PageKind<AdvisorData> = {
-  type: 'advisor',
-  isMessage: isAdvisorMessage,
-  create: createAdvisorPage,
-};
+});

@@ -62,6 +62,7 @@ const isData = isShape({
       smallFiles: isCount,
       smallBytes: isCount,
       estimatedAfter: isCount,
+      deleted: isOptional(isNullOr(isShape({ small: isCount, files: isCount, bytes: isCount }))),
     }),
   ),
   rewrite: isArrayOf(
@@ -76,6 +77,7 @@ const isData = isShape({
   ),
   flush: isArrayOf(isShape({ table: isTable, rows: isCount })),
   more: isOptional(isTrue),
+  inlinedFailed: isOptional(isTrue),
 });
 
 /** Guard for the messages the extension sends to the page. */

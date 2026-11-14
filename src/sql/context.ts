@@ -1,3 +1,5 @@
+import { DEFAULT_SCHEMA } from './catalog';
+import { foldIdentifier, sameIdentifier } from '../catalog/ddl';
 import {
   NOT_A_CALL,
   SKIPPED_IN_NAME,
@@ -16,9 +18,6 @@ import type { FrameKind, Position, State } from './position';
 import type { Range } from './script';
 import { isClosed, isDot, isWord, keywordOf, unquote } from './tokens';
 import type { SqlToken } from './tokens';
-
-/** The schema that unqualified names belong to once the lake is the current catalog. */
-export const DEFAULT_SCHEMA = 'main';
 
 /** A table or view that a FROM clause (or UPDATE) names. */
 export interface ScopeRelation {
@@ -479,7 +478,7 @@ function cteWord(frame: Frame, token: SqlToken, ctes: Cte[]): void {
   if (keyword === 'AS') {
     if (frame.cte && !ctes.includes(frame.cte)) ctes.push(frame.cte);
   } else if (!keyword || !['RECURSIVE', 'MATERIALIZED', 'NOT'].includes(keyword)) {
-    frame.cte = { name: unquote(token.word).toLowerCase(), renamed: [], columns: undefined };
+    frame.cte = { name: foldIdentifier(unquote(token.word)), renamed: [], columns: undefined };
   }
 }
 
@@ -502,7 +501,7 @@ function finish(frame: Frame, names: Names): void {
 function entryOf(parts: readonly string[], names: Names): Entry {
   const [first = ''] = parts;
   const cte =
-    parts.length === 1 ? names.ctes.findLast(({ name }) => name === first.toLowerCase()) : undefined;
+    parts.length === 1 ? names.ctes.findLast(({ name }) => name === foldIdentifier(first)) : undefined;
   if (!cte) return { alias: undefined, relation: resolve(parts, names.lake) };
   const columns = cte.columns ?? textColumns(undefined, [], cte.renamed);
   return { alias: undefined, relation: undefined, cte: first, columns };
@@ -515,7 +514,7 @@ function resolve(
   const [first = '', second = '', third = ''] = parts;
   if (parts.length === 1) return { schema: DEFAULT_SCHEMA, table: first };
   if (parts.length === 2) return { schema: first, table: second };
-  if (parts.length === 3 && first.toLowerCase() === lake?.toLowerCase()) {
+  if (parts.length === 3 && lake !== undefined && sameIdentifier(first, lake)) {
     return { schema: second, table: third };
   }
   return undefined;
@@ -561,7 +560,7 @@ function subqueryFrame(frame: Frame, opening: SqlToken): Frame {
 function aliasesFollow(frame: Frame, previous: SqlToken | undefined): boolean {
   const name = previous && isWord(previous) ? unquote(previous.word) : undefined;
   if (name === undefined) return false;
-  if (frame.clause === 'with') return frame.cte?.name === name.toLowerCase();
+  if (frame.clause === 'with') return frame.cte?.name === foldIdentifier(name);
   return frame.clause === 'from' && frame.afterRelation && frame.last?.alias === name;
 }
 

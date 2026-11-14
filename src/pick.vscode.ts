@@ -26,6 +26,20 @@ export function pickOne<T extends vscode.QuickPickItem>(
   });
 }
 
+/** A picker of several rows; rows with `picked` start selected. Undefined when it is cancelled. */
+export async function pickMany<T extends vscode.QuickPickItem>(
+  items: readonly T[],
+  options: { title: string; placeholder: string },
+): Promise<T[] | undefined> {
+  return await vscode.window.showQuickPick(items, {
+    title: options.title,
+    placeHolder: options.placeholder,
+    canPickMany: true,
+    matchOnDescription: true,
+    ignoreFocusOut: true,
+  });
+}
+
 /** The questions and hints of the time travel commands. */
 export const timeTravelUi = {
   pick: pickOne,

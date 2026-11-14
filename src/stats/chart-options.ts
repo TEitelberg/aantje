@@ -1,7 +1,7 @@
 import type { TableStatistics } from '../catalog/model';
-import { formatBytes } from '../tree/format';
-import { count, files } from '../shell/model';
-import { binLabel, growthLabel, growthTime, partitionLabel } from './model';
+import { formatBytes } from '../shell/numbers';
+import { files } from '../shell/model';
+import { binLabel, partitionEntries } from './model';
 import { firstIndex, tip } from '../shell/chart-option';
 import type { ChartOption } from '../shell/chart-option';
 import type { Palette } from '../shell/palette';
@@ -50,23 +50,7 @@ export function partitionOption(
   partitioning: NonNullable<TableStatistics['partitioning']>,
   palette: Palette,
 ): ChartOption {
-  const { partitions, rest } = partitioning;
-  const entries = [
-    ...partitions.map((partition) => ({
-      label: partitionLabel(partition.values),
-      sizeBytes: partition.sizeBytes,
-      detail: `${files(partition.files)}, ${count(partition.rows)} rows`,
-    })),
-    ...(rest
-      ? [
-          {
-            label: `other (${count(rest.partitions)})`,
-            sizeBytes: rest.sizeBytes,
-            detail: `${count(rest.partitions)} partitions, ${files(rest.files)}, ${count(rest.rows)} rows`,
-          },
-        ]
-      : []),
-  ];
+  const entries = partitionEntries(partitioning);
   return {
     ...base,
     tooltip: {
@@ -85,65 +69,10 @@ export function partitionOption(
       {
         type: 'bar',
         name: 'Size',
-        data: entries.map((entry, index) => ({
+        data: entries.map((entry) => ({
           value: entry.sizeBytes,
-          itemStyle: { color: rest && index === entries.length - 1 ? palette.lines : palette.series[0] },
+          itemStyle: { color: entry.rest ? palette.lines : palette.series[0] },
         })),
-      },
-    ],
-  };
-}
-
-/** Size and number of files after each snapshot that changed them; a compaction is a diamond on the size line. */
-export function statisticsGrowthOption(
-  stats: Pick<TableStatistics, 'growth'>,
-  palette: Palette,
-): ChartOption {
-  const points = stats.growth;
-  const line = (color: string) => ({
-    itemStyle: { color },
-    lineStyle: { color },
-    step: 'end',
-    showSymbol: true,
-  });
-  return {
-    ...base,
-    tooltip: {
-      ...base.tooltip,
-      trigger: 'axis',
-      formatter: (params: unknown) => {
-        const point = points[firstIndex(params)];
-        return point
-          ? tip(`${growthLabel(point)}${point.compaction ? ' (compaction)' : ''}`, [
-              growthTime(point),
-              formatBytes(point.sizeBytes),
-              files(point.files),
-            ])
-          : '';
-      },
-    },
-    legend: { top: 0 },
-    grid: { left: 8, right: 8, top: 36, bottom: 8, containLabel: true },
-    xAxis: { type: 'category', data: points.map(growthLabel), boundaryGap: false },
-    yAxis: [
-      { type: 'value', name: 'Size', axisLabel: { formatter: (value: number) => formatBytes(value) } },
-      { type: 'value', name: 'Files', minInterval: 1, splitLine: { show: false } },
-    ],
-    series: [
-      {
-        ...line(palette.series[0]),
-        type: 'line',
-        name: 'Size',
-        data: points.map((point) =>
-          point.compaction ? { value: point.sizeBytes, symbol: 'diamond', symbolSize: 14 } : point.sizeBytes,
-        ),
-      },
-      {
-        ...line(palette.series[2]),
-        type: 'line',
-        name: 'Files',
-        yAxisIndex: 1,
-        data: points.map((point) => point.files),
       },
     ],
   };

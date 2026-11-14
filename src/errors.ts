@@ -43,6 +43,11 @@ export function isAantjeError(error: unknown): error is AantjeError {
   return error instanceof AantjeError;
 }
 
+/** True when the user declined a confirmation or cancelled an action; nothing went wrong. */
+export function isAborted(error: unknown): boolean {
+  return isAantjeError(error) && error.code === 'ABORTED';
+}
+
 /** The message to show for any thrown value; unknown errors become generic text. */
 export function userMessageOf(error: unknown): string {
   return isAantjeError(error)

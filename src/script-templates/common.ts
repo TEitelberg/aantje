@@ -1,13 +1,13 @@
-import { shownSnapshot } from '../actions';
-import { qualifiedName, quoteIdentifier } from '../catalog/ddl';
+import { catalogAt } from '../actions';
 import type { SchemaInfo } from '../catalog/model';
-import { commented, newestNote, pinnedOf, selectList } from '../script';
-import type { ScriptSource } from '../script';
+import { commented } from '../ddl-script/check';
+import { dropsAtSnapshot } from '../ddl-script/statements';
+import type { Drops } from '../ddl-script/statements';
+import { pinnedOf, selectList } from '../script';
 import type { CatalogTree } from '../tree/model';
 import type { NodeRef } from '../tree/refs';
-import { connectionClosed } from '../messages';
 
-export type Tree = Pick<CatalogTree, 'reader' | 'state'> & ScriptSource;
+export type Tree = Pick<CatalogTree, 'reader' | 'state'>;
 export type Ref<K extends NodeRef['kind']> = Extract<NodeRef, { kind: K }>;
 export type Folder<F extends Extract<NodeRef, { kind: 'folder' }>['folder']> = Extract<
   NodeRef,
@@ -33,14 +33,8 @@ export const blocks = (list: readonly (readonly string[])[]): string =>
   list.map((block) => block.join('\n')).join('\n\n');
 
 /** The reader and the shown snapshot a script reads from; throws when the connection is closed. */
-export function catalogOf(tree: Tree, connectionId: string, what: string) {
-  const reader = tree.reader(connectionId);
-  const snapshot = shownSnapshot(tree.state(connectionId));
-  if (!reader || snapshot === undefined) {
-    throw connectionClosed(`script the ${what}`);
-  }
-  return { reader, snapshot };
-}
+export const catalogOf = (tree: Tree, connectionId: string, what: string) =>
+  catalogAt(tree, connectionId, `script the ${what}`);
 
 /** The items up to the list limit plus a comment counting the rest. */
 export function limited<T>(items: readonly T[]): { shown: readonly T[]; more: string[] } {
@@ -50,19 +44,19 @@ export function limited<T>(items: readonly T[]): { shown: readonly T[]; more: st
   };
 }
 
-export const dropStatement = (what: 'SCHEMA' | 'TABLE' | 'VIEW', ...name: string[]): string =>
-  `DROP ${what} ${qualifiedName(...name)};`;
-
-export const dropColumnStatement = (schemaName: string, tableName: string, path: readonly string[]): string =>
-  `ALTER TABLE ${qualifiedName(schemaName, tableName)} DROP COLUMN ${path.map(quoteIdentifier).join('.')};`;
-
 /** A create script with the matching drop above it, commented out. */
 export const withDrop = (preface: readonly string[], drop: string, create: string): string =>
   [...preface, DROP_FIRST, commented(drop), create].join('\n');
 
-/** A live drop statement under a one-line description. */
-export const dropScript = (what: string, tree: Tree, connectionId: string, statement: string): string =>
-  [`-- Drops the ${what}. ${RUN}`, ...newestNote(tree, connectionId), statement].join('\n');
+/** The note and the form of the statements of a **Script as DROP** (`dropsAtSnapshot`) for the snapshot the tree shows. */
+export const dropsAt = (tree: Tree, connectionId: string): Drops =>
+  dropsAtSnapshot(pinnedOf(tree, connectionId));
+
+/** A drop statement under a one-line description: live, or a comment while the tree is pinned to a snapshot. */
+export function dropScript(what: string, tree: Tree, connectionId: string, statement: string): string {
+  const drops = dropsAt(tree, connectionId);
+  return [`-- Drops the ${what}. ${RUN}`, ...drops.note, drops.statement(statement)].join('\n');
+}
 
 /** A script of commented-out drops, one per object. */
 export function dropList(
@@ -78,7 +72,7 @@ export function dropList(
   const { shown, more } = limited(statements);
   return [
     ...DROPS_COMMENTED_OUT,
-    ...newestNote(tree, connectionId, { several: true }),
+    ...dropsAt(tree, connectionId).note,
     ...extra,
     '',
     ...shown.map(commented),

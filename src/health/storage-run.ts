@@ -1,12 +1,15 @@
 import { isBelowDataPath } from '../catalog/locations';
 import type { FileLocations } from '../catalog/model';
-import type { LakeSession } from '../data/engine';
-import { LakeFailure } from '../data/engine';
+import type { LakeSession } from '../data/lake-session';
+import { LakeFailure } from '../data/lake-session';
 import { isRemote } from './connection-checks';
+import { storageContextOf } from '../storage/diagnose';
 import { tableScope } from './finding';
-import { compareStorage, listingStatement } from './storage-checks';
+import { listingStatement } from '../data/store-sql';
+import { compareStorage } from './storage-checks';
 import type { ListedFile } from './storage-checks';
-import { failureMessageOf, PATH_MISSING } from './run-context';
+import { failureMessageOf } from '../data/lake-session';
+import { PATH_MISSING } from './run-context';
 import type { CatalogOutcome, RunContext } from './run-context';
 import type { FindingScope, HealthScope } from './model';
 import type { GroupResult } from './run-state';
@@ -86,6 +89,7 @@ function compareListing(
     limit: ctx.limits.findingsPerCheck,
     caseInsensitive:
       ctx.deps.caseInsensitive ?? (!isRemote(catalog.dataPath) && process.platform === 'win32'),
+    storage: storageContextOf(ctx.deps.access.storage),
   });
   ctx.state.add(result.findings);
   for (const id of result.missing) ctx.missingIds.add(id);

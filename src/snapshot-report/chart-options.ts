@@ -2,9 +2,11 @@ import type { SnapshotId } from '../catalog/model';
 import { tip } from '../shell/chart-option';
 import type { ChartOption } from '../shell/chart-option';
 import type { Palette } from '../shell/palette';
-import { plural, tableLabel } from '../shell/model';
-import { SNAPSHOT_REPORT_KIND_LABEL, POINT_KINDS } from './model';
-import type { SnapshotReportDetail, PointKind, SnapshotReportView } from './model';
+import { plural, tableLabel, whoText } from '../shell/model';
+import { colorOf } from '../snapshot-changes/colors';
+import { KIND_LABEL, POINT_KINDS } from '../snapshot-changes/model';
+import type { PointKind, SnapshotDetail } from '../snapshot-changes/model';
+import type { SnapshotReportView } from './model';
 
 /** One column per snapshot in order, or each snapshot at its time. */
 export type SnapshotReportXAxis = 'order' | 'time';
@@ -12,7 +14,7 @@ export type SnapshotReportXAxis = 'order' | 'time';
 export interface SnapshotReportChart {
   readonly view: SnapshotReportView;
   readonly axis: SnapshotReportXAxis;
-  readonly detail: (snapshot: SnapshotId) => SnapshotReportDetail | undefined;
+  readonly detail: (snapshot: SnapshotId) => SnapshotDetail | undefined;
   readonly selected?: SnapshotId | undefined;
   readonly other?: SnapshotId | undefined;
   /** High contrast theme: outlines, larger marks, solid lines. */
@@ -28,25 +30,10 @@ const SHAPE: Readonly<Record<PointKind, string>> = {
   maintenance: 'rect',
 };
 
-export function colorOf(kind: PointKind, palette: Palette): string {
-  switch (kind) {
-    case 'insert':
-      return palette.series[0];
-    case 'update':
-      return palette.series[1];
-    case 'delete':
-      return palette.series[2];
-    case 'ddl':
-      return palette.series[3];
-    case 'maintenance':
-      return palette.foreground;
-  }
-}
-
 const TOOLTIP_TABLES = 8;
 
-function tooltipOf(detail: SnapshotReportDetail): string {
-  const who = [detail.author, detail.message].filter((part) => part !== null && part !== '').join(' · ');
+function tooltipOf(detail: SnapshotDetail): string {
+  const who = whoText(detail.author, detail.message);
   const tables = detail.tables
     .slice(0, TOOLTIP_TABLES)
     .map((table) => `${table.label}: ${table.actions.join(', ')}`);
@@ -74,7 +61,7 @@ export function snapshotReportOption(chart: SnapshotReportChart, palette: Palett
   const laneIndex = new Map(view.lanes.map((lane, index) => [lane.key, index]));
   const marks = POINT_KINDS.map((kind) => ({
     type: 'scatter',
-    name: SNAPSHOT_REPORT_KIND_LABEL[kind],
+    name: KIND_LABEL[kind],
     symbol: SHAPE[kind],
     symbolSize: contrast ? 15 : 11,
     z: 3,
@@ -125,7 +112,7 @@ export function snapshotReportOption(chart: SnapshotReportChart, palette: Palett
     legend: {
       top: 0,
       selectedMode: false,
-      data: POINT_KINDS.map((kind) => SNAPSHOT_REPORT_KIND_LABEL[kind]),
+      data: POINT_KINDS.map((kind) => KIND_LABEL[kind]),
     },
     grid: { left: 8, right: 24, top: 36, bottom: 64, containLabel: true },
     xAxis:

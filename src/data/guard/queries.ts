@@ -1,4 +1,4 @@
-import { quoteLiteral } from '../../catalog/ddl';
+import { foldIdentifier, quoteLiteral } from '../../catalog/ddl';
 import { LEADING_BLANKS, NETWORK_HOST } from '../../catalog/locations';
 import { visible } from '../../catalog/queries/shared';
 import { LAKE } from '../attach';
@@ -11,14 +11,12 @@ export type Rows = (sql: string) => Promise<unknown[][]>;
 // The catalog database the DuckLake extension attaches next to the lake; it holds `ducklake_view` and `ducklake_macro`.
 export const METADATA = `__ducklake_metadata_${LAKE}`;
 
-// DuckDB folds the case of ASCII letters only when it looks a name up (`T` finds `t`, `É` does not find `é`).
+// DuckDB folds the case of ASCII letters only when it looks a name up (`T` finds `t`, `É` does not find `é`): in SQL as
+// `foldIdentifier` does it in text; `lower()` would also fold other letters and report names as equal that DuckDB tells
+// apart.
 const UPPER = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-export const foldAscii = (text: string): string => text.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
-// The same fold in SQL; `lower()` would also fold other letters and report names as equal that DuckDB tells apart.
 const foldSql = (expression: string): string =>
   `translate(${expression}, '${UPPER}', '${UPPER.toLowerCase()}')`;
-
-export const sameName = (a: string, b: string): boolean => foldAscii(a) === foldAscii(b);
 
 // Every function of the DuckLake extension, `ducklake_<name>`. The lake catalog offers some of them as `lake.<name>()`
 // (DuckDB 2.0.0 lists only the macros of the lake under its database name, not these), so each `<name>` may be a
@@ -40,7 +38,7 @@ const inNames = (expression: string, names: ReadonlySet<string>): string =>
 // catalog has it.
 export function relationsQuery(table: TableRef, snapshot: string): string {
   const found = (kind: string, relation: string, column: string): string =>
-    `SELECT '${kind}' FROM ${METADATA}.${relation} r JOIN ${METADATA}.ducklake_schema s ON s.schema_id = r.schema_id WHERE ${foldSql('s.schema_name')} = ${quoteLiteral(foldAscii(table.schema))} AND ${foldSql(`r.${column}`)} = ${quoteLiteral(foldAscii(table.table))} AND ${visible('r', snapshot)} AND ${visible('s', snapshot)}`;
+    `SELECT '${kind}' FROM ${METADATA}.${relation} r JOIN ${METADATA}.ducklake_schema s ON s.schema_id = r.schema_id WHERE ${foldSql('s.schema_name')} = ${quoteLiteral(foldIdentifier(table.schema))} AND ${foldSql(`r.${column}`)} = ${quoteLiteral(foldIdentifier(table.table))} AND ${visible('r', snapshot)} AND ${visible('s', snapshot)}`;
   return `${found('view', 'ducklake_view', 'view_name')} UNION ALL ${found('table', 'ducklake_table', 'table_name')}`;
 }
 
@@ -84,7 +82,7 @@ export function rangeFilesQuery(
   const latestSchema = `sc.begin_snapshot = (SELECT max(w.begin_snapshot) FROM ${METADATA}.ducklake_schema w WHERE w.schema_id = sc.schema_id)`;
   return `WITH ids AS (
       SELECT r.table_id FROM ${METADATA}.ducklake_table r JOIN ${METADATA}.ducklake_schema s ON s.schema_id = r.schema_id
-      WHERE ${foldSql('s.schema_name')} = ${quoteLiteral(foldAscii(table.schema))} AND ${foldSql('r.table_name')} = ${quoteLiteral(foldAscii(table.table))} AND ${visible('r', at)} AND ${visible('s', at)}),
+      WHERE ${foldSql('s.schema_name')} = ${quoteLiteral(foldIdentifier(table.schema))} AND ${foldSql('r.table_name')} = ${quoteLiteral(foldIdentifier(table.table))} AND ${visible('r', at)} AND ${visible('s', at)}),
     tbl AS (
       SELECT t.table_id, t.path AS table_path, t.path_is_relative AS table_relative,
         sc.path AS schema_path, sc.path_is_relative AS schema_relative

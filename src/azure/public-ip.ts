@@ -1,7 +1,7 @@
 import { AantjeError } from '../errors';
 
 /** One request to this service, when a lake is created and when Allow My IP runs; the answer is the only address that the firewall rule admits. */
-export const PUBLIC_IP_URL = 'https://api.ipify.org';
+const PUBLIC_IP_URL = 'https://api.ipify.org';
 
 const TIMEOUT_MS = 10_000;
 

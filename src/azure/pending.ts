@@ -17,6 +17,20 @@ export interface PendingLake {
   readonly tenantId: string;
 }
 
+/**
+ * What to tell the user when aantje starts and deployments are still pending: Azure goes on without the editor, so the
+ * lake may be ready, still running or failed; only Finish finds out. Undefined when nothing is pending.
+ */
+export function pendingNotice(lakes: readonly PendingLake[]): string | undefined {
+  if (lakes.length === 0) {
+    return undefined;
+  }
+  const names = lakes.map(
+    ({ namePrefix, resourceGroup }) => `"${namePrefix}" (resource group ${resourceGroup})`,
+  );
+  return `The creation of ${lakes.length === 1 ? 'an Azure DuckLake was' : 'Azure DuckLakes were'} interrupted: ${names.join(', ')}. Azure goes on without the editor. Finish it to add the connection. If the deployment failed, the resources it created stay in the resource group and cost money until you delete them in the Azure portal.`;
+}
+
 const KEY = 'aantje.pendingAzureLakes';
 const passwordKey = (deployment: string): string => `aantje.pendingAzureLake.${deployment}`;
 

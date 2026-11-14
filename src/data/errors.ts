@@ -1,12 +1,10 @@
 import { isBelowDataPath } from '../catalog/locations';
-import { AantjeError, messageOf } from '../errors';
-import type { ErrorCode } from '../errors';
-import { maskSecrets } from '../secrets';
+import { extensionFailure, scrubbed } from '../duckdb/messages';
+import { quackProblem } from '../duckdb/quack';
+import { AantjeError } from '../errors';
+import { dataAdvice, otherPlaceCause, storageContextOf } from '../storage/diagnose';
+import type { StorageContext } from '../storage/diagnose';
 import type { DataAccess, TableRef } from './types';
-
-const S3_HINT = 'the settings aantje.s3.* and the command "aantje: Set S3 Credentials..."';
-export const EXTENSION_HINT =
-  'aantje downloads them from extensions.duckdb.org on first use. Without network access, point the setting "aantje.duckdb.extensionDirectory" to a directory that already holds the extensions.';
 
 const VERSION_HINT =
   'aantje opens catalogs read-only and cannot migrate them: migrate the catalog with a matching DuckDB, or open a catalog of the supported DuckLake version.';
@@ -14,86 +12,11 @@ const VERSION_HINT =
 /** Where a statement failed; decides the error code and the advice. */
 export type Phase = 'extension' | 'setup' | 'query';
 
-interface QuackProblem {
-  readonly code: ErrorCode;
-  /** Lower case, without a full stop: the end of a sentence. */
-  readonly reason: string;
-  /** The connection to the server is gone; a new instance has to attach it again. */
-  readonly reconnect?: boolean;
-}
-
-const UNTRUSTED =
-  'the server certificate is not trusted: pin its fingerprint with Edit Connection, or give the server a certificate from a CA that this machine trusts';
-
-// The messages of the quack extension of DuckDB 2.0.0, tried in this order.
-const QUACK_PROBLEMS: readonly (QuackProblem & { readonly pattern: RegExp })[] = [
-  { pattern: /Authentication failed/i, code: 'AUTH_FAILED', reason: 'the server refused the token' },
-  {
-    pattern: /Could not find a Quack authentication token/,
-    code: 'AUTH_FAILED',
-    reason: 'no token is stored for this connection, and the server needs one',
-  },
-  {
-    // `Authorization callback failed: <text>` when the server's function raises an error of its own.
-    pattern: /Authorization (?:callback )?failed/,
-    code: 'QUERY_FAILED',
-    reason: 'the server refused the request: its authorization function does not allow it for this token',
-  },
-  {
-    pattern: /Could not connect to server/,
-    code: 'CONNECTION_FAILED',
-    reason: 'the server does not answer (it is not running, or a firewall blocks the port)',
-    reconnect: true,
-  },
-  {
-    pattern: /Could not resolve hostname/,
-    code: 'CONNECTION_FAILED',
-    reason: 'the host name could not be resolved',
-  },
-  {
-    pattern: /does not match the pinned ssl_fingerprint/,
-    code: 'CONNECTION_FAILED',
-    reason:
-      'the server certificate does not match the pinned fingerprint. If the server has a new certificate, Edit Connection reads and shows it; otherwise something between this machine and the server presents another one',
-  },
-  {
-    pattern: /SSL peer certificate|Problem with the SSL CA cert|Invalid SSL fingerprint/,
-    code: 'CONNECTION_FAILED',
-    reason: UNTRUSTED,
-  },
-  {
-    pattern: /SSL connect error/,
-    code: 'CONNECTION_FAILED',
-    reason:
-      'the TLS handshake failed: the server may not use TLS on this port (turn off TLS for this connection), or the port is wrong',
-  },
-  {
-    pattern: /Unsupported protocol/,
-    code: 'CONNECTION_FAILED',
-    reason: 'the server expects TLS: turn on TLS for this connection',
-  },
-  {
-    pattern: /Invalid connection id/,
-    code: 'CONNECTION_FAILED',
-    reason: 'the server was restarted after the connection was made; connect again',
-    reconnect: true,
-  },
-];
-
-/** What a message of the quack extension means for the user, or undefined for any other message. */
-export function quackProblem(message: string): QuackProblem | undefined {
-  const found = QUACK_PROBLEMS.find(({ pattern }) => pattern.test(message));
-  return found && { code: found.code, reason: found.reason, reconnect: found.reconnect };
-}
-
 /** The secrets of an access, for `maskSecrets`: every engine message goes through it before it is shown or logged. */
 export function secretsOf(access: DataAccess): string[] {
-  return [
-    access.password,
-    access.s3Credentials?.keyId,
-    access.s3Credentials?.secretKey,
-    access.azure?.accessToken,
-  ].filter((secret): secret is string => secret !== undefined);
+  return [access.password, ...Object.values(access.storage?.values ?? {})].filter(
+    (secret): secret is string => secret !== undefined,
+  );
 }
 
 /** The user-facing error for a failed statement; message and cause are free of secrets. */
@@ -104,17 +27,12 @@ export function dataError(
   table: TableRef,
   catalog: CatalogFacts = {},
 ): AantjeError {
-  const raw = maskSecrets(messageOf(cause), secretsOf(access));
-  const message = firstLine(raw);
-  const safeCause = new Error(message);
+  const { text: raw, line: message } = scrubbed(cause, secretsOf(access));
   // Table and connection travel with the error so the health check can start from them.
-  const options = { cause: safeCause, table, connectionId: access.profile.id };
+  const where = { table, connectionId: access.profile.id };
+  const options = { cause: new Error(message), ...where };
   if (phase === 'extension') {
-    return new AantjeError(
-      'CONNECTION_FAILED',
-      `A DuckDB extension that aantje needs to read table data could not be installed or loaded (${message}). ${EXTENSION_HINT}`,
-      options,
-    );
+    return extensionFailure('A DuckDB extension that aantje needs to read table data', message, where);
   }
   const quack = access.profile.kind === 'quack' ? quackProblem(message) : undefined;
   if (quack) {
@@ -150,11 +68,12 @@ export function dataError(
       options,
     );
   }
+  const storage = storageContextOf(access.storage);
   const gone = MISSING_OBJECT.exec(raw);
   if (gone) {
     return new AantjeError(
       'QUERY_FAILED',
-      `Cannot read the data of "${table.schema}.${table.table}": ${missingObjectText(gone, { pinned: access.snapshot, ...catalog })}`,
+      `Cannot read the data of "${table.schema}.${table.table}": ${missingObjectText(gone, { pinned: access.snapshot, storage, ...catalog })}`,
       options,
     );
   }
@@ -166,10 +85,8 @@ export function dataError(
       options,
     );
   }
-  // File and network failures (missing Parquet file, S3 access denied, unreachable endpoint) have these prefixes.
-  const advice = /^(IO|HTTP) Error/.test(message)
-    ? ` Check that the data files exist and, for S3 data, ${S3_HINT}.`
-    : '';
+  // File and network failures (missing Parquet file, access denied, unreachable endpoint) have these prefixes.
+  const advice = /^(IO|HTTP) Error/.test(message) ? ` ${dataAdvice(storage)}` : '';
   return new AantjeError(
     'QUERY_FAILED',
     `Cannot read the data of "${table.schema}.${table.table}": ${message}.${advice}`,
@@ -195,6 +112,8 @@ export interface CatalogFacts {
   readonly newest?: number;
   /** The `data_path` of the catalog, free of secrets. */
   readonly dataPath?: string;
+  /** The storage of the connection, which words where to fix a sign-in or an endpoint; the machine's S3 settings if absent. */
+  readonly storage?: StorageContext;
 }
 
 /**
@@ -242,7 +161,7 @@ export function missingObjectText(match: RegExpExecArray, facts: ReadFacts = {})
   const causes = [
     ...(older ? [OLDER_SNAPSHOT_CAUSE] : []),
     'the file was deleted or never written (a cleaned-up bucket, a manual delete, a storage volume that was reset)',
-    'the setting aantje.s3.endpoint, the bucket or the data_path of the catalog points to another store than the one the lake was written to',
+    otherPlaceCause(facts.storage ?? { perConnection: false }),
   ];
   return `the catalog lists the data file ${url}, but the object store answered HTTP 404${answer}. Likely causes: ${causes.join('; ')}.${sentence}`;
 }
@@ -262,7 +181,4 @@ export function missingLocalFileText(match: RegExpExecArray, facts: ReadFacts = 
     'the lake lives on another machine and only the catalog was copied here',
   ];
   return `the catalog lists the data file ${path}, but it ${missing}. Likely causes: ${causes.join('; ')}.${sentence}`;
-}
-export function firstLine(message: string): string {
-  return message.split(/\r?\n/)[0] ?? message;
 }

@@ -1,12 +1,6 @@
-import type {
-  ColumnStatistics,
-  FileSizeBin,
-  GrowthPoint,
-  PartitionStatistics,
-  TableStatistics,
-} from '../catalog/model';
+import type { ColumnStatistics, FileSizeBin, PartitionStatistics, TableStatistics } from '../catalog/model';
 import { hasManySmallFiles } from '../catalog/thresholds';
-import { count, formatBytes, formatUtc } from '../shell/model';
+import { approximateCount, count, files, formatBytes, percent } from '../shell/model';
 import type { Card, Severity } from '../shell/model';
 
 /** What the extension sends to the statistics page. */
@@ -23,11 +17,6 @@ const UNEVEN_GINI = 0.5;
 // too: colour must not be the only carrier.
 const NULL_WARNING_RATIO = 0.5;
 
-/** `12.5 %`, `100 %`, `0 %`; the share has one decimal at most. */
-export function percent(ratio: number): string {
-  return `${Number((ratio * 100).toFixed(1))} %`;
-}
-
 const APPROXIMATE_HINT =
   'A file holds more than this snapshot (after a compaction or a delete file for several snapshots), so the row count can be off.';
 
@@ -36,7 +25,7 @@ function smallFileSeverity(stats: TableStatistics): Severity {
 }
 
 export function overviewCards(stats: TableStatistics): Card[] {
-  const files = stats.files > 0;
+  const hasFiles = stats.files > 0;
   return [
     { label: 'Files', value: count(stats.files), severity: 'ok', hint: 'Data files at this snapshot.' },
     {
@@ -47,7 +36,7 @@ export function overviewCards(stats: TableStatistics): Card[] {
     },
     {
       label: 'Rows',
-      value: `${stats.approximate ? '~' : ''}${count(stats.rows)}`,
+      value: approximateCount(stats.rows, stats.approximate),
       severity: 'ok',
       hint: stats.approximate
         ? APPROXIMATE_HINT
@@ -56,14 +45,14 @@ export function overviewCards(stats: TableStatistics): Card[] {
     { label: 'Delete files', value: count(stats.deleteFiles), severity: 'ok' },
     {
       label: 'Average file size',
-      value: files ? formatBytes(stats.dataBytes / stats.files) : '–',
-      detail: files ? `largest ${formatBytes(stats.largestFileBytes)}` : undefined,
+      value: hasFiles ? formatBytes(stats.dataBytes / stats.files) : '–',
+      detail: hasFiles ? `largest ${formatBytes(stats.largestFileBytes)}` : undefined,
       severity: 'ok',
     },
     {
       label: 'Small files',
-      value: files ? percent(stats.smallFiles / stats.files) : '–',
-      detail: files
+      value: hasFiles ? percent(stats.smallFiles / stats.files) : '–',
+      detail: hasFiles
         ? `${count(stats.smallFiles)} of ${count(stats.files)} under ${formatBytes(stats.smallFileBytes)}`
         : undefined,
       severity: smallFileSeverity(stats),
@@ -126,10 +115,28 @@ export function statisticsColumnRows(columns: readonly ColumnStatistics[]): Colu
   });
 }
 
+/** The sentences that the page and the document share. */
+export const noDataFilesNote = (snapshot: number): string =>
+  `This table has no data files at snapshot ${snapshot}.`;
+export const RANGES_NOTE = 'Each range is half the size of the one above it, relative to the largest file.';
+export const NO_COLUMNS_NOTE = 'This table has no columns at this snapshot.';
+export const COLUMNS_PARTIAL_NOTE =
+  'The table has very many files: minimum and maximum cover only some of them.';
+export const notPartitionedNote = (snapshot: number): string =>
+  `This table is not partitioned at snapshot ${snapshot}.`;
+export const NO_PARTITION_FILES_NOTE = 'No data file was written under this partitioning yet.';
+
+/** The headings of the table of the columns. */
+export const COLUMN_HEADERS = ['Column', 'Type', 'Nullable', 'Null share', 'Minimum', 'Maximum'] as const;
+
 export const COLUMNS_NOTE =
   'Minimum and maximum are the range according to the statistics: deleting rows does not narrow it. ' +
   'The null share counts the rows of the data files, deleted ones included. It is not shown (–) for a field below a ' +
   'column that can be NULL or is a list or a map, because DuckLake counts a missing parent as NULL for its fields.';
+
+/** Under the columns when their statistics could not be read (`columnsUnread`). */
+export const COLUMNS_UNREAD_NOTE =
+  'The statistics of the columns could not be read from the catalog, so null shares, minimum and maximum may be missing.';
 
 /** `kind, month(ts)`: the partition keys, the transform in front of the column unless it is the plain value. */
 export function partitioningText(stats: PartitionStatistics): string {
@@ -143,6 +150,43 @@ export function partitioningText(stats: PartitionStatistics): string {
 /** `click / 3`: the values of one partition in the order of the keys. */
 export function partitionLabel(values: readonly (string | null)[]): string {
   return values.map((value) => value ?? 'NULL').join(' / ');
+}
+
+interface PartitionEntry {
+  readonly label: string;
+  readonly fileCount: number;
+  readonly sizeBytes: number;
+  readonly rows: number;
+  readonly detail: string;
+  /** The partitions summed up as one, after the named ones. */
+  readonly rest: boolean;
+}
+
+/** The partitions largest first, then `other (n)` for the smallest ones summed up: a bar or a row each. */
+export function partitionEntries(stats: PartitionStatistics): PartitionEntry[] {
+  const { partitions, rest } = stats;
+  return [
+    ...partitions.map((partition) => ({
+      label: partitionLabel(partition.values),
+      fileCount: partition.files,
+      sizeBytes: partition.sizeBytes,
+      rows: partition.rows,
+      detail: `${files(partition.files)}, ${count(partition.rows)} rows`,
+      rest: false,
+    })),
+    ...(rest
+      ? [
+          {
+            label: `other (${count(rest.partitions)})`,
+            fileCount: rest.files,
+            sizeBytes: rest.sizeBytes,
+            rows: rest.rows,
+            detail: `${count(rest.partitions)} partitions, ${files(rest.files)}, ${count(rest.rows)} rows`,
+            rest: true,
+          },
+        ]
+      : []),
+  ];
 }
 
 export function evennessSeverity(stats: PartitionStatistics): Severity {
@@ -183,24 +227,8 @@ export function partitioningNotes(stats: PartitionStatistics): string[] {
           `The partitioning has ${count(stats.keysLeftOut)} more keys than are read; the partitions group by the first keys only.`,
         ]
       : []),
-  ];
-}
-
-/** `@12` */
-export function growthLabel(point: GrowthPoint): string {
-  return `@${point.snapshot}`;
-}
-
-export function growthTime(point: GrowthPoint): string {
-  return point.time === null ? 'time unknown (snapshot expired)' : formatUtc(point.time);
-}
-
-export const GROWTH_MERGED_NOTE = 'The history is long: neighbouring snapshots are merged into one point.';
-
-export function growthNotes(stats: Pick<TableStatistics, 'growthMerged'>): string[] {
-  return [
-    'The state after each snapshot that added or removed files. A compaction (diamond) replaces files that leave no trace, ' +
-      'so the file count before it is what the catalog still shows.',
-    ...(stats.growthMerged ? [GROWTH_MERGED_NOTE] : []),
+    ...(stats.unread
+      ? ['The partition values could not be read from the catalog, so no partition is shown.']
+      : []),
   ];
 }

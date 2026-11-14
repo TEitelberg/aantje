@@ -1,9 +1,9 @@
-import { LIST_ROWS } from '../shell/model';
+import { capRows, code, kindsText, markdownTable, reportTitle } from '../markdown';
+import { LIST_ROWS, shortUtc } from '../shell/model';
+import { boundsOf, fitRange } from '../shell/range-state';
 import { scopeSchema } from '../shell/scope';
-import { capRows, code, markdownTable, reportTitle } from '../markdown';
-import { snapshotReportDetailOf, SNAPSHOT_REPORT_KIND_LABEL, POINT_KINDS } from '../snapshot-report/model';
-import type { Model, PointKind } from '../snapshot-report/model';
-import { shortUtc } from '../shell/model';
+import { KIND_LABEL, POINT_KINDS, detailOf } from '../snapshot-changes/model';
+import type { Model, PointKind } from '../snapshot-changes/model';
 import {
   AUTHOR_EXAMPLE,
   AUTHOR_HINT,
@@ -43,25 +43,18 @@ interface Fitted {
 
 // The view as the data allows it: unknown authors and tables drop out, the range stays inside the snapshots.
 function fitView(model: Model, view: ActivityMarkdownView | undefined): Fitted {
-  const first = model.snapshots[0]?.id ?? 0;
-  const last = model.snapshots.at(-1)?.id ?? 0;
-  const fit = (value: number): number => Math.min(Math.max(value, first), last);
   const offered = choices(model);
   return {
     author: offered.authors.some(({ key }) => key === view?.author) ? view?.author : undefined,
     table: offered.tables.find(({ key }) => key === view?.table),
     kinds: view ? POINT_KINDS.filter((kind) => view.kinds.includes(kind)) : POINT_KINDS,
     text: view?.text.trim() ?? '',
-    range: view ? { from: fit(view.range.from), to: fit(view.range.to) } : { from: first, to: last },
+    range: fitRange(view?.range, boundsOf(model.snapshots)),
   };
 }
 
 function settingsTable(data: ActivityData, model: Model, summary: ActivitySummary, fitted: Fitted): string[] {
   const { author, table, kinds, text, range } = fitted;
-  const kindsText =
-    kinds.length === POINT_KINDS.length
-      ? 'all'
-      : kinds.map((kind) => SNAPSHOT_REPORT_KIND_LABEL[kind]).join(', ') || 'none';
   return markdownTable(
     ['Property', 'Value'],
     [
@@ -71,7 +64,7 @@ function settingsTable(data: ActivityData, model: Model, summary: ActivitySummar
       ],
       ['Author', author === undefined ? 'all' : code(authorLabel(author))],
       ['Table', table ? code(table.label) : 'all'],
-      ['Kinds of change', kindsText],
+      ['Kinds of change', kindsText(kinds, POINT_KINDS, KIND_LABEL)],
       ['Message', text === '' ? 'all' : code(text)],
       ['Range', model.snapshots.length === 0 ? 'none' : `@${range.from} to @${range.to}`],
       ['Snapshots listed', `${summary.commits.length} of ${data.snapshots.length}`],
@@ -85,7 +78,7 @@ function daysSection(summary: ActivitySummary): string[] {
     summary.days.toReversed().map((day) => [day.day, String(day.commits), ...counts(day.kinds)]),
     DAY_ROWS,
   );
-  const columns = POINT_KINDS.map((kind) => `${SNAPSHOT_REPORT_KIND_LABEL[kind]} (changes)`);
+  const columns = POINT_KINDS.map((kind) => `${KIND_LABEL[kind]} (changes)`);
   return [...markdownTable(['Day (UTC)', 'Commits', ...columns], days.shown), ...days.omitted];
 }
 
@@ -110,7 +103,7 @@ function tablesSection(summary: ActivitySummary): string[] {
   if (summary.tables.length === 0) return ['No table was changed by the snapshots that the filters leave.'];
   return [
     ...markdownTable(
-      ['Table', 'Changes', ...POINT_KINDS.map((kind) => SNAPSHOT_REPORT_KIND_LABEL[kind])],
+      ['Table', 'Changes', ...POINT_KINDS.map((kind) => KIND_LABEL[kind])],
       summary.tables.map((row) => [code(row.label), String(row.changes), ...counts(row.kinds)]),
     ),
     ...(summary.omittedTables > 0 ? ['', omittedTablesNote(summary.omittedTables)] : []),
@@ -120,7 +113,7 @@ function tablesSection(summary: ActivitySummary): string[] {
 function commitsSection(data: ActivityData, model: Model, summary: ActivitySummary): string[] {
   const commits = capRows(
     summary.commits.map((commit) => {
-      const detail = snapshotReportDetailOf(model, data.latest, commit.id);
+      const detail = detailOf(model, data.latest, commit.id);
       return [
         `@${commit.id}`,
         shortUtc(commit.time),

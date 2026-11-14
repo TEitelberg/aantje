@@ -42,7 +42,11 @@ password before the stack is reachable by anyone else. All ports are published o
 
 1. In the activity bar open **aantje** and connect to **Oog Lakehouse** (Postgres password from `.env`,
    default `change-me-pg`). The catalog is empty until you load data. **Oog Quack** is the connection to the Quack
-   server (token `OOG_QUACK_TOKEN`, default `change-me-quack`, asked for on the first connect).
+   server (token `OOG_QUACK_TOKEN`, default `change-me-quack`, asked for on the first connect). **Oog Lakehouse S3**
+   is the same lake with its own storage (`storage`: S3-compatible, endpoint `http://rustfs:9000`, sign-in with keys):
+   after the first connect run **Set Storage Sign-in...** on it and enter `OOG_S3_ACCESS_KEY` and `OOG_S3_SECRET_KEY`
+   (defaults `oogadmin` and `change-me-oog-secret`); they are kept per connection in the code-server secret storage.
+   **Test Connection** then checks the catalog and the storage.
 2. Open `notebooks/local/01-medallion-generator.ipynb`, pick the kernel **Oog** and run all cells: it writes raw Parquet
    extracts of an online shop (10 tables, September 2026, one extract per day) to `s3://oog-lake/bronze/`.
    Set `SCALE` in the first cell (for example `0.01`) for a quick run; `1.0` is up to a million order items per day.
@@ -144,8 +148,9 @@ After changing a Dockerfile or a build argument run `docker compose build`. The 
 The workbench image installs aantje from Open VSX as `teitelberg.aantje`, in the version of `AANTJE_VERSION` (`.env`, default `latest`). Docker keeps the layer of that step, so to update the image set the number of the new version, for example `AANTJE_VERSION=0.1.9`, and run `docker compose up -d --build`. The Extensions view of the workbench also shows when a newer version exists; **Update** installs it until the container is re-created (the extension folder belongs to the image). A volume that already has a `settings.json` keeps its old value of `extensions.autoCheckUpdates`; set it to `true` there to see the notice. To try a package you built yourself, put its VSIX
 into `images/workbench/aantje/` (`aantje-linux-x64*.vsix` or `aantje-linux-arm64*.vsix`); the build then installs that file
 instead, and `*.vsix` is not tracked by Git. The connection
-profiles "Oog Lakehouse" and "Oog Quack" and the S3 settings for RustFS are preconfigured (`images/workbench/code-server/`);
-S3 credentials come from the `AWS_*` variables of the container. The Postgres password and the Quack token are asked for
+profiles "Oog Lakehouse", "Oog Lakehouse S3" (own `storage`) and "Oog Quack" and the S3 settings for RustFS are
+preconfigured (`images/workbench/code-server/`); "Oog Lakehouse" uses the machine settings and the `AWS_*` variables of
+the container for S3, "Oog Lakehouse S3" the keys stored for it. A Quack connection has no `storage`: the server reads the files. The Postgres password and the Quack token are asked for
 on the first connect and kept in the code-server secret storage. "Oog Quack" pins the certificate of the Quack server
 (its SHA-256 fingerprint is computed on every start); an existing installation gets the profile added and keeps its own
 connections.

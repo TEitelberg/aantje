@@ -1,16 +1,9 @@
-import { propertiesMarkdown } from '../properties';
 import type { ReportKind } from '../shell/panels';
-import { SHELL_CSS } from '../shell/style';
-
+import { propertiesMarkdown } from './markdown';
+import type { PropertiesData, PropertiesView } from './model';
 import { isPropertiesAction, isPropertiesView } from './protocol';
 import type { PropertiesAction } from './protocol';
-import type { PropertiesData, PropertiesView } from './model';
-
-// The rules of the metadata table: values are paths and settings that may be long, so they wrap.
-const PROPERTIES_CSS = `${SHELL_CSS}
-td.name { font-family: var(--vscode-editor-font-family); font-weight: 600; }
-td.value { font-family: var(--vscode-editor-font-family); white-space: normal; overflow-wrap: anywhere; }
-`;
+import { PROPERTIES_CSS } from './style';
 
 export const propertiesKind: ReportKind<PropertiesData, PropertiesAction, PropertiesView> = {
   viewType: 'aantje.properties',

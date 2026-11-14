@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 import type { SecretsPort, SettingsPort, WizardUi } from './ports';
+import { secretLabel } from './profile';
+import type { ConnectionProfile } from './profile';
 
 export function createSettingsPort(): SettingsPort {
   return {
@@ -53,4 +55,22 @@ export function createWizardUi(): WizardUi {
         ),
       ),
   };
+}
+
+/** Asks for the password or token of a connection; `previousRejected` says that the stored one was refused. */
+export function askPassword(
+  profile: ConnectionProfile,
+  previousRejected: boolean,
+): Promise<string | undefined> {
+  const secret = secretLabel(profile);
+  return Promise.resolve(
+    vscode.window.showInputBox({
+      title: `${secret === 'token' ? 'Token' : 'Password'} for "${profile.name}"`,
+      prompt: previousRejected
+        ? `The stored ${secret} was rejected. Enter the current ${secret}; it is kept in the secret storage.`
+        : `The server asks for a ${secret}. It is kept in the secret storage, not in the settings.`,
+      password: true,
+      ignoreFocusOut: true,
+    }),
+  );
 }

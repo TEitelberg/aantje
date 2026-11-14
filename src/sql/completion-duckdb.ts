@@ -1,5 +1,5 @@
 // The completion items of DuckDB's own constructs: lambda parameters and the options of `COPY ... TO`.
-import type { Env } from './completion';
+import type { Env } from './completion-env';
 import { COPY_FORMATS, COPY_TO_ANY_FORMAT, COPY_TO_OPTIONS } from './duckdb';
 
 /** The parameters of the lambdas around the cursor, ahead of the columns of the relations. */

@@ -1,7 +1,6 @@
 import * as vscode from 'vscode';
-import { shownSnapshot } from '../actions';
+import { catalogAt, rootOf } from '../actions';
 import type { CatalogEntry, CatalogReader, SnapshotId } from '../catalog/model';
-import { connectionClosed } from '../messages';
 import { openTableScript, revealEntry, tableStatisticsTarget } from '../shell/table-actions.vscode';
 import type { TableActionEnv } from '../shell/table-actions.vscode';
 import { endpointQuestion } from './actions';
@@ -28,6 +27,10 @@ export function healthPerformer(
         return openSetting(plan.key);
       case 'setCredentials':
         return setCredentials();
+      case 'editConnection':
+        return runOnConnection(env, 'aantje.editConnection', target);
+      case 'setStorageSignIn':
+        return runOnConnection(env, 'aantje.setStorageSignIn', target);
       case 'useEndpoint':
         return useEndpoint(plan);
       case 'revealTable':
@@ -47,11 +50,7 @@ type EntryOf = (target: HealthTarget, table: TableTarget) => Promise<CatalogEntr
 function entriesOnce(env: TableActionEnv): EntryOf {
   const read = new WeakMap<CatalogReader, Map<SnapshotId, Promise<CatalogEntry[]>>>();
   return async (target, table) => {
-    const reader = env.tree.reader(target.connectionId);
-    const snapshot = shownSnapshot(env.tree.state(target.connectionId));
-    if (!reader || snapshot === undefined) {
-      throw connectionClosed(CLOSED_GOAL);
-    }
+    const { reader, snapshot } = catalogAt(env.tree, target.connectionId, CLOSED_GOAL);
     const bySnapshot = read.get(reader) ?? new Map<SnapshotId, Promise<CatalogEntry[]>>();
     read.set(reader, bySnapshot);
     const pending = bySnapshot.get(snapshot) ?? reader.entries(snapshot);
@@ -70,6 +69,21 @@ async function openSetting(key: string): Promise<Outcome> {
 // The command asks in its own masked prompts; the panel never sees the keys.
 async function setCredentials(): Promise<Outcome> {
   await vscode.commands.executeCommand('aantje.setS3Credentials');
+  return 'rerun';
+}
+
+// Both commands take the node of the connection; the panel only names the connection, never a secret. The commands
+// ask in their own prompts, and the check runs again afterwards.
+async function runOnConnection(
+  env: TableActionEnv,
+  command: 'aantje.editConnection' | 'aantje.setStorageSignIn',
+  target: HealthTarget,
+): Promise<Outcome> {
+  const node = rootOf(env.tree, target.connectionId);
+  if (node === undefined) {
+    return undefined;
+  }
+  await vscode.commands.executeCommand(command, node);
   return 'rerun';
 }
 
@@ -102,10 +116,7 @@ async function showStatistics(
   table: TableTarget,
   target: HealthTarget,
 ): Promise<Outcome> {
-  const snapshot = shownSnapshot(env.tree.state(target.connectionId));
-  if (snapshot === undefined) {
-    throw connectionClosed(CLOSED_GOAL);
-  }
+  const { snapshot } = catalogAt(env.tree, target.connectionId, CLOSED_GOAL);
   await env.showStatistics(tableStatisticsTarget(target.connectionId, table), snapshot);
   return undefined;
 }

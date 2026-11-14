@@ -1,3 +1,5 @@
+import type { DeletedFiles } from '../catalog/model';
+import type { MaintenanceScript } from '../maintenance/labels';
 import { SMALL_FILE_BYTES } from '../catalog/thresholds';
 import { count, files, formatBytes, formatUtc, groupedPlural, tableLabel } from '../shell/model';
 import { lakeWide } from '../shell/scope';
@@ -10,7 +12,7 @@ type Level = 'low' | 'medium' | 'high';
 type NameOf = (table: AdvisorTable) => string;
 
 /** The script a recommendation opens; the Maintenance menu has the same entries. */
-export type RecommendationKind = 'expire' | 'cleanup' | 'orphans' | 'merge' | 'rewrite' | 'flush';
+export type RecommendationKind = MaintenanceScript;
 
 export interface Recommendation {
   /** `cleanup`, `merge:12`: the kind, and the catalog id of the table where it concerns one. */
@@ -148,19 +150,38 @@ function expire(
   ];
 }
 
+// The small files with deleted rows, which the merge leaves alone: the script rewrites them first.
+function rewriteFirst(deleted: DeletedFiles): string {
+  return `${groupedPlural(deleted.small, 'small file has', 'small files have')} deleted rows, and a merge leaves a file with a delete file alone. So the script rewrites them first: Rewrite Data Files with delete_threshold => 0 drops the deleted rows and writes the files anew. It rewrites every file of the table with a deleted row, small or not: ${files(deleted.files)}, ${formatBytes(deleted.bytes)}.`;
+}
+
+// The small files with deleted rows could not be read: the merge may leave some alone, and the script says so.
+const DELETES_UNREAD_TEXT =
+  'Which small files have deleted rows could not be read. A merge leaves such files alone, so it may merge fewer files than estimated; the script says so.';
+
 function merge(data: AdvisorData, name: NameOf): Recommendation[] {
-  return data.merge.map(({ table, files: total, smallFiles, smallBytes, estimatedAfter }) => ({
+  return data.merge.map(({ table, files: total, smallFiles, smallBytes, estimatedAfter, deleted }) => ({
     id: `merge:${table.id}`,
     kind: 'merge',
     table,
     title: `Merge ${groupedPlural(smallFiles, 'small file', 'small files')} of ${name(table)}`,
     explanation: [
       `${count(smallFiles)} of its ${groupedPlural(total, 'data file', 'data files')} are below ${formatBytes(SMALL_FILE_BYTES)}. Many small files make every scan open and read many files; merging adjacent files joins them.`,
-      `The number after the merge is an estimate: the small files add up to ${formatBytes(smallBytes)} and become files of about ${formatBytes(data.policy.target.bytes)}, the other files stay. A merge joins only adjacent files of one partition and leaves a file with a delete file alone, so the real number can be higher. The replaced files wait for Clean Up Old Files.`,
+      ...(deleted ? [rewriteFirst(deleted)] : deleted === null ? [DELETES_UNREAD_TEXT] : []),
+      `The number after the merge is an estimate: the small files add up to ${formatBytes(smallBytes)} and become files of about ${formatBytes(data.policy.target.bytes)}, the other files stay.${deleted ? ' It counts on the rewrite, so the small files with deleted rows are merged too.' : ''} A merge joins only adjacent files of one partition, so the real number can be higher. The replaced files wait for Clean Up Old Files.`,
     ],
     figures: [
       ['Data files', count(total)],
       ['Small files', count(smallFiles)],
+      ...(deleted
+        ? [
+            ['Small files with deleted rows', count(deleted.small)] as const,
+            [
+              'Files the rewrite rewrites',
+              `${count(deleted.files)} (${formatBytes(deleted.bytes)})`,
+            ] as const,
+          ]
+        : []),
       ['Estimated after the merge', `about ${count(estimatedAfter)}`],
       ['Estimated fewer files', `about ${count(total - estimatedAfter)}`],
     ],

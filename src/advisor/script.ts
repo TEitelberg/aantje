@@ -1,27 +1,22 @@
-import { lakeScript, tableScript } from '../maintenance';
-import { LAKE_SUBJECT, scriptDocument } from '../maintenance-document';
-import type { ScriptBlock } from '../maintenance-document';
-import type { FixStep } from '../health/model';
+import { lakeScript, tableScript } from '../maintenance/scripts';
+import { LAKE_SUBJECT, scriptDocument } from '../maintenance/document';
+import { STEP_OF } from '../maintenance/steps';
+import type { ScriptBlock } from '../maintenance/document';
 import type { AdvisorData } from './model';
 import { recommendationsOf } from './recommend';
-import type { Recommendation, RecommendationKind } from './recommend';
-
-const STEPS: Record<RecommendationKind, FixStep> = {
-  merge: 'compact',
-  flush: 'compact',
-  rewrite: 'compact',
-  expire: 'expire',
-  cleanup: 'cleanup',
-  orphans: 'orphans',
-};
+import type { Recommendation } from './recommend';
 
 // The rewrite follows the merge and the flush: it works on the files they leave.
 const REWRITE_PART = 1;
 
-function sqlOf({ kind, table }: Recommendation): string {
+// The merge of a table whose small files have deleted rows rewrites them first, as the Maintenance menu does; when
+// they could not be read (null), the script says so.
+function sqlOf(data: AdvisorData, { kind, table }: Recommendation): string {
+  const deleted =
+    kind === 'merge' ? data.merge.find((item) => item.table.id === table?.id)?.deleted : undefined;
   return (
     table && (kind === 'merge' || kind === 'flush' || kind === 'rewrite')
-      ? tableScript(kind, table.schema, table.name)
+      ? tableScript(kind, table.schema, table.name, deleted)
       : lakeScript(kind)
   ).join('\n');
 }
@@ -39,9 +34,9 @@ function rewriteNote(data: AdvisorData, { kind, table }: Recommendation): string
 function blockOf(data: AdvisorData, item: Recommendation): ScriptBlock {
   const { table } = item;
   return {
-    step: STEPS[item.kind],
+    step: STEP_OF[item.kind],
     subject: table ? `Table ${table.schema}.${table.name}` : LAKE_SUBJECT,
-    sql: sqlOf(item),
+    sql: sqlOf(data, item),
     notes: [
       item.title,
       item.figures.map(([label, value]) => `${label}: ${value}`).join(' · '),

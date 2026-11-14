@@ -1,5 +1,4 @@
 import * as vscode from 'vscode';
-import { showConnectFirst } from '../command.vscode';
 import type { Register } from '../command.vscode';
 import type { ConnectionProfile } from '../connections/profile';
 import type { DataAccessFactory } from '../data/resolve';
@@ -29,8 +28,6 @@ interface AdvisorCommandEnv extends ReportHostEnv, TableActionEnv {
 
 /** The Maintenance Advisor: one panel per connection and scope (the lake or one schema). It measures with dry runs and opens scripts; it changes nothing. */
 export function registerAdvisorCommand(env: AdvisorCommandEnv): vscode.Disposable[] {
-  const { store } = env;
-
   async function openScript(profile: ConnectionProfile, data: AdvisorData): Promise<void> {
     const text = advisorScriptOf(data);
     if (text === undefined) {
@@ -81,18 +78,9 @@ export function registerAdvisorCommand(env: AdvisorCommandEnv): vscode.Disposabl
 
   return [
     { dispose: () => report.dispose() },
-    env.register(COMMAND, async (node) => {
-      const ref = node?.ref;
-      const scope = ref && scopeOfNode(ref);
-      if (!ref || !scope) {
-        return;
-      }
-      const profile = store.get(ref.connectionId);
-      if (!profile) {
-        showConnectFirst(GOAL);
-        return;
-      }
-      await report.show(profile, { scope });
+    report.command(env.register, (ref) => {
+      const scope = scopeOfNode(ref);
+      return scope && { scope };
     }),
   ];
 }

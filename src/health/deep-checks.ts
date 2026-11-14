@@ -1,10 +1,12 @@
 import type { StoredFile } from '../catalog/model';
 import { quoteLiteral } from '../catalog/ddl';
 import { groupedPlural } from '../shell/numbers';
-import { finding, qualified, tableScope } from './finding';
+import { fileKey, fileScope, finding, kindText, qualified } from './finding';
 import type { TableNames } from './finding';
-import { escapeGlob } from './storage-checks';
+import { escapeGlob } from '../data/store-sql';
 import type { HealthFinding } from './model';
+import { storeProblemOf } from '../storage/diagnose';
+import type { StorageKind } from '../storage/config';
 
 interface FileColumn {
   readonly name: string;
@@ -86,10 +88,10 @@ export function deepFindings(
   known: KnownColumns,
   names: TableNames,
 ): HealthFinding[] {
-  const scope = tableScope(file.tableId, names, { schema: file.schema, name: file.table });
+  const scope = fileScope(file, names);
   const where = file.location ?? '';
-  const object = `${file.kind}:${file.id}`;
-  const kind = file.kind === 'data' ? 'data file' : 'delete file';
+  const object = fileKey(file);
+  const kind = kindText(file);
   const findings: HealthFinding[] = [];
   if (file.records !== null && footer.rows !== file.records) {
     findings.push(
@@ -134,29 +136,39 @@ export function deepFindings(
 }
 
 const STILL_BUSY = /still busy/;
-const GONE = /HTTP 404|NoSuchKey|No files found that match the pattern/;
-const STORE_REFUSED =
-  /HTTP 40[13]|AccessDenied|SignatureDoesNotMatch|InvalidAccessKeyId|Could not (resolve|connect)|SSL connect error/;
 
 type FailureKind = 'busy' | 'store' | 'gone' | 'unreadable';
 
 /** Classifies a failed footer read as engine busy, store silent, file gone or bad file; the first two end the deep check. */
-export function failureKind(text: string): FailureKind {
+export function failureKind(text: string, storage?: StorageKind): FailureKind {
   if (STILL_BUSY.test(text)) return 'busy';
-  if (STORE_REFUSED.test(text) && !/HTTP 404/.test(text)) return 'store';
-  return GONE.test(text) ? 'gone' : 'unreadable';
+  switch (storeProblemOf(text, storage)) {
+    case 'denied':
+    case 'expired':
+    case 'role':
+    case 'unresolved':
+    case 'ssl':
+    case 'unreachable':
+      return 'store';
+    case 'no-bucket':
+    case 'not-found':
+    case 'missing-file':
+      return 'gone';
+    default:
+      return 'unreadable';
+  }
 }
 
 /** A file whose footer cannot be read; `text` is the first line of the engine's message. */
 export function unreadableFinding(file: StoredFile, text: string, names: TableNames): HealthFinding {
-  const scope = tableScope(file.tableId, names, { schema: file.schema, name: file.table });
+  const scope = fileScope(file, names);
   const where = file.location ?? '';
   return finding('deep.file-unreadable', {
     severity: 'error',
     scope,
-    object: `${file.kind}:${file.id}`,
+    object: fileKey(file),
     title: 'A Parquet file cannot be read',
-    detail: `${where} is the ${file.kind === 'data' ? 'data file' : 'delete file'} #${file.id} of ${qualified(scope)}. ${text}`,
+    detail: `${where} is the ${kindText(file)} #${file.id} of ${qualified(scope)}. ${text}`,
     cause:
       'The file is damaged (cut off or overwritten), is no Parquet file, or the store did not deliver it in time.',
     fix: 'Restore the file from a backup. The rows in it cannot be read until then; Show Changes and reads of the table fail the same way.',

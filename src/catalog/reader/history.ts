@@ -3,6 +3,7 @@ import type { Row } from '../drivers/driver';
 import type {
   CatalogReader,
   ColumnInfo,
+  DroppedObject,
   Lifetime,
   ResolvedChange,
   SchemaHistory,
@@ -13,9 +14,9 @@ import * as queries from '../queries/history';
 import { ACTIVITY_LIMIT } from '../thresholds';
 import { toIsoUtc } from '../timestamp';
 import { columnTree } from './columns';
-import { ID_CHUNK, resolveActivity, resolveChanges } from './lookups';
-import { toNumber, toText, toTextOrNull } from './rows';
-import type { Attempt, Run } from './rows';
+import { chunksOf, resolveActivity, resolveChanges } from './lookups';
+import { toIsoUtcOrNull, toNumber, toText, toTextOrNull } from './rows';
+import type { Attempt, Run, WithCommits } from './rows';
 
 // `begin_snapshot` inclusive, `end_snapshot` exclusive, NULL while valid.
 function validAt(row: Row, snapshot: number): boolean {
@@ -56,11 +57,28 @@ function columnsAt(columns: readonly Row[], comments: readonly Row[], snapshot: 
 
 type HistoryReads = Pick<
   CatalogReader,
-  'snapshotChanges' | 'snapshotActivity' | 'lifetime' | 'schemaHistory' | 'columnHistory'
+  'snapshotChanges' | 'snapshotActivity' | 'lifetime' | 'droppedObjects' | 'schemaHistory' | 'columnHistory'
 >;
 
+const DROPPED_KINDS: ReadonlySet<string> = new Set(queries.DROPPED_KINDS);
+
+function droppedObject(row: Row): DroppedObject {
+  const kind = toText(row.kind);
+  if (!DROPPED_KINDS.has(kind)) {
+    throw new Error(`Expected a table, view or macro but the catalog returned ${kind}.`);
+  }
+  return {
+    kind: kind as DroppedObject['kind'],
+    id: toNumber(row.object_id),
+    name: toText(row.object_name),
+    droppedAt: toNumber(row.end_snapshot),
+    droppedTime: toIsoUtcOrNull(row.dropped_time),
+    lastSnapshot: toNumber(row.last_snapshot),
+  };
+}
+
 /** Reads of what happened to the catalog: changes per snapshot, lifetimes and the schema history of a table. */
-export function historyReads(run: Run, attempt: Attempt): HistoryReads {
+export function historyReads(run: Run, attempt: Attempt, withCommits: WithCommits): HistoryReads {
   return {
     async snapshotChanges(snapshotId): Promise<ResolvedChange[]> {
       const rows = await run(queries.changesOf(snapshotId));
@@ -71,9 +89,10 @@ export function historyReads(run: Run, attempt: Attempt): HistoryReads {
       const from = range?.from ?? 0;
       const to = range?.to ?? Number.MAX_SAFE_INTEGER;
       // One extra row tells whether older snapshots exist.
-      const rows =
-        (await attempt(queries.snapshotActivity(from, to, limit + 1), signal)) ??
-        (await run(queries.snapshotActivity(from, to, limit + 1, false), signal));
+      const rows = await withCommits(
+        (commitColumns) => queries.snapshotActivity(from, to, limit + 1, commitColumns),
+        signal,
+      );
       const page = rows.slice(0, limit).map((row) => ({
         id: toNumber(row.snapshot_id),
         time: toIsoUtc(toText(row.snapshot_time)),
@@ -96,6 +115,10 @@ export function historyReads(run: Run, attempt: Attempt): HistoryReads {
       };
     },
 
+    async droppedObjects(schemaId): Promise<DroppedObject[]> {
+      return (await run(queries.droppedObjects(schemaId))).map(droppedObject);
+    },
+
     async schemaHistory(tableId, limit = Infinity, signal): Promise<SchemaHistory> {
       const [tables, columns, comments] = await Promise.all([
         run(queries.tableVersions(tableId), signal),
@@ -106,11 +129,11 @@ export function historyReads(run: Run, attempt: Attempt): HistoryReads {
       // `slice(-0)` is the whole list.
       const snapshots = limit > 0 ? all.slice(-limit) : [];
       const commits = new Map<number, Row>();
-      for (let at = 0; at < snapshots.length; at += ID_CHUNK) {
-        const ids = snapshots.slice(at, at + ID_CHUNK);
-        const rows =
-          (await attempt(queries.snapshotCommits(ids), signal)) ??
-          (await run(queries.snapshotCommits(ids, false), signal));
+      for (const ids of chunksOf(snapshots)) {
+        const rows = await withCommits(
+          (commitColumns) => queries.snapshotCommits(ids, commitColumns),
+          signal,
+        );
         for (const row of rows) {
           commits.set(toNumber(row.snapshot_id), row);
         }

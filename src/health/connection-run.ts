@@ -1,15 +1,17 @@
 import { stat } from 'node:fs/promises';
 import { isNetworkPath } from '../catalog/locations';
 import { newestSnapshotQuery } from '../data/attach';
-import { EXTENSION_HINT } from '../data/errors';
-import { LakeFailure } from '../data/engine';
-import type { LakeSession } from '../data/engine';
+import { EXTENSION_HINT } from '../duckdb/messages';
+import { LakeFailure } from '../data/lake-session';
+import type { LakeSession } from '../data/lake-session';
 import { configFindings, endpointNotSet, isRemote, setupFailure, storeFailure } from './connection-checks';
 import type { ConnectionFacts } from './connection-checks';
 import { finding } from './finding';
-import { failureMessageOf } from './run-context';
+import { failureMessageOf } from '../data/lake-session';
 import type { CatalogOutcome, RunContext } from './run-context';
-import { probeStatement } from './storage-checks';
+import { probeStatement } from '../data/store-sql';
+import { s3SettingsOf } from '../storage/resolve';
+import { signInExpiryOf, signInSourceOf, storageFactsOf } from './storage-facts';
 
 async function directoryExists(path: string): Promise<boolean> {
   try {
@@ -20,13 +22,21 @@ async function directoryExists(path: string): Promise<boolean> {
   }
 }
 
-/** The facts the connection checks use: catalog data path, S3 settings and credential source. */
+/**
+ * The facts the connection checks use: catalog data path, the storage of the connection (kinds and names, no secret
+ * value) and where its sign-in comes from. `credentialsFrom` only words a connection on the machine's S3 settings.
+ */
 export function connectionFacts(ctx: RunContext, catalog: CatalogOutcome): ConnectionFacts {
   const { deps } = ctx;
+  const { storage } = deps.access;
+  const facts = storageFactsOf(storage);
+  const expires = signInExpiryOf(storage);
   return {
     dataPath: catalog.dataPath,
-    s3: deps.access.s3,
-    credentials: deps.access.s3Credentials ? (deps.credentialsFrom ?? 'stored') : undefined,
+    ...(facts === undefined ? {} : { storage: facts }),
+    s3: s3SettingsOf(storage),
+    credentials: signInSourceOf(storage, deps.credentialsFrom),
+    ...(expires === undefined ? {} : { signInExpires: expires }),
     env: deps.env ?? {},
   };
 }
@@ -61,7 +71,7 @@ export async function startConnectionGroup(
       : undefined;
   const localExists =
     localDirectory === undefined ? undefined : await (ctx.deps.exists ?? directoryExists)(localDirectory);
-  state.add(configFindings(facts, localExists));
+  state.add(configFindings(facts, localExists, ctx.now()));
 }
 
 /** Finishes the connection group by asking the lake and the object store. Returns why later groups cannot run, or undefined. */
@@ -87,7 +97,7 @@ export async function checkConnection(
       const hint = endpointNotSet(failed, facts);
       state.add(hint ? [hint, failed] : [failed]);
       state.setGroup({ group: 'connection', state: 'done' });
-      return 'The object store did not answer (see the group Connection).';
+      return 'The storage did not answer (see the group Connection).';
     }
   }
   state.setGroup({ group: 'connection', state: 'done' });

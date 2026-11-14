@@ -11,21 +11,24 @@ The explorer is read-only. The tree reads the `ducklake_*` metadata tables with 
 - **Tree** of schemas with the folders Tables, Views and Macros. A table has Columns (STRUCT, LIST and MAP expand into nested fields), Partitioning, Sort Order and Tags when present, and the leaves **Statistics** and **History** that open reports. The tree shows no counts; rows and size are in the tooltip and the statistics report ([Tree](tree.md)).
 - **Snapshots** folder: the newest snapshots with time, author, commit message and changed objects. **Show Catalog at this Snapshot** and **Show Latest Snapshot** change what the whole tree shows ([Snapshots, search and status bar](snapshot-search-status.md)).
 - **Columns of views.** DuckLake stores no columns for a view, so DuckDB resolves them. That runs the SQL stored in the catalog, so aantje asks once per connection whether you trust it. The SQL of a view is in its tooltip.
-- **Tooltips**: rows, size and comment of a table, SQL of a view, type of a column.
+- **Tooltips**: rows, size and comment of a table, comment of a view, parameters of a macro, type of a column.
 - **Copy** the qualified name of a schema, table, view or column, and the DDL of a table or view.
-- **Catalog search** for tables and views in all schemas, with a jump to the hit.
+- **Catalog search** for tables, views and columns (nested fields too) in all schemas, with a jump to the hit.
 - **Status bar** item with the connection, DuckLake version and snapshot.
 
 ## Scripts
 
 - **Script as** SELECT, CREATE, ALTER or DROP on every node that has a script, and INSERT on a table, opens it in a new SQL editor of the connection. Nothing runs until you run it. Scripts that create or alter contain the matching DROP as a comment ([DDL generation](ddl.md)).
+- **Generate Scripts...** on an open connection or a schema scripts its tables, views and macros in an order that works: one SQL document, or one file per object in a folder for Git ([DDL generation](ddl.md#generate-scripts)).
+- **Schema Compare...** compares two tables or two schemas, also across schemas and connections: a diff editor or a Markdown report of what differs, and **Script as Update**, the statements that make the target like the source ([Schema Compare](compare.md)).
 - **Maintenance** on a connection and a table: Checkpoint, Merge Adjacent Files, Rewrite Data Files, Flush Inlined Data, Expire Snapshots, Clean Up Old Files, Delete Orphaned Files, Set Option. Each opens the DuckLake call; what destroys data starts with a dry run and the real call is commented out ([Maintenance scripts](maintenance.md)).
 
 ## Time travel
 
 - **Query at Snapshot...** opens the first rows, a notebook or a SQL editor at any snapshot at which the table existed.
-- **Compare Schema...** shows the `CREATE TABLE` of two snapshots in a diff editor. **Compare Snapshots...** writes a Markdown report of changed tables, views and columns.
+- **Compare Table at Two Snapshots...** shows the `CREATE TABLE` of two snapshots in a diff editor. **Compare Snapshots...** writes a Markdown report of changed tables, views and columns.
 - **Show Changes...** shows the rows inserted, updated and deleted between two snapshots in a grid. **Show Rows Changed** does so for one snapshot ([Time travel](time-travel.md)).
+- **Restore Table to Snapshot...** writes the script that gives a table the rows of an earlier snapshot back and keeps its id. **Restore Dropped Object...** on a schema writes the script that creates a dropped table, view or macro again. Nothing runs until you run the script ([Time travel](time-travel.md#restore-table-to-snapshot)).
 
 ## Data
 
@@ -45,12 +48,12 @@ The **Reports** submenu opens panels with one look. All have **Open as Markdown*
 - **Storage Report**: data path, largest tables, small files, files waiting for deletion ([Storage report](storage-report.md)).
 - **Properties**: the facts of the catalog and every row of `ducklake_metadata`.
 - **Maintenance Advisor**: what maintenance would do, measured with the DuckLake dry runs, ranked by impact, effort and risk. Nothing is executed ([Maintenance Advisor](advisor.md)).
-- **Dependencies**: what uses an object and what it uses, and what a drop would break ([Dependencies](dependencies.md)).
+- **Dependencies**: what uses an object and what it uses, as a list and as a graph ([Dependencies](dependencies.md)).
 - **Check Health** and **Check Table Health**: the catalog, the connection and the object store, with an optional deep check of Parquet footers. Nothing runs without your action ([Health check](health-check.md)).
 
 ## SQL editor
 
-**New Query** on a connection, schema, table or view opens a SQL document bound to that connection. The editor completes names, shows hover and signature help, marks syntax errors and warns of the tables, views and columns that the lake does not have, with a quick fix to the nearest name ([SQL IntelliSense](sql-intellisense.md)). **Run Query** (`F5`), **Run Statement at Cursor** (`Ctrl+Enter`) and **Cancel Query** (`Shift+F5`) run it. Each editor has its own session, and results open in a panel below that stays with the editor: it follows it, comes forward with it and closes with it, and **Hide Results** (`Ctrl+Alt+R`) gives the query the whole height. The editor runs any SQL with the rights of the connection's credentials. A profile can open its sessions read-only (`readOnly`), and **Toggle Read-only Session** switches one editor; a Quack connection has no such switch, its server decides what the token may do. After a statement that changed the catalog, the tree reads the connection again ([SQL editor](sql-editor.md), [SQL session](sql-session.md)).
+**New Query** on a connection, schema, table or view opens a SQL document bound to that connection. The editor completes names, shows hover and signature help, marks syntax errors and warns of the tables, views and columns that the lake does not have, with a quick fix to the nearest name ([SQL IntelliSense](sql-intellisense.md)). **Run Query** (`F5`), **Run Statement at Cursor** (`Ctrl+Enter`) and **Cancel Query** (`Shift+F5`) run it. Each editor has its own session, and results open in a panel below that stays with the editor: it follows it, comes forward with it and closes with it, and **Hide Results** (`Ctrl+Alt+R`) gives the query the whole height. The editor runs any SQL with the rights of the connection's credentials. A profile can open its sessions read-only (`readOnly`), and **Toggle Read-only Session** switches one editor; a Quack connection has no such switch, its server decides what the token may do. After a statement that changed the catalog, the tree reads the connection again ([SQL editor](sql-editor.md), [SQL session](sql-session.md)). The folder **Query History** below a connection lists the last statements you ran on it, with time, duration, rows and status; a click opens one in a new query ([Query History](sql-editor.md#query-history)).
 
 ## Known limits
 

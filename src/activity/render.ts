@@ -1,31 +1,28 @@
 /// <reference lib="dom" />
 // DOM builders of the Activity page. They take the state they show and report user input through callbacks.
-import { LIST_ROWS } from '../shell/model';
-import { snapshotReportCompareTargets, showsRows } from '../snapshot-report/actions';
-import {
-  POINT_KINDS,
-  SNAPSHOT_REPORT_KIND_LABEL,
-  snapshotReportDetailOf,
-  summaryOf,
-} from '../snapshot-report/model';
-import type { Model, PointKind } from '../snapshot-report/model';
 import {
   actionButton,
   choiceSelect,
   dataTable,
   empty,
-  kindCheckbox,
+  kindBoxes,
   note,
-  rangeField,
+  pickCell,
+  rangeFields,
   searchBox,
   tableRow,
   toolbar,
 } from '../shell/blocks';
+import type { ListRow } from '../shell/blocks';
 import { barChartHeight } from '../shell/chart-option';
-import type { ChartOption } from '../shell/chart-option';
+import type { ChartSet } from '../shell/chart-set';
 import { el } from '../shell/dom';
-import { count, shortUtc } from '../shell/model';
+import { LIST_ROWS, count, shortUtc } from '../shell/model';
 import type { Theme } from '../shell/theme';
+import type { SnapshotActionRequest } from '../snapshot-changes/actions';
+import { detailPane } from '../snapshot-changes/detail';
+import { KIND_LABEL, POINT_KINDS, detailOf, summaryOf } from '../snapshot-changes/model';
+import type { Model, PointKind } from '../snapshot-changes/model';
 import type { ActivityActionRequest } from './actions';
 import { activityTablesOption, commitsOption, kindsOption } from './chart-options';
 import { NO_AUTHOR, authorLabel, choices, omittedAuthorsNote, omittedTablesNote } from './model';
@@ -39,17 +36,9 @@ interface ActivityView {
   readonly theme: Theme;
 }
 
-/** Draws a chart into a new box in `parent`; the page keeps the chart to dispose it. */
-export type ChartIn = (
-  parent: HTMLElement,
-  option: ChartOption,
-  height?: number,
-  onItemClick?: (index: number) => void,
-) => void;
+const kindColumns = POINT_KINDS.map((kind) => KIND_LABEL[kind]);
 
-const kindColumns = POINT_KINDS.map((kind) => SNAPSHOT_REPORT_KIND_LABEL[kind]);
-
-export function drawDays(into: HTMLElement, view: ActivityView, chartIn: ChartIn): void {
+export function drawDays(into: HTMLElement, view: ActivityView, charts: ChartSet): void {
   const { data, summary, theme } = view;
   const shown = summary.days;
   if (shown.length === 0) {
@@ -77,18 +66,14 @@ export function drawDays(into: HTMLElement, view: ActivityView, chartIn: ChartIn
         ),
     ),
   );
-  into.replaceChildren(el('h2', undefined, 'Commits per day'));
-  chartIn(into, commitsOption(shown, theme.palette));
-  into.append(
+  into.replaceChildren(
+    el('h2', undefined, 'Commits per day'),
+    charts.box(commitsOption(shown, theme.palette)),
     el('h2', undefined, 'Changes by kind'),
-    note(
-      POINT_KINDS.map((kind) => `${SNAPSHOT_REPORT_KIND_LABEL[kind]}: ${count(summary.kinds[kind])}`).join(
-        ' · ',
-      ),
-    ),
+    note(POINT_KINDS.map((kind) => `${KIND_LABEL[kind]}: ${count(summary.kinds[kind])}`).join(' · ')),
+    charts.box(kindsOption(shown, theme.palette)),
+    alternative,
   );
-  chartIn(into, kindsOption(shown, theme.palette));
-  into.append(alternative);
 }
 
 export function drawAuthors(into: HTMLElement, summary: ActivitySummary): void {
@@ -115,7 +100,7 @@ export function drawAuthors(into: HTMLElement, summary: ActivitySummary): void {
 export function drawTables(
   into: HTMLElement,
   view: ActivityView,
-  chartIn: ChartIn,
+  charts: ChartSet,
   pickTable: (key: string) => void,
 ): void {
   const { summary, theme } = view;
@@ -124,16 +109,14 @@ export function drawTables(
     into.append(empty('No table was changed by the snapshots that the filters leave.'));
     return;
   }
-  chartIn(
-    into,
-    activityTablesOption(summary.tables, theme.palette),
-    barChartHeight(summary.tables.length),
-    (index) => {
-      const row = summary.tables[index];
-      if (row) pickTable(row.key);
-    },
-  );
   into.append(
+    charts.box(activityTablesOption(summary.tables, theme.palette), {
+      height: barChartHeight(summary.tables.length),
+      onItemClick: (index) => {
+        const row = summary.tables[index];
+        if (row) pickTable(row.key);
+      },
+    }),
     dataTable(
       ['Table', 'Changes', ...kindColumns],
       summary.tables.map((row) => {
@@ -158,20 +141,20 @@ export function drawList(
   into: HTMLElement,
   view: ActivityView,
   onSelect: (id: number) => void,
-): Map<number, { readonly row: HTMLElement; readonly pick: HTMLElement }> {
+): Map<number, ListRow> {
   const { data, model, summary } = view;
-  const rows = new Map<number, { readonly row: HTMLElement; readonly pick: HTMLElement }>();
+  const rows = new Map<number, ListRow>();
   const shown = summary.commits.slice(0, LIST_ROWS);
   const body = shown.flatMap((commit) => {
-    const facts = snapshotReportDetailOf(model, data.latest, commit.id);
+    const facts = detailOf(model, data.latest, commit.id);
     if (!facts) return [];
-    const pick = el('button', 'pick', `@${commit.id}`);
-    pick.setAttribute('aria-label', `Snapshot ${commit.id}. Select it to see what it changed.`);
-    pick.addEventListener('click', () => onSelect(commit.id));
-    const first = el('td');
-    first.append(pick);
+    const { cell, pick } = pickCell(
+      `@${commit.id}`,
+      `Snapshot ${commit.id}. Select it to see what it changed.`,
+      () => onSelect(commit.id),
+    );
     const row = tableRow([
-      first,
+      cell,
       shortUtc(commit.time),
       el('td', 'who', commit.author ?? ''),
       el('td', 'who', commit.message ?? ''),
@@ -200,69 +183,33 @@ export function drawDetail(
   into: HTMLElement,
   view: Pick<ActivityView, 'data' | 'model'>,
   selected: number | undefined,
-  ask: (request: ActivityActionRequest) => void,
+  ask: (request: ActivityActionRequest | SnapshotActionRequest) => void,
 ): void {
-  const { data, model } = view;
-  const facts = selected === undefined ? undefined : snapshotReportDetailOf(model, data.latest, selected);
-  if (!facts) {
-    into.replaceChildren(note('Select a snapshot in the list to see what it changed.'));
-    return;
-  }
-  const who = [facts.author, facts.message].filter((part) => part !== null && part !== '');
-  const targets = snapshotReportCompareTargets(facts, data.latest, undefined);
-  const actions = el('div', 'actions');
-  actions.append(
-    actionButton(`Show catalog at @${facts.id}`, () => ask({ action: 'showCatalog', snapshot: facts.id })),
-    actionButton(
-      'Show Snapshot Report',
-      () => ask({ action: 'showSnapshotReport' }),
-      'Open the snapshot report of this connection',
-    ),
-    ...(targets.length > 0 ? [el('span', 'label', 'Compare the catalog with')] : []),
-    ...targets.flatMap(({ against, snapshot }) =>
-      against === 'other'
-        ? []
-        : [
-            actionButton(
-              `${against} @${snapshot}`,
-              () => ask({ action: 'compareSnapshots', snapshot: facts.id, against }),
-              `Compare the catalog at @${facts.id} with ${against} @${snapshot}`,
-            ),
-          ],
-    ),
-  );
-  const changed = el('ul', 'tables');
-  for (const entry of facts.tables) {
-    const item = el('li', 'table-row');
-    const buttons = el('div', 'actions');
-    if (showsRows(facts, entry)) {
-      buttons.append(
-        actionButton(
-          'Rows changed',
-          () => ask({ action: 'rowsChanged', snapshot: facts.id, table: entry.tableId }),
-          `Show the rows of ${entry.label} that @${facts.id} changed`,
-        ),
-      );
-    }
-    item.append(el('span', 'name', entry.label), el('span', 'what', entry.actions.join(', ')), buttons);
-    changed.append(item);
-  }
-  const others = el('ul', 'others');
-  others.append(...facts.others.map((entry) => el('li', undefined, entry)));
   into.replaceChildren(
-    el('h2', undefined, `@${facts.id} · ${facts.timeText}`),
-    ...(who.length > 0 ? [el('p', 'who-line', who.join(' · '))] : []),
-    actions,
-    ...(facts.tables.length > 0 ? [el('h3', undefined, 'Tables'), changed] : []),
-    ...(facts.others.length > 0 ? [el('h3', undefined, 'Schema / views / macros'), others] : []),
+    ...detailPane(
+      {
+        model: view.model,
+        latest: view.data.latest,
+        selected,
+        actions: [
+          actionButton(
+            'Show Snapshot Report',
+            () => ask({ action: 'showSnapshotReport' }),
+            'Open the snapshot report of this connection',
+          ),
+        ],
+        hint: 'Select a snapshot in the list to see what it changed.',
+      },
+      ask,
+    ),
   );
 }
 
-/** The filters when the bar is built; `kinds` is the set the checkboxes change. */
+/** The filters when the bar is built; `kinds` is read on every change of a checkbox. */
 interface Filters {
   readonly author: string | undefined;
   readonly table: string | undefined;
-  readonly kinds: Set<PointKind>;
+  readonly kinds: () => ReadonlySet<PointKind>;
   readonly text: string;
   readonly rangeAt: (end: 'from' | 'to') => number;
 }
@@ -271,7 +218,7 @@ interface FilterHandlers {
   readonly onAuthor: (key: string | undefined) => void;
   readonly onTable: (key: string | undefined) => void;
   readonly onText: (text: string) => void;
-  readonly onKinds: () => void;
+  readonly onKinds: (kinds: Set<PointKind>) => void;
   readonly onRange: (end: 'from' | 'to', value: number) => void;
 }
 
@@ -286,26 +233,12 @@ export function filterBar(
   const offered = choices(model);
   const authorChoice = choiceSelect('Author', 'All authors', offered.authors, filters.author, on.onAuthor);
   const tableChoice = choiceSelect('Table', 'All tables', offered.tables, filters.table, on.onTable);
-  const kindsBox = el('div', 'kinds');
-  kindsBox.append(
-    ...POINT_KINDS.map((kind) =>
-      kindCheckbox(SNAPSHOT_REPORT_KIND_LABEL[kind], kind, filters.kinds, on.onKinds),
-    ),
-  );
   const element = toolbar(
     authorChoice.element,
     tableChoice.element,
     searchBox('Message', filters.text, on.onText),
-    kindsBox,
-    ...(['from', 'to'] as const).map((end) =>
-      rangeField(
-        end === 'from' ? 'From' : 'To',
-        first,
-        last,
-        () => filters.rangeAt(end),
-        (next) => on.onRange(end, next),
-      ),
-    ),
+    kindBoxes(POINT_KINDS, KIND_LABEL, filters.kinds, on.onKinds),
+    ...rangeFields(first, last, filters.rangeAt, on.onRange),
   );
   return { element, showTable: tableChoice.show };
 }

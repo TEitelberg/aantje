@@ -66,7 +66,7 @@ A value that cannot be read as its type is skipped and does not fail the table.
 - **Growth.** At most 500 points; a longer history is merged into runs, each point being the state after the run's last snapshot. A compaction removes the files it replaces from the catalog, so the history before it shows the files as they are still in the catalog, not as they were. After `expire_snapshots` a point's time is missing.
 - **Inlined rows** are in no file and no statistics; a table with only inlined rows shows `0` files and `0` rows.
 - **Ranges** of an older snapshot are wider than the truth when a file's range was not exact (`min_is_exact`).
-- **Specification 1.0** works: the queries use no column that 1.1 added. A catalog lacking a statistics table shows columns without null share and range, and no partitions, instead of failing.
+- **Specification 1.0** works: the queries use no column that 1.1 added. A catalog lacking a statistics table, or whose statistics cannot be read, shows columns without null share and range, and no partitions, instead of failing; a note under the columns or the partitions says that they could not be read.
 
 ## The colours follow the VS Code theme
 
@@ -80,20 +80,20 @@ ECharts draws on a canvas and needs colours as text, so the page reads the theme
 
 ## How it is built
 
-| File                                                 | Job                                                                                                                                                    |
-| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `src/catalog/statistics.ts`                          | Pure reader helpers: evenness, histogram bins, growth cumulating and merging, type order, the caps.                                                    |
-| `src/stats/model.ts`                                 | `StatisticsData` and the page's texts and figures. Pure.                                                                                               |
-| `src/stats/chart-options.ts`                         | ECharts options of the three charts, with tooltips as HTML without `style` attributes. Pure.                                                           |
-| `src/shell/palette.ts`                               | `modeOf`, `readPalette`, `chartTheme`. Pure.                                                                                                           |
-| `src/shell/charts.ts`                                | The only module that imports ECharts (core, the chart and component types in use, Canvas renderer). `drawChart` returns `resize`, `update`, `dispose`. |
-| `src/stats/page.ts`, `render.ts`                     | The browser side: tab state, charts, DOM builders of the tabs.                                                                                         |
-| `src/stats/kind.ts`, `protocol.ts`, `style.ts`       | The `ReportKind`, the message guard `isStatisticsMessage`, the stylesheet.                                                                             |
-| `src/stats/markdown.ts`, `target.ts`                 | `statisticsMarkdown`; which node is a target, the panel key and title.                                                                                 |
-| `src/stats/commands.vscode.ts`                       | `registerStatisticsCommand`: the command with progress and Cancel.                                                                                     |
-| `src/shell/panels.ts`, `host.vscode.ts`, `client.ts` | `ReportPanels` (one panel per key, the `ready` handshake) and the browser entry of all reports, see [Reports](reports.md).                             |
+| File                                                     | Job                                                                                                                                                             |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/catalog/statistics.ts`                              | Pure reader helpers: evenness, histogram bins, growth cumulating and merging, type order, the caps.                                                             |
+| `src/stats/model.ts`                                     | `StatisticsData` and the page's texts and figures. Pure.                                                                                                        |
+| `src/stats/chart-options.ts`, `src/shell/file-growth.ts` | ECharts options of the three charts, with tooltips as HTML without `style` attributes; the growth chart and its notes are shared with the Storage report. Pure. |
+| `src/shell/palette.ts`                                   | `modeOf`, `readPalette`, `chartTheme`. Pure.                                                                                                                    |
+| `src/shell/charts.ts`                                    | The report module that imports ECharts (core, the chart and component types in use, Canvas renderer). `drawChart` gives `resize`, `update`, `dispose`.          |
+| `src/stats/page.ts`, `render.ts`                         | The browser side: tab state, charts (through `src/shell/chart-set.ts`), DOM builders of the tabs.                                                               |
+| `src/stats/kind.ts`, `protocol.ts`, `style.ts`           | The `ReportKind`, the message guard `isStatisticsMessage`, the stylesheet.                                                                                      |
+| `src/stats/markdown.ts`, `target.ts`                     | `statisticsMarkdown`; which node is a target, the panel key and title.                                                                                          |
+| `src/stats/commands.vscode.ts`                           | `registerStatisticsCommand`: the command with progress and Cancel.                                                                                              |
+| `src/shell/panels.ts`, `host.vscode.ts`, `client.ts`     | `ReportPanels` (one panel per key, the `ready` handshake) and the browser entry of all reports, see [Reports](reports.md).                                      |
 
-`esbuild.mjs` builds `dist/report-client.js` as a browser bundle (about 650 kB minified, 220 kB gzipped; ECharts core alone is 490 kB). Only the chart types and components in use are registered. The bundle also serves the [Snapshot report](snapshot-report.md). `scripts/notices.mjs` reads its source map, so `THIRD-PARTY-NOTICES.md` carries the licences of ECharts and zrender.
+`esbuild.mjs` builds `dist/report-client.js` as a browser bundle (about 650 kB minified, 220 kB gzipped; ECharts core alone is 490 kB). Only the chart types and components in use are registered. The bundle also serves the [Snapshot report](snapshot-report.md). The results page of the SQL editor draws its plans and profiles with ECharts from a bundle of its own, `dist/plan-client.js` (see [Architecture](architecture.md#the-three-bundles)). `scripts/notices.mjs` reads its source map, so `THIRD-PARTY-NOTICES.md` carries the licences of ECharts and zrender.
 
 ## Security
 

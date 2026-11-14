@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
-import type { AzureAccess } from '../data/types';
+import type { StorageTokenSource } from '../storage/resolve';
 import { AantjeError } from '../errors';
 import { ARM_SCOPE, POSTGRES_SCOPE, STORAGE_SCOPE } from './arm';
+import { requireUserName } from './jwt';
 
 /** Tokens of the Microsoft account that VS Code is signed in with; the editor keeps and renews them, aantje stores none. */
 export interface AzureAuth {
@@ -10,8 +11,10 @@ export interface AzureAuth {
   armToken(): Promise<string>;
   /** The password of an Entra login on the PostgreSQL server; it lives about an hour. `silent` never asks the user. */
   postgresToken(tenantId: string | undefined, silent?: boolean): Promise<string>;
+  /** The user principal name of the signed-in Microsoft account: the login of an Entra connection. Signs in if needed. */
+  entraUser(tenantId: string | undefined): Promise<string>;
   /** Storage access for a lake; the token is fetched now, `refresh` gets another one without asking the user. */
-  storageAccess(accountName: string, tenantId: string | undefined, silent?: boolean): Promise<AzureAccess>;
+  storageAccess: StorageTokenSource['storageAccess'];
 }
 
 export function createAzureAuth(registerSecret: (value: string) => void): AzureAuth {
@@ -39,8 +42,8 @@ export function createAzureAuth(registerSecret: (value: string) => void): AzureA
     },
     armToken: () => token(ARM_SCOPE, tenant, false),
     postgresToken: (tenantId, silent = false) => token(POSTGRES_SCOPE, tenantId, silent),
-    storageAccess: async (accountName, tenantId, silent = false) => ({
-      accountName,
+    entraUser: async (tenantId) => requireUserName(await token(POSTGRES_SCOPE, tenantId, false)),
+    storageAccess: async (_accountName, tenantId, silent = false) => ({
       accessToken: await token(STORAGE_SCOPE, tenantId, silent),
       refresh: () => token(STORAGE_SCOPE, tenantId, true),
     }),

@@ -1,5 +1,12 @@
 import { AantjeError, isAantjeError } from '../errors';
 import { isObject } from '../guards';
+import {
+  parseStorage,
+  storageSettingEntry,
+  validateStorageAccountName,
+  validateTenantId,
+} from '../storage/config';
+import type { AzureAccountRef, StorageConfig } from '../storage/config';
 
 export type AzureAuthMode = 'password' | 'entra';
 
@@ -28,12 +35,16 @@ export interface PostgresProfile extends ProfileBase {
   readonly azureTenant?: string;
   /** How an Azure lake signs in to PostgreSQL: `entra` uses a token of the Microsoft account as the password, none stored. Absent means a password. */
   readonly azureAuth?: AzureAuthMode;
+  /** Where the data files live and how to sign in there. Never together with `azureAccount`. */
+  readonly storage?: StorageConfig;
 }
 
 /** SQLite or DuckDB database file holding the `ducklake_*` tables. */
 export interface FileProfile extends ProfileBase {
   readonly kind: 'sqlite' | 'duckdb';
   readonly path: string;
+  /** Where the data files live and how to sign in there. */
+  readonly storage?: StorageConfig;
 }
 
 /**
@@ -58,13 +69,49 @@ export function usesSecret(profile: ConnectionProfile): profile is PostgresProfi
   return profile.kind === 'postgres' || profile.kind === 'quack';
 }
 
-/** Whether the profile is an Azure DuckLake, created or imported: a PostgreSQL catalog whose data lies in a storage account. */
+/** A PostgreSQL profile that signs in with an Entra token instead of a password. */
+export type EntraProfile = PostgresProfile & { readonly azureAuth: 'entra' };
+
+/**
+ * The storage of a profile: its `storage`, or for the legacy `azureAccount` the Azure storage with the Entra sign-in it
+ * always meant. The profile is never rewritten. Undefined for a profile that uses the global `aantje.s3.*` settings
+ * and for Quack, whose server reads the data.
+ */
+export function effectiveStorage(profile: ConnectionProfile): StorageConfig | undefined {
+  if (profile.kind === 'quack') {
+    return undefined;
+  }
+  if (profile.storage !== undefined) {
+    return profile.storage;
+  }
+  if (profile.kind === 'postgres' && profile.azureAccount !== undefined) {
+    return {
+      kind: 'azure',
+      account: profile.azureAccount,
+      signIn: 'entra',
+      ...(profile.azureTenant === undefined ? {} : { tenant: profile.azureTenant }),
+    };
+  }
+  return undefined;
+}
+
+/** Account and tenant of an Azure lake, from `storage` or from the legacy fields; undefined for any other profile. */
+export function azureAccountOf(profile: ConnectionProfile): AzureAccountRef | undefined {
+  const storage = effectiveStorage(profile);
+  if (storage?.kind !== 'azure') {
+    return undefined;
+  }
+  const tenant = storage.tenant ?? (profile.kind === 'postgres' ? profile.azureTenant : undefined);
+  return { account: storage.account, ...(tenant === undefined ? {} : { tenant }) };
+}
+
+/** Whether the profile is an Azure DuckLake: a PostgreSQL catalog whose data lies in a storage account (either form). */
 export function isAzureLake(profile: ConnectionProfile): boolean {
-  return profile.kind === 'postgres' && profile.azureAccount !== undefined;
+  return profile.kind === 'postgres' && effectiveStorage(profile)?.kind === 'azure';
 }
 
 /** Whether the profile signs in to PostgreSQL with an Entra token instead of a password; it then owns no secret. */
-export function signsInWithEntra(profile: ConnectionProfile): boolean {
+export function signsInWithEntra(profile: ConnectionProfile): profile is EntraProfile {
   return profile.kind === 'postgres' && profile.azureAuth === 'entra';
 }
 
@@ -222,8 +269,9 @@ export function toSettingEntry(profile: ConnectionProfile): Record<string, unkno
       ...(profile.fingerprint === undefined ? {} : { fingerprint: profile.fingerprint }),
     };
   }
+  const storage = profile.storage === undefined ? {} : { storage: storageSettingEntry(profile.storage) };
   if (profile.kind !== 'postgres') {
-    return { id, name, kind, path: profile.path, ...readOnly };
+    return { id, name, kind, path: profile.path, ...storage, ...readOnly };
   }
   return {
     id,
@@ -237,6 +285,7 @@ export function toSettingEntry(profile: ConnectionProfile): Record<string, unkno
     ...(profile.azureAccount === undefined ? {} : { azureAccount: profile.azureAccount }),
     ...(profile.azureTenant === undefined ? {} : { azureTenant: profile.azureTenant }),
     ...(profile.azureAuth === undefined ? {} : { azureAuth: profile.azureAuth }),
+    ...storage,
     ssl: profile.ssl ?? false,
     ...readOnly,
   };
@@ -280,19 +329,11 @@ export function validatePort(value: string): string | undefined {
 
 /** An optional storage account name: empty, or the 3 to 24 lowercase letters and digits that Azure allows. */
 export function validateStorageAccount(value: string): string | undefined {
-  const name = value.trim();
-  return name === '' || /^[a-z0-9]{3,24}$/.test(name)
-    ? undefined
-    : 'A storage account name has 3 to 24 lowercase letters and digits.';
+  return value.trim() === '' ? undefined : validateStorageAccountName(value);
 }
 
 /** An optional Entra tenant: empty, or its ID. */
-export function validateTenant(value: string): string | undefined {
-  const tenant = value.trim();
-  return tenant === '' || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tenant)
-    ? undefined
-    : 'Enter the directory (tenant) ID, a GUID, or leave it empty.';
-}
+export const validateTenant = validateTenantId;
 
 export function validatePath(value: string): string | undefined {
   const path = value.trim();
@@ -331,13 +372,23 @@ function parseEntry(
 function parseDetails(entry: Record<string, unknown>): Details {
   const { kind } = entry;
   if (kind === 'sqlite' || kind === 'duckdb') {
-    return { kind, path: text(entry, 'path', validatePath) };
+    return {
+      kind,
+      path: text(entry, 'path', validatePath),
+      ...(entry.storage === undefined ? {} : { storage: parseStorage(entry.storage) }),
+    };
   }
   if (kind === 'quack') {
+    if (entry.storage !== undefined) {
+      throw invalid('"storage" does not apply to "quack": the Quack server reads the data files.');
+    }
     return parseQuack(entry);
   }
   if (kind !== 'postgres') {
     throw invalid('"kind" must be "postgres", "sqlite", "duckdb" or "quack".');
+  }
+  if (entry.storage !== undefined && entry.azureAccount !== undefined) {
+    throw invalid('"storage" replaces "azureAccount": use one of them.');
   }
   const host = text(entry, 'host', validateHost);
   return {
@@ -357,6 +408,7 @@ function parseDetails(entry: Record<string, unknown>): Details {
       ? {}
       : { azureTenant: text(entry, 'azureTenant', validateRequired('Azure tenant')) }),
     ...(entry.azureAuth === undefined ? {} : { azureAuth: parseAzureAuth(entry.azureAuth) }),
+    ...(entry.storage === undefined ? {} : { storage: parseStorage(entry.storage) }),
   };
 }
 

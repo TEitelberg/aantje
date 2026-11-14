@@ -1,20 +1,22 @@
-import { performSnapshotReportAction as performOfReport } from '../snapshot-report/execute';
-import type { ReportPort } from '../shell/report-port';
-import type { ActivityPlan } from './actions';
 import { connectionClosed } from '../messages';
+import type { ReportPort } from '../shell/report-port';
+import { performSnapshotAction } from '../snapshot-changes/execute';
+import type { ActivityPlan } from './actions';
 
-/** Carries out a plan of the Activity report; most actions are the snapshot report's. */
+const GOAL = 'use the activity report';
+
+/** Carries out a plan of the Activity report; the actions on a snapshot are those of the reports of snapshots. */
 export async function performActivityAction(
   plan: ActivityPlan,
   port: ReportPort,
   showSnapshotReport: () => Promise<void>,
 ): Promise<void> {
+  if (plan.action !== 'showSnapshotReport') {
+    await performSnapshotAction(plan, port, GOAL);
+    return;
+  }
   if (!port.reader()) {
-    throw connectionClosed('use the activity report');
+    throw connectionClosed(GOAL);
   }
-  if (plan.action === 'showSnapshotReport') {
-    await showSnapshotReport();
-  } else {
-    await performOfReport(plan, port);
-  }
+  await showSnapshotReport();
 }

@@ -39,9 +39,20 @@ export function timeoutMsOf(seconds: unknown): number {
 export const DEFAULT_MAX_ROWS = 10_000;
 const MAX_MAX_ROWS = 1_000_000;
 
+/**
+ * A setting of a whole number: a number of at least `min` is rounded down and kept to `max`, as the manifest's minimum
+ * and maximum only hint; anything else gets the default.
+ */
+export function wholeNumberOf(
+  value: unknown,
+  limits: { readonly min: number; readonly max: number; readonly fallback: number },
+): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= limits.min
+    ? Math.min(Math.floor(value), limits.max)
+    : limits.fallback;
+}
+
 /** The setting `aantje.sql.maxRows`: a whole number from 1 to 1 000 000, else the default. */
 export function maxRowsOf(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 1
-    ? Math.min(Math.floor(value), MAX_MAX_ROWS)
-    : DEFAULT_MAX_ROWS;
+  return wholeNumberOf(value, { min: 1, max: MAX_MAX_ROWS, fallback: DEFAULT_MAX_ROWS });
 }

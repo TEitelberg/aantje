@@ -1,11 +1,11 @@
 // The completion items of DuckLake: calls with the lake filled in, named arguments, statement snippets and snapshots.
 import type { SnapshotInfo } from '../catalog/model';
-import { quoteLiteral } from '../catalog/ddl';
+import { quoteLiteral, sameIdentifier } from '../catalog/ddl';
 import { snapshotDescription, snapshotTooltip } from '../tree/format';
-import type { Env } from './completion';
+import type { Env } from './completion-env';
 import type { CursorContext } from './context';
 import { functionDocumentation } from './help';
-import { same } from './lookup';
+
 import type { FunctionInfo, Parameter } from './vocabulary';
 
 // Newest snapshots first.
@@ -43,7 +43,7 @@ export function namedArgumentDrafts({ drafts, context, vocabulary, lookup, call 
   const fn =
     head === undefined
       ? vocabulary.functions.get(call.name.toLowerCase())
-      : call.qualifier.length === 1 && same(head, lookup.lake)
+      : call.qualifier.length === 1 && sameIdentifier(head, lookup.lake)
         ? vocabulary.lakeFunctions.get(call.name.toLowerCase())
         : undefined;
   if (!fn) return;

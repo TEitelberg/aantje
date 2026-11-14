@@ -1,10 +1,11 @@
-import { lower } from '../dependencies/references';
+import { foldIdentifier } from '../catalog/ddl';
 import { isObject } from '../guards';
-import { syntaxErrorsOf } from './session';
-import type { Diagnostic } from './session';
+import { syntaxErrorsOf } from './syntax';
+import type { Diagnostic } from './syntax';
 import { isWord, keywordOf, unquote } from './tokens';
 import type { SqlToken } from './tokens';
-import { statementSpans } from './script';
+import { spanRange, statementSpans } from './script';
+import { isSerialized } from './statement-kind';
 import type { ParsedQuery } from './unknown-names';
 
 /** What the check while typing learns from parsing a text. */
@@ -27,9 +28,6 @@ export interface Parser {
 }
 
 const NOTHING: ReadonlySet<string> = new Set();
-
-// The first words of a statement that `json_serialize_sql` may serialize.
-const QUERY_STARTS = new Set(['SELECT', 'WITH', 'FROM', 'VALUES', 'TABLE', 'DESCRIBE', 'SUMMARIZE', 'SHOW']);
 
 /**
  * Parses the text once. DuckDB serializes nothing of a text that holds a statement other than a query, so the queries
@@ -54,7 +52,7 @@ async function parseEach(parser: Parser, text: string): Promise<ParsedText> {
   let qualifiedOnly = false;
   for (const statement of statementsIn(await parser.tokens(text))) {
     const sql = text.slice(statement.start, statement.end);
-    const query = QUERY_STARTS.has(statement.keyword);
+    const query = isSerialized(statement.keyword);
     const [tree, ...more] = (query ? statementsOf(documentOf(await parser.serialize(sql))) : undefined) ?? [];
     if (tree !== undefined && more.length === 0) {
       queries.push({ statement: tree, text: sql, offset: statement.start });
@@ -95,10 +93,9 @@ function statementsIn(tokens: readonly SqlToken[]): Statement[] {
   return statementSpans(tokens).map(({ tokens: span }) => {
     const words = span.filter(isWord);
     return {
-      start: span[0].start,
-      end: (span.at(-1) ?? span[0]).end,
+      ...spanRange(span),
       keyword: keywordOf(words[0]) ?? '',
-      words: words.map((token) => lower(unquote(token.word))),
+      words: words.map((token) => foldIdentifier(unquote(token.word))),
     };
   });
 }

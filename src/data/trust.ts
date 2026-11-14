@@ -8,7 +8,7 @@ export interface MementoPort {
 
 /**
  * Remembers which connections the user trusts to bind views (catalog SQL run with external access). Trust is tied to
- * the target: editing host, port, database, user, schema, TLS or path asks again.
+ * the target: editing host, port, database, user, schema, TLS, the pinned certificate or the path asks again.
  */
 export class ViewTrustStore {
   private readonly listeners = new Set<(profile: ConnectionProfile) => void>();
@@ -84,7 +84,14 @@ export function trustKey(profile: ConnectionProfile): string {
           profile.ssl ?? false,
         ]
       : profile.kind === 'quack'
-        ? [profile.kind, profile.host, profile.port]
+        ? // A pin counts only with TLS, as for the attach.
+          [
+            profile.kind,
+            profile.host,
+            profile.port,
+            profile.ssl,
+            profile.ssl ? (profile.fingerprint ?? null) : null,
+          ]
         : [profile.kind, profile.path];
   return `${idPart(profile)} ${JSON.stringify(target)}`;
 }

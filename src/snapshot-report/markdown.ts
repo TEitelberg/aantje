@@ -1,17 +1,17 @@
-import { capRows, code, markdownTable, reportTitle } from '../markdown';
-import { tableLabel, withoutUtc } from '../shell/model';
+import { capRows, code, kindsText, markdownTable, reportTitle } from '../markdown';
+import { LIST_ROWS, tableLabel, withoutUtc } from '../shell/model';
+import { boundsOf, fitRange } from '../shell/range-state';
 import {
-  buildModel,
-  snapshotReportDetailOf,
-  snapshotReportOlderNote,
-  omittedLanesNote,
+  KIND_LABEL,
   OTHER_LABEL,
   OTHER_LANE,
   POINT_KINDS,
-  snapshotReportViewOf,
-  SNAPSHOT_REPORT_KIND_LABEL,
-} from './model';
-import type { PointKind, SnapshotReportData } from './model';
+  buildModel,
+  detailOf,
+} from '../snapshot-changes/model';
+import type { PointKind } from '../snapshot-changes/model';
+import { omittedLanesNote, snapshotReportOlderNote, snapshotReportViewOf } from './model';
+import type { SnapshotReportData } from './model';
 
 /** The page's choices; the extension fits them to the data it holds. */
 export interface SnapshotReportMarkdownView {
@@ -20,21 +20,16 @@ export interface SnapshotReportMarkdownView {
   readonly range: { readonly from: number; readonly to: number };
 }
 
-const SNAPSHOT_ROWS = 200;
-
 /** The report as Markdown; without a view, what the page shows on opening. */
 export function snapshotReportMarkdown(data: SnapshotReportData, view?: SnapshotReportMarkdownView): string {
   const model = buildModel(data.snapshots, data.more);
-  const first = model.snapshots[0]?.id ?? 0;
-  const last = model.snapshots.at(-1)?.id ?? 0;
-  const fit = (value: number): number => Math.min(Math.max(value, first), last);
   const known = new Set(model.lanes.map((lane) => lane.key));
   const lanes = (view?.lanes ?? []).filter((key) => known.has(key));
   const kinds = view ? POINT_KINDS.filter((kind) => view.kinds.includes(kind)) : POINT_KINDS;
-  const range = view ? { from: fit(view.range.from), to: fit(view.range.to) } : { from: first, to: last };
+  const range = fitRange(view?.range, boundsOf(model.snapshots));
   const shown = snapshotReportViewOf(model, { lanes, kinds, range });
   const rows = shown.columns.toReversed().flatMap(({ id }) => {
-    const detail = snapshotReportDetailOf(model, data.latest, id);
+    const detail = detailOf(model, data.latest, id);
     return detail
       ? [
           [
@@ -50,7 +45,7 @@ export function snapshotReportMarkdown(data: SnapshotReportData, view?: Snapshot
         ]
       : [];
   });
-  const { shown: listed, omitted } = capRows(rows, SNAPSHOT_ROWS);
+  const { shown: listed, omitted } = capRows(rows, LIST_ROWS);
   const names = lanes.map((key) =>
     key === OTHER_LANE
       ? OTHER_LABEL
@@ -59,12 +54,7 @@ export function snapshotReportMarkdown(data: SnapshotReportData, view?: Snapshot
   const summary = [
     ['Snapshots read', `${data.snapshots.length} (latest in the catalog @${data.latest})`],
     ['Tables', names.length === 0 ? 'all' : names.join(', ')],
-    [
-      'Kinds of change',
-      kinds.length === POINT_KINDS.length
-        ? 'all'
-        : kinds.map((kind) => SNAPSHOT_REPORT_KIND_LABEL[kind]).join(', ') || 'none',
-    ],
+    ['Kinds of change', kindsText(kinds, POINT_KINDS, KIND_LABEL)],
     ['Range', model.snapshots.length === 0 ? 'none' : `@${range.from} to @${range.to}`],
     ['Snapshots listed', `${rows.length} of ${data.snapshots.length}`],
   ];

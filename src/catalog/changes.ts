@@ -61,6 +61,27 @@ const OBJECT_TEXT: Readonly<Record<ChangeObject, string>> = {
   snapshot: 'snapshot',
 };
 
+// The actions that only move files or snapshots; a Record, so that a new action has to be sorted in.
+const MAINTENANCE: Readonly<Record<ChangeAction | 'renamed', boolean>> = {
+  created: false,
+  dropped: false,
+  altered: false,
+  renamed: false,
+  inserted: false,
+  deleted: false,
+  inlined_insert: false,
+  inlined_delete: false,
+  flushed_inlined: true,
+  compacted: true,
+  merged: true,
+  rewritten: true,
+  expired: true,
+  unknown: false,
+};
+
+/** Whether the action is maintenance: it flushes, compacts, merges or rewrites files, or expires a snapshot. */
+export const isMaintenanceAction = (action: ChangeAction | 'renamed'): boolean => MAINTENANCE[action];
+
 /** What a snapshot did to one object, without its name: `Inserted into table`. */
 export function describeAction(action: ChangeAction | 'renamed', object: ChangeObject): string {
   return `${ACTION_TEXT[action]} ${OBJECT_TEXT[object]}`;

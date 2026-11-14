@@ -5,9 +5,11 @@ import {
   MISSING_OBJECT,
   missingLocalFileText,
   missingObjectText,
-  quackProblem,
 } from '../data/errors';
+import { quackProblem } from '../duckdb/quack';
 import type { ErrorCode } from '../errors';
+import { SIDE, refusedText, storeProblemOf } from '../storage/diagnose';
+import type { StorageContext } from '../storage/diagnose';
 
 export type SessionMode = 'read-write' | 'read-only';
 
@@ -16,6 +18,8 @@ export interface SqlErrorContext {
   readonly kind: ConnectionKind;
   /** The secret-free `data_path` of the catalog, when known; it tells catalog files from other files. */
   readonly dataPath?: string;
+  /** The storage of the connection, which words where to fix a refused sign-in; the machine's S3 settings if absent. */
+  readonly storage?: StorageContext;
 }
 
 interface TranslatedError {
@@ -123,12 +127,6 @@ const RULES: readonly Rule[] = [
     text: (match, context) =>
       `Cannot read a data file: ${missingLocalFileText(match, context)}${isCatalogFile(match, context.dataPath) ? ' If the statement reads an older snapshot (AT (VERSION => ...)), try a newer one.' : ''}`,
   },
-  {
-    pattern: /HTTP (?:GET|PUT|POST|HEAD|DELETE) error[^\n]*\(HTTP 403/,
-    code: 'AUTH_FAILED',
-    text: () =>
-      'The object store refused access to the data path (HTTP 403). Check the S3 credentials and their permissions on the bucket.',
-  },
 ];
 
 /** The friendly text and code for a failed statement; `raw` must be free of secrets, unknown messages shrink to line one. */
@@ -152,6 +150,11 @@ export function translateSqlError(raw: string, context: SqlErrorContext): Transl
     if (match) {
       return { code: rule.code, message: rule.text(match, context) };
     }
+  }
+  // The storage refused the sign-in (S3 keys, Azure token, SAS or role): where to fix it depends on the storage.
+  const problem = storeProblemOf(raw, context.storage?.kind);
+  if (problem !== undefined && SIDE[problem] === 'sign-in') {
+    return { code: 'AUTH_FAILED', message: refusedText(context.storage ?? { perConnection: false }) };
   }
   return { code: 'QUERY_FAILED', message: raw.split(/\r?\n/)[0] ?? raw };
 }

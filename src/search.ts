@@ -1,33 +1,69 @@
-import type { CatalogEntry } from './catalog/model';
-import { withoutIcons } from './messages';
+import type { CatalogColumnEntry, CatalogEntry } from './catalog/model';
+import { pickerLabel } from './messages';
 import { collator } from './order';
-import { connectionNodeId, folderId, schemaNodeId, tableNodeId, viewNodeId } from './tree/nodes';
+import {
+  columnNodeId,
+  connectionNodeId,
+  folderId,
+  schemaNodeId,
+  tableNodeId,
+  viewNodeId,
+} from './tree/nodes';
+
+/** A column or nested field with the table that holds it. */
+export interface ColumnHit {
+  readonly kind: 'column';
+  readonly table: CatalogEntry;
+  readonly column: CatalogColumnEntry;
+}
+
+/** What a row of the search stands for. */
+export type SearchHit = CatalogEntry | ColumnHit;
 
 interface SearchPickItem {
   readonly label: string;
-  readonly description: CatalogEntry['kind'];
-  readonly value: CatalogEntry;
+  readonly description: string;
+  readonly value: SearchHit;
 }
 
-/** Rows for the "Search Catalog" picker, by schema then name in tree order; VS Code filters. */
-export function searchPickItems(entries: readonly CatalogEntry[]): SearchPickItem[] {
+/**
+ * Rows for the "Search Catalog" picker: tables and views by schema then name in tree order, each table followed by
+ * its columns (`columns` by table id) in the order of the tree; VS Code filters.
+ */
+export function searchPickItems(
+  entries: readonly CatalogEntry[],
+  columns: ReadonlyMap<number, readonly CatalogColumnEntry[]>,
+): SearchPickItem[] {
   return entries
     .toSorted((a, b) => collator.compare(a.schemaName, b.schemaName) || collator.compare(a.name, b.name))
-    .map((entry) => ({
-      label: withoutIcons(`${entry.schemaName}.${entry.name}`),
-      description: entry.kind,
-      value: entry,
-    }));
+    .flatMap((entry) => {
+      const name = `${entry.schemaName}.${entry.name}`;
+      const fields = entry.kind === 'table' ? (columns.get(entry.id) ?? []) : [];
+      return [
+        { label: pickerLabel(name), description: entry.kind, value: entry },
+        ...fields.map((column) => ({
+          label: pickerLabel([name, ...column.path].join('.')),
+          description: pickerLabel(`column · ${column.type}`),
+          value: { kind: 'column' as const, table: entry, column },
+        })),
+      ];
+    });
 }
 
-/** Id of `entry`'s tree node below the Tables or Views folder (built in `tree/nodes.ts`). */
-export function treeNodeId(connectionId: string, entry: CatalogEntry): string {
-  const folder = folderNodeId(connectionId, entry);
-  return entry.kind === 'table' ? tableNodeId(folder, entry.id) : viewNodeId(folder, entry.id);
-}
-
-/** Id of the Tables or Views folder holding `entry`'s node. */
-export function folderNodeId(connectionId: string, entry: CatalogEntry): string {
+/** Ids of the nodes from the schema down to the hit's node, each a child of the one before (built in `tree/nodes.ts`). */
+export function treeNodePath(connectionId: string, hit: SearchHit): string[] {
+  const entry = hit.kind === 'column' ? hit.table : hit;
   const schema = schemaNodeId(connectionNodeId(connectionId), entry.schemaId);
-  return folderId(schema, entry.kind === 'table' ? 'tables' : 'views');
+  const folder = folderId(schema, entry.kind === 'table' ? 'tables' : 'views');
+  const node = entry.kind === 'table' ? tableNodeId(folder, entry.id) : viewNodeId(folder, entry.id);
+  const path = [schema, folder, node];
+  if (hit.kind === 'column') {
+    let parent = folderId(node, 'columns');
+    path.push(parent);
+    for (const id of hit.column.ids) {
+      parent = columnNodeId(parent, id);
+      path.push(parent);
+    }
+  }
+  return path;
 }

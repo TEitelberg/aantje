@@ -1,4 +1,9 @@
-import { CLEANUP_OVERDUE_DAYS, SMALL_FILE_BYTES } from '../catalog/thresholds';
+import {
+  CLEANUP_OVERDUE_DAYS,
+  LARGE_INLINED_ROWS,
+  MANY_SNAPSHOTS,
+  SMALL_FILE_BYTES,
+} from '../catalog/thresholds';
 import type {
   ConsistencyCheck,
   ConsistencyProblem,
@@ -11,16 +16,11 @@ import type {
 import { groupedPlural } from '../shell/numbers';
 import { scheduledLine, scheduledNote } from '../shell/scheduled-text';
 import { autoCompactFindings } from './auto-compact';
-import { ago, finding, listed, META, qualified, tableScope } from './finding';
+import { ago, capFindings, finding, listed, META, qualified, tableScope } from './finding';
 import type { TableNames } from './finding';
+import { maintenanceFix } from './fix';
 import { CHECKS } from './model';
 import type { CheckId, FindingScope, HealthFinding, HealthScope } from './model';
-
-// More snapshots than this gets a hint to expire some.
-const MANY_SNAPSHOTS = 10_000;
-
-/** More inlined rows than this gets a hint to flush them to Parquet. */
-export const LARGE_INLINED_ROWS = 10_000;
 
 // At least this many small files (`SMALL_FILES` in `catalog/thresholds.ts`) gets a warning.
 const SMALL_FILES_WARNING = 1_000;
@@ -380,12 +380,16 @@ function smallFileFindings(facts: HealthCatalogFacts): {
   truncated: boolean;
 } {
   const tables = facts.maintenance?.smallFiles ?? [];
-  const shown = tables.slice(0, facts.limit);
+  // The catalog is asked for one table more than reported; getting it means the list was cut.
+  const truncated = tables.length > facts.limit;
+  const { shown, omitted } = capFindings(tables, facts.limit, truncated);
   return {
-    findings: shown.map(({ tableId, files, small }) => {
+    findings: shown.map(({ tableId, files, small, deleted }) => {
       const scope = tableScope(tableId, facts.tables);
       const heavy = small >= SMALL_FILES_WARNING;
       return finding('catalog.small-files', {
+        // The script of the menu: the small files with deleted rows are rewritten before the merge.
+        ...maintenanceFix('catalog.small-files', scope, deleted),
         severity: heavy ? 'warning' : 'info',
         scope,
         object: `table:${tableId}`,
@@ -398,15 +402,15 @@ function smallFileFindings(facts: HealthCatalogFacts): {
         inspectSql: `SELECT count(*) AS files, count(*) FILTER (WHERE file_size_bytes < ${SMALL_FILE_BYTES}) AS small FROM ${META}.ducklake_data_file WHERE table_id = ${tableId} AND end_snapshot IS NULL;`,
       });
     }),
-    omitted: tables.length - shown.length,
-    // The catalog is asked for one table more than reported; getting it means the list was cut.
-    truncated: (facts.maintenance?.smallFiles.length ?? 0) > facts.limit,
+    omitted,
+    truncated,
   };
 }
 
 function largeInlinedFindings(facts: HealthCatalogFacts): { findings: HealthFinding[]; omitted: number } {
   const tables = (facts.maintenance?.inlined ?? []).filter(({ rows }) => rows > LARGE_INLINED_ROWS);
-  const shown = tables.slice(0, facts.limit);
+  // The catalog said that it has more inlined tables than were read: the rest of the large ones is unknown.
+  const { shown, omitted } = capFindings(tables, facts.limit, facts.maintenance?.inlinedMore === true);
   return {
     findings: shown.map(({ tableId, rows }) => {
       const scope = tableScope(tableId, facts.tables);
@@ -422,6 +426,6 @@ function largeInlinedFindings(facts: HealthCatalogFacts): { findings: HealthFind
         inspectSql: `SELECT * FROM ${META}.ducklake_inlined_data_tables WHERE table_id = ${tableId};`,
       });
     }),
-    omitted: tables.length - shown.length,
+    omitted,
   };
 }

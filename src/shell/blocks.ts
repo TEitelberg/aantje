@@ -1,6 +1,7 @@
 /// <reference lib="dom" />
 // Building blocks of the report pages: they only build DOM and wire events.
 import { el } from './dom';
+import { whoText } from './model';
 import type { Card, Severity } from './model';
 import type { PageContext } from './page';
 
@@ -8,6 +9,13 @@ export const note = (text: string, severity: Severity = 'ok'): HTMLElement =>
   el('p', severity === 'ok' ? 'note' : 'note warning', text);
 
 export const empty = (text: string): HTMLElement => el('p', 'empty', text);
+
+/** A section that is rebuilt when the selection changes; it takes the focus that a button in it loses. */
+export function focusPane(className: string): HTMLElement {
+  const pane = el('section', className);
+  pane.tabIndex = -1;
+  return pane;
+}
 
 /** A secondary button; `description` is the hover text and the screen reader suffix after the label. */
 export function actionButton(label: string, onClick: () => void, description?: string): HTMLButtonElement {
@@ -18,17 +26,6 @@ export function actionButton(label: string, onClick: () => void, description?: s
   }
   button.addEventListener('click', onClick);
   return button;
-}
-
-/** The element a chart is drawn into; `label` is the screen reader text. */
-export function chartFrame(label: string, height?: number): HTMLElement {
-  const box = el('div', 'chart');
-  box.setAttribute('role', 'img');
-  box.setAttribute('aria-label', label);
-  if (height !== undefined) {
-    box.style.height = `${height}px`;
-  }
-  return box;
 }
 
 /** A select with a choice for everything plus one per entry; `current` is undefined for everything. */
@@ -210,27 +207,44 @@ export function searchBox(label: string, value: string, onInput: (text: string) 
   return wrapper;
 }
 
-/** A checkbox that adds or removes its kind in `chosen`, then runs `changed`. */
-export function kindCheckbox<Kind extends string>(
-  label: string,
-  kind: Kind,
-  chosen: Set<Kind>,
-  changed: () => void,
-): HTMLLabelElement {
-  const wrapper = el('label', 'check');
+/** The set with the members added (`on`) or removed; the set itself stays as it was. */
+export function withMembers<T>(set: ReadonlySet<T>, members: readonly T[], on: boolean): Set<T> {
+  const next = new Set(set);
+  for (const member of members) {
+    if (on) {
+      next.add(member);
+    } else {
+      next.delete(member);
+    }
+  }
+  return next;
+}
+
+/** A checkbox; `apply` gets its new state. */
+function checkbox(text: string, checked: boolean, apply: (on: boolean) => void): HTMLLabelElement {
+  const label = el('label', 'check');
   const input = el('input');
   input.type = 'checkbox';
-  input.checked = chosen.has(kind);
-  input.addEventListener('change', () => {
-    if (input.checked) {
-      chosen.add(kind);
-    } else {
-      chosen.delete(kind);
-    }
-    changed();
-  });
-  wrapper.append(input, label);
-  return wrapper;
+  input.checked = checked;
+  input.addEventListener('change', () => apply(input.checked));
+  label.append(input, text);
+  return label;
+}
+
+/** A checkbox per kind of change; a change hands a new set of the chosen kinds to `set`. */
+export function kindBoxes<Kind extends string>(
+  kinds: readonly Kind[],
+  label: Readonly<Record<Kind, string>>,
+  chosen: () => ReadonlySet<Kind>,
+  set: (next: Set<Kind>) => void,
+): HTMLElement {
+  const box = el('div', 'kinds');
+  box.append(
+    ...kinds.map((kind) =>
+      checkbox(label[kind], chosen().has(kind), (on) => set(withMembers(chosen(), [kind], on))),
+    ),
+  );
+  return box;
 }
 
 /** A number field for one end of a snapshot range, clamped to `first`..`last`; non-numbers keep `current`. */
@@ -256,6 +270,99 @@ export function rangeField(
   });
   wrapper.append(`${label} @`, input);
   return wrapper;
+}
+
+/** The From and To fields of a snapshot range, clamped to `first`..`last`. */
+export function rangeFields(
+  first: number,
+  last: number,
+  current: (end: 'from' | 'to') => number,
+  set: (end: 'from' | 'to', next: number) => void,
+): HTMLLabelElement[] {
+  return (['from', 'to'] as const).map((end) =>
+    rangeField(
+      end === 'from' ? 'From' : 'To',
+      first,
+      last,
+      () => current(end),
+      (next) => set(end, next),
+    ),
+  );
+}
+
+/**
+ * A group of buttons of which one is pressed. `label` names the group for assistive technology; `shown` also writes it
+ * in front of the buttons, where it is hidden from assistive technology so that it is not read twice.
+ */
+export function modeGroup<T extends string | number>(
+  label: string,
+  options: readonly { readonly value: T; readonly text: string }[],
+  current: T,
+  pick: (value: T) => void,
+  look: { readonly className?: string; readonly shown?: boolean } = {},
+): HTMLElement {
+  const group = el('div', look.className);
+  group.setAttribute('role', 'group');
+  group.setAttribute('aria-label', label);
+  if (look.shown) {
+    const visible = el('span', undefined, `${label}: `);
+    visible.setAttribute('aria-hidden', 'true');
+    group.append(visible);
+  }
+  const pressed: { readonly value: T; readonly button: HTMLElement }[] = [];
+  for (const option of options) {
+    const button = el('button', 'mode', option.text);
+    button.setAttribute('aria-pressed', String(option.value === current));
+    button.addEventListener('click', () => {
+      for (const other of pressed) {
+        other.button.setAttribute('aria-pressed', String(other.value === option.value));
+      }
+      pick(option.value);
+    });
+    pressed.push({ value: option.value, button });
+    group.append(button);
+  }
+  return group;
+}
+
+/** The author and message of a snapshot as one line; nothing when it has neither. */
+export function whoLine(author: string | null, message: string | null): HTMLElement[] {
+  const text = whoText(author, message);
+  return text === '' ? [] : [el('p', 'who-line', text)];
+}
+
+/** A row of a list that one picks from, and the button in its first cell. */
+export interface ListRow {
+  readonly row: HTMLElement;
+  readonly pick: HTMLElement;
+}
+
+/** The first cell of a row: a button that picks the row; `label` is its screen reader text. */
+export function pickCell(
+  text: string,
+  label: string,
+  onPick: (event: MouseEvent) => void,
+): { readonly cell: HTMLTableCellElement; readonly pick: HTMLButtonElement } {
+  const pick = el('button', 'pick', text);
+  pick.setAttribute('aria-label', label);
+  pick.addEventListener('click', onPick);
+  const cell = el('td');
+  cell.append(pick);
+  return { cell, pick };
+}
+
+/** Marks the row of `selected` (and the one of `other` with its own class) and presses the button of the selected. */
+export function markPicked(
+  rows: ReadonlyMap<number, ListRow>,
+  selected: number | undefined,
+  other?: number,
+): void {
+  for (const [id, { row, pick }] of rows) {
+    row.className = [id === selected ? 'selected' : '', id === other ? 'other' : '']
+      .filter(Boolean)
+      .join(' ');
+    pick.setAttribute('aria-pressed', String(id === selected));
+  }
 }
 
 export function tableRow(cells: readonly (string | HTMLElement)[]): HTMLTableRowElement {

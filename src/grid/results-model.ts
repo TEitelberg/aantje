@@ -32,6 +32,34 @@ export interface ResultSet {
   readonly rows: readonly (readonly GridValue[])[];
   readonly truncated: boolean;
   readonly elapsedMs: number;
+  /** The name of the tab of a profile view. */
+  readonly label?: string;
+  /** The profile of Statistics (DuckDB's JSON) and the view of it that this tab shows. */
+  readonly profile?: string;
+  readonly view?: ProfileView;
+}
+
+export type ProfileView = 'table' | 'flame' | 'operators' | 'text';
+
+/** The tabs that a profile adds, in their order, with their labels. */
+export const PROFILE_VIEWS: readonly (readonly [ProfileView, string])[] = [
+  ['table', 'Statistics'],
+  ['flame', 'Flame Graph'],
+  ['operators', 'Treemap & Top Operators'],
+  ['text', 'Text Statistics'],
+];
+
+/** Whether the result is a plan of EXPLAIN or EXPLAIN ANALYZE: DuckDB returns it as key and value columns. */
+export function isPlan(set: ResultSet): boolean {
+  return set.columns.map(({ name }) => name).join() === 'explain_key,explain_value';
+}
+
+/** The plan as DuckDB draws it; with more than one plan (`explain_output`), each under its key. */
+export function planText(set: ResultSet): string {
+  const plans = set.rows.map(([key, value]) => ({ key: String(key ?? ''), value: String(value ?? '') }));
+  return plans.length === 1
+    ? (plans[0]?.value ?? '')
+    : plans.map(({ key, value }) => `${key}\n${value}`).join('\n');
 }
 
 export interface ResultsRunSummary {
@@ -48,6 +76,8 @@ export interface ResultsRunState {
   readonly resultSets: readonly ResultSet[];
   /** Undefined while the run is going on. */
   readonly end: ResultsRunSummary | undefined;
+  /** aantje built the statement (a CTE on its own): it is not in the document, but can be opened as a new query. */
+  readonly built?: boolean;
 }
 
 export type TabId = 'messages' | number;
@@ -74,8 +104,14 @@ export function oneLine(text: string, max: number): string {
   return clip(text.replace(/\s+/g, ' ').trim(), max);
 }
 
-export function beginRun(script: string): ResultsRunState {
-  return { script: oneLine(script, HEADER_CHARS), statements: [], resultSets: [], end: undefined };
+export function beginRun(script: string, built = false): ResultsRunState {
+  return {
+    script: oneLine(script, HEADER_CHARS),
+    statements: [],
+    resultSets: [],
+    end: undefined,
+    ...(built ? { built: true } : {}),
+  };
 }
 
 function update(run: ResultsRunState, index: number, change: Partial<Statement>): ResultsRunState {
@@ -146,6 +182,24 @@ export function applyEvent(run: ResultsRunState, event: SqlEvent): ResultsRunSta
         summary: '',
         error: { message: event.message, ...(event.position ? { position: event.position } : {}) },
       });
+    case 'profile':
+      // One tab per view of the profile; the statement's line in Messages keeps its own outcome.
+      return {
+        ...run,
+        resultSets: [
+          ...run.resultSets,
+          ...PROFILE_VIEWS.map(([view, label]) => ({
+            statement: event.index,
+            columns: [],
+            rows: [],
+            truncated: false,
+            elapsedMs: 0,
+            profile: event.json,
+            view,
+            label,
+          })),
+        ],
+      };
   }
 }
 
@@ -167,7 +221,7 @@ export function applyMessage(
 ): ResultsRunState | undefined {
   switch (message.type) {
     case 'results-begin':
-      return beginRun(message.script);
+      return beginRun(message.script, message.built === true);
     case 'results-state':
       return message.state;
     case 'results-event':
@@ -220,8 +274,10 @@ interface Tab {
   readonly label: string;
 }
 
-/** `Result 1 (1,234 rows)`, `Result 1 (10,000 of more rows)`. The statement text is never part of the label. */
-export function tabLabel(set: ResultSet, number: number): string {
+/** `Result 1 (1,234 rows)`, `Result 1 (10,000 of more rows)`, `Execution Plan`, or the label of a text or profile view. Never the statement text. */
+function tabLabel(set: ResultSet, number: number): string {
+  if (set.view !== undefined) return set.label ?? `Result ${number}`;
+  if (isPlan(set)) return 'Execution Plan';
   const rows = set.truncated
     ? `${count(set.rows.length)} of more rows`
     : groupedPlural(set.rows.length, 'row');
@@ -236,12 +292,19 @@ export function tabsOf(run: ResultsRunState): readonly Tab[] {
   ];
 }
 
-/** Messages while the run goes on or has no result set; else the first result set unless the user chose a tab. */
+/**
+ * Messages while the run goes on or has no result set; else, unless the user chose a tab, what the run was for: the
+ * text that aantje added (the profile of Statistics) before the rows of its statement, otherwise the first result set.
+ */
 export function selectedTab(run: ResultsRunState, chosen: TabId | undefined): TabId {
   if (chosen === 'messages' || (chosen !== undefined && run.resultSets[chosen])) {
     return chosen;
   }
-  return run.end && run.resultSets.length > 0 ? 0 : 'messages';
+  if (!run.end || run.resultSets.length === 0) {
+    return 'messages';
+  }
+  const table = run.resultSets.findIndex((set) => set.view === 'table');
+  return table >= 0 ? table : 0;
 }
 
 export function truncatedBanner(set: ResultSet): string {

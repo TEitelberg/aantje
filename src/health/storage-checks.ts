@@ -1,10 +1,9 @@
 import type { StoredFile } from '../catalog/model';
-import { quoteLiteral } from '../catalog/ddl';
-import { formatBytes } from '../tree/format';
-import { groupedPlural } from '../shell/numbers';
-import { ago, finding, META, qualified, tableScope } from './finding';
+import { formatBytes, groupedPlural } from '../shell/numbers';
+import { ago, capFindings, fileKey, fileScope, finding, kindText, META, qualified } from './finding';
 import type { TableNames } from './finding';
 import type { FindingScope, HealthFinding } from './model';
+import type { StorageContext } from '../storage/diagnose';
 
 /** A file in the object store as the listing returns it. */
 export interface ListedFile {
@@ -17,9 +16,10 @@ export interface ListedFile {
 // A younger file may be an upload a writer has not committed yet.
 const RECENT_MS = 60 * 60_000;
 
-// DuckLake writes an ADLS path as `abfss://<container>@<account host>/<key>`, but DuckDB lists it as
-// `abfss://<account host>/<container>/<key>`: the listed form is turned into the written one.
-const LISTED_AZURE = /^(abfss?):\/\/([^/@]+\.dfs\.core\.[^/]+)\/([^/]+)\//i;
+// DuckLake writes an ADLS or OneLake path as `abfss://<container>@<host>/<key>`, but DuckDB lists it as
+// `abfss://<host>/<container>/<key>`: the listed form is turned into the written one. The host is the DFS host of a
+// storage account (`dfs.core.windows.net`, also sovereign clouds) or of OneLake (`dfs.fabric.microsoft.com`).
+const LISTED_AZURE = /^(abfss?):\/\/([^/@]+\.dfs\.[^/]+)\/([^/]+)\//i;
 
 /**
  * Turns Windows backslashes into slashes, drops `./` and writes an ADLS path the way DuckLake does;
@@ -41,32 +41,6 @@ function byBytes(a: string, b: string): number {
   return Buffer.compare(Buffer.from(a), Buffer.from(b));
 }
 
-/** A path as a DuckDB pattern; pattern characters become classes (`[*]`), so brackets and asterisks match themselves. */
-export function escapeGlob(path: string): string {
-  return path.replaceAll('\\', '/').replace(/[*?[]/g, (character) => `[${character}]`);
-}
-
-// The `read_blob` pattern for everything below a directory; DuckDB lists by the prefix up to the first wildcard.
-function listingPattern(directory: string): string {
-  const escaped = escapeGlob(directory);
-  return `${escaped.endsWith('/') ? escaped : `${escaped}/`}**`;
-}
-
-// Lists keys below a directory with size and time, in key order, at most `limit + 1`. DuckDB lists the whole prefix
-// anyway (one request per 1000 keys); selecting the size keeps it from requesting each file.
-export function listingStatement(directory: string, limit: number): string {
-  return `SELECT filename, size, epoch_ms(last_modified) FROM read_blob(${quoteLiteral(listingPattern(directory))}) ORDER BY filename LIMIT ${limit + 1}`;
-}
-
-// The probe asks the store for this name; it matches nothing.
-export const PROBE_NAME = 'aantje-health-probe-';
-
-/** Asks the store for one answer with minimal listing: nothing matches the pattern. */
-export function probeStatement(directory: string): string {
-  const escaped = escapeGlob(directory);
-  return `SELECT count(*) FROM glob(${quoteLiteral(`${escaped.endsWith('/') ? escaped : `${escaped}/`}${PROBE_NAME}*`)})`;
-}
-
 interface StorageInput {
   readonly files: readonly StoredFile[];
   /** Full paths of files scheduled for deletion. */
@@ -85,6 +59,8 @@ interface StorageInput {
   /** Most findings reported per check. */
   readonly limit: number;
   readonly caseInsensitive: boolean;
+  /** How the storage of the connection words the advice; the machine's S3 settings when not given. */
+  readonly storage?: StorageContext;
 }
 
 interface StorageResult {
@@ -112,6 +88,7 @@ export function compareStorage(input: StorageInput): StorageResult {
     now,
     limit,
     caseInsensitive,
+    storage,
   } = input;
   const key = (path: string): string => comparable(path, caseInsensitive);
   const inside = key(directory.endsWith('/') ? directory : `${directory}/`);
@@ -160,25 +137,22 @@ export function compareStorage(input: StorageInput): StorageResult {
   const findings: HealthFinding[] = [];
   let omitted = 0;
   const report = <T>(list: readonly T[], make: (item: T) => HealthFinding): void => {
-    findings.push(...list.slice(0, limit).map(make));
-    omitted += Math.max(list.length - limit, 0);
+    const capped = capFindings(list, limit);
+    findings.push(...capped.shown.map(make));
+    omitted += capped.omitted;
   };
   report(missing, ({ file }) => missingFinding(file, names, latest));
   report(resized, ({ file, at }) => resizedFinding(file, names, latest, stored.get(at)?.size ?? 0));
   report(orphans, (file) => orphanFinding(file, now, scope.kind === 'schema' ? scope : { kind: 'lake' }));
   if (listing.length === 0 && compared.some(({ file }) => file.endSnapshot === null)) {
-    findings.push(nothingFound(directory, compared.length, scope));
+    findings.push(nothingFound(directory, compared.length, scope, storage));
   }
   return {
     findings,
     omitted,
     notChecked,
-    missing: new Set(missing.map(({ file }) => `${file.kind}:${file.id}`)),
+    missing: new Set(missing.map(({ file }) => fileKey(file))),
   };
-}
-
-function kindText(file: StoredFile): string {
-  return file.kind === 'data' ? 'data file' : 'delete file';
 }
 
 function inspect(file: StoredFile): string {
@@ -200,13 +174,13 @@ function serves(file: StoredFile, latest: number): string {
 }
 
 export function missingFinding(file: StoredFile, names: TableNames, latest: number): HealthFinding {
-  const scope = tableScope(file.tableId, names, { schema: file.schema, name: file.table });
+  const scope = fileScope(file, names);
   const current = file.endSnapshot === null;
   const where = file.location ?? '';
   return finding('storage.file-missing', {
     severity: current ? 'error' : 'warning',
     scope,
-    object: `${file.kind}:${file.id}`,
+    object: fileKey(file),
     title: current
       ? `A ${kindText(file)} that the newest snapshot needs is missing from the object store`
       : `A ${kindText(file)} that only older snapshots need is missing from the object store`,
@@ -226,13 +200,13 @@ export function missingFinding(file: StoredFile, names: TableNames, latest: numb
 }
 
 function resizedFinding(file: StoredFile, names: TableNames, latest: number, actual: number): HealthFinding {
-  const scope = tableScope(file.tableId, names, { schema: file.schema, name: file.table });
+  const scope = fileScope(file, names);
   const current = file.endSnapshot === null;
   const where = file.location ?? '';
   return finding('storage.file-size-mismatch', {
     severity: current ? 'error' : 'warning',
     scope,
-    object: `${file.kind}:${file.id}`,
+    object: fileKey(file),
     title: 'A file in the object store has another size than the catalog records',
     detail: `${where} is the ${kindText(file)} #${file.id} of ${qualified(scope)} (${serves(file, latest)}). The catalog records ${groupedPlural(file.sizeBytes ?? 0, 'byte')} (${formatBytes(file.sizeBytes ?? 0)}), the store has ${groupedPlural(actual, 'byte')} (${formatBytes(actual)}).`,
     cause:
@@ -265,16 +239,24 @@ const NOTHING_FOUND_WHERE = {
   table: 'in the directory of the table',
 } as const satisfies Record<FindingScope['kind'], string>;
 
-function nothingFound(directory: string, expected: number, scope: FindingScope): HealthFinding {
+function nothingFound(
+  directory: string,
+  expected: number,
+  scope: FindingScope,
+  storage: StorageContext | undefined,
+): HealthFinding {
+  const own = storage?.perConnection === true;
   return finding('storage.nothing-found', {
     severity: 'error',
     scope,
     title: `The object store holds no file ${NOTHING_FOUND_WHERE[scope.kind]}`,
     detail: `The catalog lists ${groupedPlural(expected, 'file')} below ${directory}, and the listing of that path returned nothing.`,
     cause:
-      'The bucket or volume was reset or emptied, or the endpoint, the bucket or the data_path point to another place than the one the lake was written to.',
-    fix: 'Compare data_path with the bucket and prefix in the store, and aantje.s3.endpoint with the address of the store the lake lives in.',
-    settingKey: 's3.endpoint',
+      'The bucket, container or volume was reset or emptied, or the storage of the connection, the bucket or the data_path point to another place than the one the lake was written to.',
+    fix: own
+      ? 'Compare data_path with the bucket or container and prefix in the storage, and the storage of the connection (Edit Connection) with the account the lake lives in.'
+      : 'Compare data_path with the bucket and prefix in the store, and aantje.s3.endpoint with the address of the store the lake lives in.',
+    ...(own ? { connectionActions: ['editConnection' as const] } : { settingKey: 's3.endpoint' }),
     objectKey: directory,
   });
 }

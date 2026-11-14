@@ -1,21 +1,16 @@
 import type * as vscode from 'vscode';
-import { showConnectFirst } from '../command.vscode';
 import { openReport } from '../shell/host.vscode';
 import { reportPortOf } from '../shell/report-port.vscode';
 import type { ReportCommandEnv } from '../shell/report-port.vscode';
-import { planSnapshotReportAction } from './actions';
-import { performSnapshotReportAction } from './execute';
-import { readSnapshotReport } from './read';
+import { planSnapshotAction } from '../snapshot-changes/actions';
+import { performSnapshotAction } from '../snapshot-changes/execute';
+import { readNewest } from '../snapshot-changes/window';
 import { snapshotReportKind } from './kind';
-
-const SNAPSHOT_REPORT_LIMIT = 500;
 
 const COMMAND = 'aantje.showSnapshotReport';
 const GOAL = 'show its snapshot report';
 
 export function registerSnapshotReportCommand(env: ReportCommandEnv): vscode.Disposable[] {
-  const { store } = env;
-
   const report = openReport(env, {
     command: COMMAND,
     kind: snapshotReportKind,
@@ -24,29 +19,16 @@ export function registerSnapshotReportCommand(env: ReportCommandEnv): vscode.Dis
     keyOf: (profile) => profile.id,
     open: (reader, profile) => ({
       progress: `Reading the snapshots of "${profile.name}"...`,
-      read: async (signal) => ({
-        connection: profile.name,
-        ...(await readSnapshotReport(reader, SNAPSHOT_REPORT_LIMIT, signal)),
-      }),
+      read: async (signal) => ({ connection: profile.name, ...(await readNewest(reader, signal)) }),
       title: () => `Snapshot Report · ${profile.name}`,
     }),
-    planAction: planSnapshotReportAction,
-    perform: (plan, profile) => performSnapshotReportAction(plan, reportPortOf(env, profile)),
+    planAction: planSnapshotAction,
+    perform: (plan, profile) =>
+      performSnapshotAction(plan, reportPortOf(env, profile), 'use the snapshot report'),
   });
 
   return [
     { dispose: () => report.dispose() },
-    env.register(COMMAND, async (node) => {
-      const ref = node?.ref;
-      if (ref?.kind !== 'connection') {
-        return;
-      }
-      const profile = store.get(ref.connectionId);
-      if (!profile) {
-        showConnectFirst(GOAL);
-        return;
-      }
-      await report.show(profile, {});
-    }),
+    report.command(env.register, (ref) => (ref.kind === 'connection' ? {} : undefined)),
   ];
 }

@@ -17,38 +17,18 @@ const OBJECTS = {
 
 export type ObjectKind = keyof typeof OBJECTS;
 
-// Newest schema version up to the snapshot expression `at`, so a dropped schema keeps its name.
-function schemaNameOf(kind: ObjectKind, at: string): string {
+/**
+ * The name of the schema of the object version `o` when that version began: the newest schema version up to then, so
+ * a dropped schema keeps its name. DuckLake never renames a schema (it writes no `altered_schema` change), so a schema
+ * id has one name, and the rule only decides for a catalog that was edited by hand. It is the rule that a whole range
+ * of snapshots can share in one statement.
+ */
+function schemaNameOf(kind: ObjectKind): string {
   return kind === 'schema'
     ? 'CAST(NULL AS VARCHAR) AS schema_name'
     : `(SELECT s.schema_name FROM ducklake_schema s
-    WHERE s.schema_id = o.schema_id AND s.begin_snapshot <= ${at}
+    WHERE s.schema_id = o.schema_id AND s.begin_snapshot <= o.begin_snapshot
     ORDER BY s.begin_snapshot DESC LIMIT 1) AS schema_name`;
-}
-
-/** Objects by id at their newest version up to the snapshot, so an object dropped in it keeps its name. */
-export function objectsById(kind: ObjectKind, ids: readonly number[], snapshot: number): Query {
-  const { table, id, name } = OBJECTS[kind];
-  return {
-    sql: `SELECT o.${id} AS object_id, o.${name} AS object_name, ${schemaNameOf(kind, '?')}
-FROM ${table} o
-WHERE o.${id} IN (${placeholders(ids)}) AND o.begin_snapshot <= ?
-  AND NOT EXISTS (
-    SELECT 1 FROM ${table} n WHERE n.${id} = o.${id} AND n.begin_snapshot > o.begin_snapshot AND n.begin_snapshot <= ?)`,
-    params: [...(kind === 'schema' ? [] : [snapshot]), ...ids, snapshot, snapshot],
-  };
-}
-
-/** Objects whose version begins at the snapshot, with the count of earlier versions (a rename starts a new one). */
-export function objectsCreatedAt(kind: ObjectKind, snapshot: number): Query {
-  const { table, id, name } = OBJECTS[kind];
-  return {
-    sql: `SELECT o.${id} AS object_id, o.${name} AS object_name, ${schemaNameOf(kind, 'o.begin_snapshot')},
-  CAST((SELECT COUNT(*) FROM ${table} e WHERE e.${id} = o.${id} AND e.begin_snapshot < o.begin_snapshot) AS BIGINT) AS earlier
-FROM ${table} o
-WHERE o.begin_snapshot = ?`,
-    params: [snapshot],
-  };
 }
 
 /** The snapshots of a range (both ends inclusive), newest first, with commit data and the text of their changes. */
@@ -64,22 +44,28 @@ LIMIT ?`,
   };
 }
 
-/** Every version up to `upTo` of these ids; the caller applies the rule of `objectsById` per snapshot. */
+/**
+ * Every version up to `upTo` of these ids; the caller takes, per snapshot, the newest version that began at or before
+ * it, so an object dropped by the snapshot keeps its name.
+ */
 export function objectVersions(kind: ObjectKind, ids: readonly number[], upTo: number): Query {
   const { table, id, name } = OBJECTS[kind];
   return {
-    sql: `SELECT o.${id} AS object_id, o.${name} AS object_name, ${schemaNameOf(kind, 'o.begin_snapshot')}, o.begin_snapshot
+    sql: `SELECT o.${id} AS object_id, o.${name} AS object_name, ${schemaNameOf(kind)}, o.begin_snapshot
 FROM ${table} o
 WHERE o.${id} IN (${placeholders(ids)}) AND o.begin_snapshot <= ?`,
     params: [...ids, upTo],
   };
 }
 
-/** `objectsCreatedAt` for every snapshot from `from` to `to` at once; `begin_snapshot` tells the rows apart. */
+/**
+ * Objects whose version begins at a snapshot from `from` to `to`, with the count of earlier versions (a rename starts
+ * a new one); `begin_snapshot` tells the snapshots apart.
+ */
 export function objectsCreatedBetween(kind: ObjectKind, from: number, to: number): Query {
   const { table, id, name } = OBJECTS[kind];
   return {
-    sql: `SELECT o.${id} AS object_id, o.${name} AS object_name, ${schemaNameOf(kind, 'o.begin_snapshot')}, o.begin_snapshot,
+    sql: `SELECT o.${id} AS object_id, o.${name} AS object_name, ${schemaNameOf(kind)}, o.begin_snapshot,
   CAST((SELECT COUNT(*) FROM ${table} e WHERE e.${id} = o.${id} AND e.begin_snapshot < o.begin_snapshot) AS BIGINT) AS earlier
 FROM ${table} o
 WHERE o.begin_snapshot >= ? AND o.begin_snapshot <= ?`,
@@ -99,10 +85,45 @@ WHERE ${idColumn} = ?`,
   };
 }
 
+/** The kinds of objects that `droppedObjects` lists. */
+export const DROPPED_KINDS = ['table', 'view', 'macro'] as const;
+
+/**
+ * The tables, views and macros of a schema whose last version ended: no version of the id is open or begins at its end
+ * (a rename ends one version and begins the next). `last_snapshot` is the newest snapshot left at which it existed,
+ * NULL when expiry took them all; `dropped_time` is NULL when the dropping snapshot expired.
+ */
+export function droppedObjects(schemaId: number): Query {
+  const versions = DROPPED_KINDS.map((kind) => {
+    const { table, id, name } = OBJECTS[kind];
+    return `SELECT '${kind}' AS kind, o.${id} AS object_id, o.${name} AS object_name, o.begin_snapshot, o.end_snapshot
+  FROM ${table} o
+  WHERE o.schema_id = ? AND o.end_snapshot IS NOT NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM ${table} n
+      WHERE n.${id} = o.${id} AND (n.end_snapshot IS NULL OR n.begin_snapshot >= o.end_snapshot))`;
+  });
+  return {
+    sql: `SELECT d.kind, d.object_id, d.object_name, d.end_snapshot, d.last_snapshot, x.snapshot_time AS dropped_time
+FROM (
+  SELECT v.kind, v.object_id, v.object_name, v.end_snapshot,
+    (SELECT CAST(MAX(s.snapshot_id) AS BIGINT) FROM ducklake_snapshot s
+      WHERE s.snapshot_id >= v.begin_snapshot AND s.snapshot_id < v.end_snapshot) AS last_snapshot
+  FROM (
+  ${versions.join('\n  UNION ALL\n  ')}
+  ) v
+) d
+LEFT JOIN ducklake_snapshot x ON x.snapshot_id = d.end_snapshot
+WHERE d.last_snapshot IS NOT NULL
+ORDER BY d.end_snapshot DESC, d.object_id DESC`,
+    params: DROPPED_KINDS.map(() => schemaId),
+  };
+}
+
 /** Every version (first snapshot, end, name, schema) of a table, oldest first. */
 export function tableVersions(tableId: number): Query {
   return {
-    sql: `SELECT o.begin_snapshot, o.end_snapshot, o.table_name AS object_name, ${schemaNameOf('table', 'o.begin_snapshot')}
+    sql: `SELECT o.begin_snapshot, o.end_snapshot, o.table_name AS object_name, ${schemaNameOf('table')}
 FROM ducklake_table o
 WHERE o.table_id = ?
 ORDER BY o.begin_snapshot`,

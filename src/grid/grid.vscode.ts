@@ -6,6 +6,7 @@ import { createPanel } from '../shell/host.vscode';
 import { requestLimit } from '../shell/panels';
 import { safeCsvFileName } from './model';
 import { isOversizedTransfer, isWebviewMessage, MAX_TRANSFER_CHARS } from './protocol';
+import { GRID_CSS } from './style';
 import type { ExtensionMessage, WebviewMessage } from './protocol';
 import type { GridData } from '../data/types';
 import type { Logger } from '../log';
@@ -67,6 +68,7 @@ export class GridPanels {
       title,
       script: 'grid-client.js',
       column: vscode.ViewColumn.Active,
+      css: GRID_CSS,
     });
     const entry: Entry = { panel, data, ready: false };
     this.entries.set(key, entry);
@@ -91,7 +93,8 @@ export class GridPanels {
         await transfer(this.deps, message);
         break;
       case 'reveal':
-        // Only the results panel has statements to go to.
+      case 'openQuery':
+        // Only the results panel has statements to go to or to open.
         break;
     }
   }
@@ -136,7 +139,8 @@ export async function transfer(
   if (message.type === 'copy') {
     try {
       await deps.clipboard.writeText(message.text);
-      vscode.window.setStatusBarMessage(`Copied ${message.what === 'all' ? 'all rows' : message.what}`, 2000);
+      const what = { all: 'all rows', text: 'the output', cell: 'cell', row: 'row' }[message.what];
+      vscode.window.setStatusBarMessage(`Copied ${what}`, 2000);
     } catch (error) {
       deps.log?.error('Copying to the clipboard failed.', error);
       void vscode.window.showErrorMessage(`Could not copy to the clipboard: ${messageOf(error)}`);

@@ -4,7 +4,7 @@ import type { ColumnInfo } from '../catalog/model';
 import { columnDescription } from '../tree/format';
 import { nameOf } from './catalog';
 import type { SqlEntry } from './catalog';
-import type { Env } from './completion';
+import type { Env } from './completion-env';
 import type { ScopeRelation } from './context';
 import { namedText } from './help';
 import { fromText, scopeColumns, typeText } from './lookup';

@@ -1,18 +1,23 @@
-import { capRows, code, markdownTable, reportTitle } from '../markdown';
+import { capRows, code, inlineCode, markdownTable, reportTitle } from '../markdown';
 import { count, formatBytes } from '../shell/model';
-import { inlineCode } from '../tree/format';
+import { FILES_NOTE, growthLabel, growthNotes, growthTime, noGrowthNote } from '../shell/file-growth';
 import {
   COLUMNS_NOTE,
+  COLUMNS_PARTIAL_NOTE,
+  COLUMNS_UNREAD_NOTE,
+  COLUMN_HEADERS,
+  NO_COLUMNS_NOTE,
+  NO_PARTITION_FILES_NOTE,
+  RANGES_NOTE,
   binLabel,
-  statisticsColumnRows,
   evennessText,
-  growthLabel,
-  growthNotes,
-  growthTime,
+  noDataFilesNote,
+  notPartitionedNote,
   overviewCards,
-  partitionLabel,
+  partitionEntries,
   partitioningNotes,
   partitioningText,
+  statisticsColumnRows,
 } from './model';
 import type { StatisticsData } from './model';
 
@@ -41,25 +46,14 @@ export function statisticsMarkdown({ table, connection, statistics: stats }: Sta
     code(row.max),
   ]);
   const partitions = stats.partitioning;
+  // The values of a partition are catalog text; the label of the partitions summed up is not.
   const bars = partitions
-    ? [
-        ...partitions.partitions.map((bucket) => [
-          code(partitionLabel(bucket.values)),
-          count(bucket.files),
-          formatBytes(bucket.sizeBytes),
-          count(bucket.rows),
-        ]),
-        ...(partitions.rest
-          ? [
-              [
-                `other (${count(partitions.rest.partitions)})`,
-                count(partitions.rest.files),
-                formatBytes(partitions.rest.sizeBytes),
-                count(partitions.rest.rows),
-              ],
-            ]
-          : []),
-      ]
+    ? partitionEntries(partitions).map((entry) => [
+        entry.rest ? entry.label : code(entry.label),
+        count(entry.fileCount),
+        formatBytes(entry.sizeBytes),
+        count(entry.rows),
+      ])
     : [];
   const evenness = partitions && evennessText(partitions);
   const growth = capRows(stats.growth.toReversed(), GROWTH_ROWS);
@@ -73,40 +67,35 @@ export function statisticsMarkdown({ table, connection, statistics: stats }: Sta
     '',
     ...markdownTable(['Figure', 'Value', 'Detail'], cards),
     '',
-    'Counts cover data files and delete files. Rows that DuckLake keeps inline in the catalog are not included.',
+    FILES_NOTE,
     '',
     '### File size distribution',
     '',
     ...(histogram.length === 0
-      ? [`This table has no data files at snapshot ${stats.snapshot}.`]
-      : [
-          ...markdownTable(['Size range', 'Files', 'Size'], histogram),
-          '',
-          'Each range is half the size of the one above it, relative to the largest file.',
-        ]),
+      ? [noDataFilesNote(stats.snapshot)]
+      : [...markdownTable(['Size range', 'Files', 'Size'], histogram), '', RANGES_NOTE]),
     '',
     '## Columns',
     '',
     ...(columns.length === 0
-      ? ['This table has no columns at this snapshot.']
+      ? [NO_COLUMNS_NOTE]
       : [
-          ...markdownTable(['Column', 'Type', 'Nullable', 'Null share', 'Minimum', 'Maximum'], columns),
+          ...markdownTable(COLUMN_HEADERS, columns),
           '',
           COLUMNS_NOTE,
-          ...(stats.columnsPartial
-            ? ['', 'The table has very many files: minimum and maximum cover only some of them.']
-            : []),
+          ...(stats.columnsPartial ? ['', COLUMNS_PARTIAL_NOTE] : []),
+          ...(stats.columnsUnread ? ['', COLUMNS_UNREAD_NOTE] : []),
         ]),
     '',
     '## Partitioning',
     '',
     ...(!partitions
-      ? [`This table is not partitioned at snapshot ${stats.snapshot}.`]
+      ? [notPartitionedNote(stats.snapshot)]
       : [
           `Partitioned by ${inlineCode(partitioningText(partitions))}.`,
           '',
           ...(bars.length === 0
-            ? ['No data file was written under this partitioning yet.']
+            ? [NO_PARTITION_FILES_NOTE]
             : markdownTable(['Partition', 'Files', 'Size', 'Rows'], bars)),
           ...(evenness ? ['', evenness] : []),
           ...partitioningNotes(partitions).flatMap((text) => ['', text]),
@@ -115,7 +104,7 @@ export function statisticsMarkdown({ table, connection, statistics: stats }: Sta
     '## Growth',
     '',
     ...(stats.growth.length === 0
-      ? [`No data file was added or removed up to snapshot ${stats.snapshot}.`]
+      ? [noGrowthNote(stats.snapshot)]
       : [
           ...markdownTable(
             ['Snapshot', 'Time', 'Files', 'Size', 'Compaction'],

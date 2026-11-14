@@ -3,7 +3,7 @@ import initSqlJs from 'sql.js';
 import type { ParamsObject } from 'sql.js';
 import { AantjeError, isErrnoException, messageOf } from '../../errors';
 import type { Driver, QueryOptions, Row, Value } from './driver';
-import { catalogClosed, queryCancelled } from './limits';
+import { catalogClosed, queryCancelled, queryFailed, unreadableFile, unsafeInteger } from './limits';
 
 interface SqliteOptions {
   /** SQLite file that holds the `ducklake_*` tables. */
@@ -52,9 +52,7 @@ export async function openSqlite({ path, wasmPath }: SqliteOptions): Promise<Dri
           statement.free();
         }
       } catch (cause) {
-        return Promise.reject(
-          new AantjeError('QUERY_FAILED', `The catalog query failed: ${messageOf(cause)}`, { cause }),
-        );
+        return Promise.reject(queryFailed(messageOf(cause), cause));
       }
     },
     close(): Promise<void> {
@@ -73,9 +71,7 @@ async function readCatalogFile(path: string): Promise<Uint8Array> {
     bytes = await readFile(path);
   } catch (cause) {
     const code = isErrnoException(cause) ? cause.code : undefined;
-    throw new AantjeError('FILE_NOT_FOUND', `Cannot read "${path}": ${code ?? 'unknown error'}.`, {
-      cause,
-    });
+    throw unreadableFile(path, code, cause);
   }
   // A non-empty write-ahead log holds commits missing from the main file and cannot be replayed here.
   const wal = await stat(`${path}-wal`).catch(() => undefined);
@@ -94,10 +90,7 @@ function toRow(object: ParamsObject): Row {
     // sql.js returns every integer as a double: one beyond 2^53 is already rounded. Like the other drivers, refuse it
     // instead of passing on a wrong id or count.
     if (typeof value === 'number' && Number.isInteger(value) && !Number.isSafeInteger(value)) {
-      throw new AantjeError(
-        'QUERY_FAILED',
-        `The catalog returned the integer ${value}, which is larger than the largest exactly representable number (${Number.MAX_SAFE_INTEGER}).`,
-      );
+      throw unsafeInteger(value);
     }
     row[key.toLowerCase()] = value instanceof Uint8Array ? Buffer.from(value).toString('base64') : value;
   }

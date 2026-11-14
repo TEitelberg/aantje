@@ -1,5 +1,12 @@
 import type * as Duckdb from '@duckdb/node-api';
-import { loadEngine } from '../data/open-lake';
+import {
+  closeParserDuckdb,
+  OnFirstUse,
+  openParserDuckdb,
+  serializeSql,
+  tokenRows,
+} from '../sql/parser-engine';
+import type { Token } from '../sql/script';
 
 /** What the analysis asks of DuckDB: to parse a text and to name its built-in functions. Nothing given is run. */
 export interface SqlParser {
@@ -10,77 +17,44 @@ export interface SqlParser {
   dispose(): Promise<void>;
 }
 
+/** The tokens of a text as DuckDB's `sql_tokenize` gives them, which the SQL editor splits a script at. Nothing is run. */
+export interface SqlTokenizer {
+  tokenize(text: string): Promise<Token[]>;
+}
+
 interface BuiltinFunctions {
   readonly all: ReadonlySet<string>;
   readonly table: ReadonlySet<string>;
 }
 
-/** An in-memory DuckDB of its own with no ATTACH, extension or external access; it opens on the first call. */
-export function openSqlParser(): SqlParser {
-  let ready:
-    | Promise<{ readonly instance: Duckdb.DuckDBInstance; readonly connection: Duckdb.DuckDBConnection }>
-    | undefined;
-  let functions: Promise<BuiltinFunctions> | undefined;
-
-  // A start or a read that failed is not kept, as in the language service: the next report tries again.
-  const forgetFailure = <T>(pending: Promise<T>, forget: () => void): Promise<T> => {
-    pending.catch(forget);
-    return pending;
-  };
-  const open = () => {
-    if (!ready) {
-      const starting = (async () => {
-        const engine = await loadEngine();
-        const instance = await engine.DuckDBInstance.create(':memory:', {
-          enable_external_access: 'false',
-          autoinstall_known_extensions: 'false',
-          autoload_known_extensions: 'false',
-          allow_persistent_secrets: 'false',
-        });
-        return { instance, connection: await instance.connect() };
-      })();
-      ready = forgetFailure(starting, () => {
-        if (ready === starting) ready = undefined;
-      });
-    }
-    return ready;
-  };
+/** An in-memory DuckDB of its own in the parser sandbox (`sql/parser-engine.ts`); it opens on the first call. */
+export function openSqlParser(): SqlParser & SqlTokenizer {
+  // A start or a read that failed is not kept: the next report tries again.
+  const ready = new OnFirstUse(() => openParserDuckdb());
+  const builtins = (): OnFirstUse<BuiltinFunctions> =>
+    new OnFirstUse(async () => builtinFunctions((await ready.get()).connection));
+  let functions = builtins();
 
   return {
-    async serialize(sql) {
-      const { connection } = await open();
-      const reader = await connection.runAndReadAll('SELECT json_serialize_sql($1)', [sql]);
-      const json = reader.getRowsJson()[0]?.[0];
-      return typeof json === 'string' ? json : '';
-    },
-    functions() {
-      if (!functions) {
-        const reading = open().then(async ({ connection }) => {
-          const reader = await connection.runAndReadAll(
-            "SELECT DISTINCT lower(function_name), function_type = 'table' FROM duckdb_functions()",
-          );
-          const rows = reader.getRowsJson() as [string, boolean][];
-          return {
-            all: new Set(rows.map(([name]) => name)),
-            table: new Set(rows.filter(([, table]) => table).map(([name]) => name)),
-          };
-        });
-        functions = forgetFailure(reading, () => {
-          if (functions === reading) functions = undefined;
-        });
-      }
-      return functions;
-    },
+    serialize: async (sql) => serializeSql((await ready.get()).connection, sql),
+    tokenize: async (text) => tokenRows((await ready.get()).connection, text),
+    functions: () => functions.get(),
     async dispose() {
       // A parser that failed to start has nothing to close; the call that started it got the error.
-      const created = await ready?.catch(() => undefined);
-      ready = undefined;
-      functions = undefined;
-      try {
-        created?.connection.closeSync();
-      } finally {
-        created?.instance.closeSync();
-      }
+      const created = await ready.take();
+      functions = builtins();
+      if (created) closeParserDuckdb(created);
     },
+  };
+}
+
+async function builtinFunctions(connection: Duckdb.DuckDBConnection): Promise<BuiltinFunctions> {
+  const reader = await connection.runAndReadAll(
+    "SELECT DISTINCT lower(function_name), function_type = 'table' FROM duckdb_functions()",
+  );
+  const rows = reader.getRowsJson() as [string, boolean][];
+  return {
+    all: new Set(rows.map(([name]) => name)),
+    table: new Set(rows.filter(([, table]) => table).map(([name]) => name)),
   };
 }

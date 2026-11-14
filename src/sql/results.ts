@@ -20,7 +20,11 @@ export interface RunSummary {
 /** Where the SQL editor shows results; free of the VS Code API. Event positions are UTF-16 offsets into `script.text`. */
 export interface ResultsView {
   /** A new run starts: the tabs of the earlier run go. */
-  begin(target: ResultsTarget, script: { readonly text: string; readonly startedAt: number }): void;
+  /** `built`: aantje built the text (a CTE on its own), so the results offer to open it as a new query. */
+  begin(
+    target: ResultsTarget,
+    script: { readonly text: string; readonly startedAt: number; readonly built?: boolean },
+  ): void;
   /** `start`, `resultSet`, `message` and `error` as the session yields them, in order. */
   event(target: ResultsTarget, event: SqlEvent): void;
   end(target: ResultsTarget, summary: RunSummary): void;

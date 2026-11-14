@@ -9,7 +9,7 @@ import type {
   TagsInfo,
 } from '../model';
 import * as queries from '../queries/objects';
-import { compareText } from '../../order';
+import { compareText, groupBy } from '../../order';
 import { columnPaths, readColumns } from './columns';
 import { toNumber, toNumberOrNull, toText, toTextOrNull } from './rows';
 import type { Attempt, Run } from './rows';
@@ -74,27 +74,26 @@ function macroDefault(value: string | null, valueType: string | null): string | 
 
 // Groups rows (one per parameter) by macro and implementation.
 function macrosOf(rows: readonly Row[]): MacroInfo[] {
-  const macros = new Map<number, { head: Row; implementations: Map<number, Row[]> }>();
-  for (const row of rows) {
-    const macro = macros.get(toNumber(row.macro_id)) ?? {
-      head: row,
-      implementations: new Map<number, Row[]>(),
-    };
-    const implementation = toNumber(row.impl_id);
-    macro.implementations.set(implementation, [...(macro.implementations.get(implementation) ?? []), row]);
-    macros.set(toNumber(row.macro_id), macro);
-  }
-  return Array.from(macros.values(), ({ head, implementations }) => ({
-    id: toNumber(head.macro_id),
-    schemaId: toNumber(head.schema_id),
-    name: toText(head.macro_name),
-    kind: head.type === 'table' ? 'table' : 'scalar',
-    implementations: Array.from(implementations.values(), (rowsOfImplementation) => ({
-      dialect: toText(rowsOfImplementation[0]?.dialect),
-      sql: toText(rowsOfImplementation[0]?.sql),
-      parameters: rowsOfImplementation.filter((row) => row.parameter_name !== null).map(macroParameter),
-    })),
-  }));
+  return Array.from(
+    groupBy(rows, (row) => toNumber(row.macro_id)),
+    ([id, ofMacro]) => {
+      const [head] = ofMacro;
+      return {
+        id,
+        schemaId: toNumber(head?.schema_id),
+        name: toText(head?.macro_name),
+        kind: head?.type === 'table' ? 'table' : 'scalar',
+        implementations: Array.from(
+          groupBy(ofMacro, (row) => toNumber(row.impl_id)).values(),
+          (rowsOfImplementation) => ({
+            dialect: toText(rowsOfImplementation[0]?.dialect),
+            sql: toText(rowsOfImplementation[0]?.sql),
+            parameters: rowsOfImplementation.filter((row) => row.parameter_name !== null).map(macroParameter),
+          }),
+        ),
+      };
+    },
+  );
 }
 
 type DetailReads = Pick<CatalogReader, 'partitioning' | 'sortOrder' | 'tags' | 'macros'>;

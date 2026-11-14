@@ -59,8 +59,7 @@ export function isDependenciesMessage(value: unknown): value is DependenciesMess
 }
 
 /** The actions of an object, by id; the page never names a command. */
-export type DependenciesActionId =
-  'showInTree' | 'showStatistics' | 'showDependencies' | 'scriptCreate' | 'scriptAlter' | 'scriptDrop';
+export type DependenciesActionId = 'showInTree' | 'showStatistics' | 'showDependencies';
 
 export type DependenciesAction = ActionMessage & {
   readonly action: DependenciesActionId;
@@ -72,9 +71,6 @@ export const isDependenciesAction: (value: unknown) => value is DependenciesActi
   showInTree: { node: isCount },
   showStatistics: { node: isCount },
   showDependencies: { node: isCount },
-  scriptCreate: { node: isCount },
-  scriptAlter: { node: isCount },
-  scriptDrop: { node: isCount },
 }) as unknown as (value: unknown) => value is DependenciesAction;
 
 /** The choices that Open as Markdown may name: direction, depth, the lake filter and what the graph holds. */

@@ -1,5 +1,6 @@
 // The relations and column references of a statement as DuckDB's parse tree (`json_serialize_sql`) gives them.
-import { atClauseOf, locationOf, lower } from '../dependencies/references';
+import { foldIdentifier } from '../catalog/ddl';
+import { atClauseOf, locationOf } from './parse-tree';
 import { isObject } from '../guards';
 
 /** A table or view of a FROM clause as written. */
@@ -116,7 +117,7 @@ function readCtes(
   let visible = ctes;
   for (const entry of map) {
     if (!isObject(entry) || !isObject(entry['value'])) continue;
-    const name = lower(text(entry['key']));
+    const name = foldIdentifier(text(entry['key']));
     const aliases = texts(entry['value']['aliases']);
     const body = entry['value']['query_node'];
     if (isObject(body) && body['type'] === 'RECURSIVE_CTE_NODE') {
@@ -193,7 +194,7 @@ function tableRelation(ref: Record<string, unknown>, ctes: Ctes): TreeRelation {
   };
   const name = text(ref['alias']) || table.name;
   const renamed = texts(ref['column_name_alias']);
-  const cte = table.catalog === '' && table.schema === '' ? ctes.get(lower(table.name)) : undefined;
+  const cte = table.catalog === '' && table.schema === '' ? ctes.get(foldIdentifier(table.name)) : undefined;
   if (!cte) return { kind: 'table', name, table, renamed };
   if (!cte.query) return { kind: 'opaque', name };
   return {
@@ -207,7 +208,7 @@ function tableRelation(ref: Record<string, unknown>, ctes: Ctes): TreeRelation {
 function aliasesOf(selectList: unknown): Set<string> {
   return new Set(
     list(selectList).flatMap((item) =>
-      isObject(item) && text(item['alias']) ? [lower(text(item['alias']))] : [],
+      isObject(item) && text(item['alias']) ? [foldIdentifier(text(item['alias']))] : [],
     ),
   );
 }
@@ -226,12 +227,12 @@ function selectItem(item: unknown): SelectItem {
   const rename = new Map<string, string>();
   for (const entry of list(item['rename_list'])) {
     if (isObject(entry) && isObject(entry['key']))
-      rename.set(lower(text(entry['key']['column'])), text(entry['value']));
+      rename.set(foldIdentifier(text(entry['key']['column'])), text(entry['value']));
   }
   return {
     kind: 'star',
     relation: text(item['relation_name']) || undefined,
-    exclude: new Set(texts(item['exclude_list']).map(lower)),
+    exclude: new Set(texts(item['exclude_list']).map(foldIdentifier)),
     rename,
   };
 }

@@ -1,6 +1,4 @@
 import type { CatalogReader, FileLocations, HealthScopeRef, SnapshotId } from '../catalog/model';
-import { userMessageOf } from '../errors';
-import { LakeFailure } from '../data/engine';
 import type { DataAccess } from '../data/types';
 import type { TableNames } from './finding';
 import { DEFAULT_LIMITS } from './model';
@@ -19,7 +17,7 @@ export interface HealthDeps {
   readonly reader: CatalogReader;
   /** `timeoutMs` limits each statement. */
   readonly access: DataAccess;
-  /** Source of the S3 credentials of `access`, which words the advice; stored if not given. */
+  /** Source of the machine's S3 credentials of `access` (a connection without storage), which words the advice; stored if not given. */
   readonly credentialsFrom?: 'stored' | 'environment';
   /** Tests set the clock. */
   readonly now?: () => Date;
@@ -95,11 +93,3 @@ export function createRunContext(deps: HealthDeps, request: HealthRequest, run: 
       (locations ??= deps.reader.fileLocations(scopeRef, dataPath, limits.storageFiles, signal)),
   };
 }
-
-/** A failure message safe to show: an `AantjeError` text or the first line of a failed statement. */
-export function failureMessageOf(error: unknown): string {
-  return error instanceof LakeFailure ? error.message : userMessageOf(error);
-}
-
-export const fileKey = (file: { readonly kind: string; readonly id: number }): string =>
-  `${file.kind}:${file.id}`;

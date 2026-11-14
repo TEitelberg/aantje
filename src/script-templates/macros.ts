@@ -1,7 +1,8 @@
 import { qualifiedName } from '../catalog/ddl';
 import type { MacroInfo } from '../catalog/model';
 import { PREVIEW_LIMIT } from '../data/types';
-import { commented, newestNote } from '../script';
+import { commented } from '../ddl-script/check';
+import { newestNote } from '../script';
 import { limited } from './common';
 import type { Folder, Ref, Tree } from './common';
 

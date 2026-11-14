@@ -2,7 +2,7 @@ import { Client, DatabaseError, TypeOverrides, escapeIdentifier, types as pgType
 import type { ClientConfig } from 'pg';
 import { AantjeError, isErrnoException, messageOf, networkReason } from '../../errors';
 import type { Driver, QueryOptions, Row, Value } from './driver';
-import { catalogClosed, queryCancelled, queryTimedOut } from './limits';
+import { catalogClosed, queryCancelled, queryFailed, queryTimedOut } from './limits';
 
 export interface PostgresOptions {
   readonly host: string;
@@ -214,7 +214,7 @@ function queryError(cause: unknown, options: PostgresOptions, signal?: AbortSign
     }
     // Classes 08 (connection exception) and 57P (shutdown, restart) end the session.
     if (!cause.code?.startsWith('08') && !cause.code?.startsWith('57P')) {
-      return new AantjeError('QUERY_FAILED', `The catalog query failed: ${cause.message}`, { cause });
+      return queryFailed(cause.message, cause);
     }
   }
   return new AantjeError('CONNECTION_FAILED', `The connection to ${endpoint(options)} was lost.`, { cause });

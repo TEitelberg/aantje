@@ -62,6 +62,11 @@ export function clip(text: string, max: number): string {
   return `${text.slice(0, end)}…`;
 }
 
+/** Like `clip`, but at most `max` characters in all, the ellipsis included: for the plans and profiles. */
+export function clipTo(text: string, max: number): string {
+  return text.length <= max ? text : clip(text, max - 1);
+}
+
 /** What the grid draws for one cell. Copy, export, sort and filter use the full value, not this. */
 export function cellDisplay(value: GridValue, kind: GridColumn['kind']): CellDisplay {
   const { text, isNull } = cellText(value, kind);

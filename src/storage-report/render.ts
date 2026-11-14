@@ -2,14 +2,21 @@
 // DOM builders of the Storage page. They take the state they show and report user input through callbacks.
 import { CLEANUP_OVERDUE_DAYS } from '../catalog/thresholds';
 import { actionButton, cardGrid, dataTable, empty, note, tableRow, truncation } from '../shell/blocks';
-import type { ChartOption } from '../shell/chart-option';
+import type { Frame } from '../shell/chart-set';
 import { el } from '../shell/dom';
+import {
+  FILES_NOTE,
+  fileGrowthOption,
+  growthLabel,
+  growthNotes,
+  growthTime,
+  noGrowthNote,
+} from '../shell/file-growth';
 import { LIST_ROWS, count, formatBytes, plural, tableLabel } from '../shell/model';
 import { severityColor } from '../shell/theme';
 import type { Theme } from '../shell/theme';
-import { statisticsGrowthOption } from '../stats/chart-options';
-import { growthLabel, growthNotes, growthTime } from '../stats/model';
 import {
+  LAKE_WIDE_NOTE,
   SCHEDULED_EXPLANATION,
   lastGrowth,
   matchingTables,
@@ -22,20 +29,9 @@ import {
   sortedTables,
   storageCards,
 } from './model';
-import type { Sort, SortKey, StorageData } from './model';
+import type { Sort, SortKey, StorageActionId, StorageData } from './model';
 
-/** The theme, and a chart box that the page draws once it is in the document. */
-export interface Frame {
-  readonly theme: Theme;
-  readonly chartBox: (
-    label: string,
-    option: ChartOption,
-    height?: number,
-    onItemClick?: (index: number) => void,
-  ) => HTMLElement;
-}
-
-export type Act = (action: string, table?: number) => void;
+export type Act = (action: StorageActionId, table?: number) => void;
 
 // The share has no sort key: it follows the size.
 const COLUMNS: readonly { readonly label: string; readonly key?: SortKey; readonly number?: true }[] = [
@@ -77,15 +73,9 @@ export function overview(storage: StorageData, theme: Theme): HTMLElement[] {
   );
   return [
     cardGrid(storageCards(storage), severityColor(theme)),
-    note(
-      'Counts cover data files and delete files. Rows that DuckLake keeps inline in the catalog are not included.',
-    ),
+    note(FILES_NOTE),
     ...(storage.scope.kind === 'schema'
-      ? [
-          note(
-            `The tables of the schema ${storage.scope.name}. The data path, the encryption, the files scheduled for deletion and the snapshots to expire are lake-wide.`,
-          ),
-        ]
+      ? [note(`The tables of the schema ${storage.scope.name}. ${LAKE_WIDE_NOTE}`)]
       : []),
     el('h2', undefined, 'Files scheduled for deletion'),
     section,
@@ -212,7 +202,7 @@ export function tableListChildren(
 
 export function growth(storage: StorageData, frame: Frame): HTMLElement[] {
   if (storage.growth.length === 0) {
-    return [empty(`No data file was added or removed up to snapshot ${storage.snapshot}.`)];
+    return [empty(noGrowthNote(storage.snapshot))];
   }
   const rows = lastGrowth(storage.growth).map((point) =>
     tableRow([
@@ -224,10 +214,9 @@ export function growth(storage: StorageData, frame: Frame): HTMLElement[] {
     ]),
   );
   return [
-    frame.chartBox(
-      `Size and number of the files of ${storage.scope.kind === 'schema' ? `the schema ${storage.scope.name}` : 'the whole lake'} after each of ${count(storage.growth.length)} snapshots`,
-      statisticsGrowthOption(storage, frame.theme.palette),
-    ),
+    frame.charts.box(fileGrowthOption(storage, frame.theme.palette), {
+      label: `Size and number of the files of ${storage.scope.kind === 'schema' ? `the schema ${storage.scope.name}` : 'the whole lake'} after each of ${count(storage.growth.length)} snapshots`,
+    }),
     ...growthNotes(storage).map((text) => note(text)),
     el('h2', undefined, `The last ${plural(rows.length, 'point', 'points')}`),
     dataTable(['Snapshot', 'Time', 'Size', 'Files', 'Note'], rows),

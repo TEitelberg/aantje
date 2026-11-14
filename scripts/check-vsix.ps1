@@ -23,8 +23,8 @@ function Assert-VsixContents([string] $Vsix, [string] $Platform) {
         '^\[Content_Types\]\.xml$'
         '^extension\.vsixmanifest$'
         '^extension/(package\.json|readme\.md|changelog\.md|LICENSE\.txt|THIRD-PARTY-NOTICES\.md)$'
-        '^extension/dist/(extension\.js|sql-wasm\.wasm|grid-client\.js|report-client\.js)$'
-        '^extension/media/(icon\.png|logo\.png|aantje-activity\.svg)$'
+        '^extension/dist/(extension\.js|sql-wasm\.wasm|grid-client\.js|report-client\.js|plan-client\.js)$'
+        '^extension/media/(icon\.png|logo\.png|aantje-activity\.svg|aantje-icons\.woff)$'
         '^extension/docs/en/[^/]+\.md$'
         '^extension/node_modules/@duckdb/node-bindings/'
         "^extension/node_modules/$([regex]::Escape($binding))/"
@@ -33,7 +33,7 @@ function Assert-VsixContents([string] $Vsix, [string] $Platform) {
         'extension/package.json', 'extension/readme.md', 'extension/changelog.md'
         'extension/LICENSE.txt', 'extension/THIRD-PARTY-NOTICES.md'
         'extension/dist/extension.js', 'extension/dist/sql-wasm.wasm', 'extension/dist/grid-client.js'
-        'extension/dist/report-client.js'
+        'extension/dist/report-client.js', 'extension/dist/plan-client.js'
         'extension/node_modules/@duckdb/node-bindings/duckdb.js'
         "extension/node_modules/$binding/duckdb.node"
     )

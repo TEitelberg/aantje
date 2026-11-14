@@ -61,7 +61,7 @@ export function renderNotices(packages) {
   return [
     '# Third-party notices',
     '',
-    'aantje bundles the following open-source packages into `dist/extension.js` and `dist/report-client.js`.',
+    'aantje bundles the following open-source packages into `dist/extension.js`, `dist/report-client.js` and `dist/plan-client.js`.',
     'Their licence notices are reproduced below.',
     '',
     'DuckDB is not bundled; it ships in the package as its own files: `@duckdb/node-api`, `@duckdb/node-bindings`',
