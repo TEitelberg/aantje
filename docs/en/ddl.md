@@ -4,7 +4,7 @@
 
 ## The Script as submenu
 
-The submenu **Script as** (group `2_script` of the context menu) has **SELECT**, **INSERT** (a table only), **CREATE**, **ALTER** and **DROP**, and on an open connection and a schema **Generate Scripts...**. A node shows only the entries it has a script for. Each opens a new untitled SQL document. The commands (`aantje.scriptSelect`, `scriptInsert`, `scriptCreate`, `scriptAlter`, `scriptDrop`, `generateScripts`) are hidden from the Command Palette because they need a node.
+The submenu **Script as** (group `2_script` of the context menu) has **SELECT**, **INSERT** (a table only), **INSERT with Data...** (a table or a view), **CREATE**, **ALTER** and **DROP**, and on an open connection and a schema **Generate Scripts...**. A node shows only the entries it has a script for. Each opens a new untitled SQL document. The commands (`aantje.scriptSelect`, `scriptInsert`, `scriptInsertData`, `scriptCreate`, `scriptAlter`, `scriptDrop`, `generateScripts`) are hidden from the Command Palette because they need a node.
 
 - **The document belongs to the connection of the node**, as after **New Query** (`src/sql/editor.vscode.ts`). F5 and Ctrl+Enter run it there, and completion knows its catalog. Opening is not running: no session starts until the first run, and in a read-only connection even the run is refused ([SQL editor](sql-editor.md)).
 - **Script as CREATE** on a table or view opens the text of Copy DDL with the matching `DROP` as a comment above. For a table, partitioning, sort order and comments follow as commented statements, because DuckLake has no `CREATE TABLE` clause for them. The options of the table that DuckLake documents (see [Table options](#table-options)) are the exception: they are part of the statement as `WITH (...)`.
@@ -58,6 +58,43 @@ VALUES (
 - **One placeholder per column**, in the order of the table: the column as `CREATE TABLE` defines it, with its type (nested types as DuckDB writes them), its default and `NOT NULL`. The name in the placeholder is quoted like the one in the column list, so a `;` or `--` in a name stays inside its identifier. The statement does not run until every placeholder is replaced.
 - **The newest snapshot.** An insert writes to the newest state, so the script has the name and the columns of the table at the newest snapshot the tree knows (Refresh moves it). With an older snapshot pinned, a comment says so (`-- The tree shows snapshot @5; this statement acts on the newest state and has the columns of snapshot @7.`). A table that was renamed since gets its new name; for one that is no longer there the script is a comment that says so.
 - **Catalog text.** Defaults and unknown types are copied as they are. If one contains `;`, `--` or `/*`, the statement is written as a comment, as for Script as CREATE.
+
+## Script as INSERT with Data
+
+**Script as INSERT with Data...** on a table or a view writes a script that creates the table and inserts all its rows, to rebuild a small table elsewhere (another schema, lake or DuckDB) by running one SQL document, without files or exports (`scriptInsertWithData`, `src/data/insert-data.ts`; the text in `src/ddl-script/insert-data.ts`). It opens as a new SQL document bound to the connection; nothing runs. For `sales.orders` at snapshot 6:
+
+```sql
+-- Script as INSERT with Data at snapshot 6: 3 rows. Nothing has run.
+-- Run it in a read/write SQL session: it creates the schema and the table, then inserts the rows 1,000 at a time, all in one transaction.
+BEGIN TRANSACTION;
+CREATE SCHEMA IF NOT EXISTS "sales";
+CREATE TABLE "sales"."orders" (
+  "id" INTEGER NOT NULL,
+  "customer" STRUCT("name" VARCHAR, "tags" VARCHAR[]),
+  "amount" DECIMAL(10,2) DEFAULT 0,
+  "note" VARCHAR,
+  "created" TIMESTAMP WITH TIME ZONE
+);
+ALTER TABLE "sales"."orders" SET PARTITIONED BY (year("created"));
+COMMENT ON TABLE "sales"."orders" IS 'Orders';
+INSERT INTO "sales"."orders" VALUES
+('1'::INTEGER, '{''name'': Ann, ''tags'': [a, b]}'::STRUCT("name" VARCHAR, tags VARCHAR[]), '12.50'::DECIMAL(10,2), ('it''s' || chr(13) || '
+two lines')::VARCHAR, '2024-05-01 10:00:00+02'::TIMESTAMP WITH TIME ZONE),
+('3'::INTEGER, '{''name'': ''O\''Brien'', ''tags'': []}'::STRUCT("name" VARCHAR, tags VARCHAR[]), '0.99'::DECIMAL(10,2), '😀'::VARCHAR, '2024-05-02 02:00:00+02'::TIMESTAMP WITH TIME ZONE),
+('2'::INTEGER, NULL, '3.00'::DECIMAL(10,2), NULL, NULL);
+COMMIT;
+```
+
+- **Read like the preview.** The rows come through the guarded data access of Select Top 1000 Rows, at the snapshot that the tree shows, in its read-only engine: a view needs the trust confirmation, and the guard runs in the same transaction as the read ([Data access](data-access.md#views-and-trust)). Rows come in the order in which the lake stores them.
+- **The table.** A table gets the `CREATE TABLE` of Script as CREATE from the catalog (types, `NOT NULL`, defaults, options), then its partitioning, sort order and comments as live statements, as in [Generate Scripts](#generate-scripts). A view gets a `CREATE TABLE` with the columns and types that DuckDB binds for it (`DESCRIBE`): the script creates a table with the rows of the view, not the view. A view column of a type that DuckLake cannot store fails when the script runs; change the type in the document.
+- **Values.** Every value is DuckDB's text of it (`CAST(value AS VARCHAR)`) in a string literal with its quotes doubled and a cast to the type of the column, `'<text>'::<type>`; NULL is `NULL`. This gives every type back, checked on DuckDB 2.0 with DuckLake: the integers up to `HUGEINT` and `UBIGINT`, `DECIMAL`, `DOUBLE` and `FLOAT` with `inf`, `nan` and `-0.0`, `VARCHAR` with quotes, line breaks and emoji, `BOOLEAN`, `DATE`, `TIMESTAMP`, `TIMESTAMPTZ` (with its offset, so the same instant in any time zone), `TIME`, `INTERVAL`, `UUID`, `BLOB`, `JSON`, `STRUCT` (also with a quoted field name), lists, lists of structs and `MAP`. The text of every row is made by the engine, in one query.
+- **Characters that would change.** DuckDB's parser ends the text at a NUL, VS Code turns a carriage return into the line break of the document and offers to remove the line and paragraph separators (U+2028, U+2029). A value with one of them is written as `('<text>' || chr(13) || '<text>')::<type>`, so the document holds them as `chr(n)` and the value comes back as it was.
+- **Statements.** `BEGIN TRANSACTION;`, `CREATE SCHEMA IF NOT EXISTS`, the `CREATE TABLE` and what follows it, `INSERT INTO ... VALUES` with 1000 rows each, `COMMIT;`: all rows or none. Names are as in the source, quoted and without a catalog prefix; edit them in the document for another target.
+- **Comments.** The header holds numbers only: the snapshot and the rows. No name and no value goes into a comment.
+- **Catalog text.** The types come from DuckDB and can hold the quoted field names of a struct. One `INSERT` with a `NULL` of each type goes through DuckDB's tokenizer with the rest of the script, each distinct type once (`checkedWrite`), and the `INSERT` statements of the rows are written like it: they differ from it only in string literals, so the multi-megabyte script is not tokenized. A type with `;`, `--` or `/*` makes every `INSERT` a comment under the note of Script as CREATE; when the `CREATE TABLE` stays a comment, the `INSERT` statements are comments too.
+- **Size.** Before the rows are read, one aggregate query counts them and measures the script: the UTF-8 bytes of the text of every row (literals, doubled quotes, casts, `NULL`, separators), plus the first line of each `INSERT` and the rest of the script. The figure is the size of the script to the byte. Above **100,000 rows** or **2 MB** a question names both: **Create** opens the document anyway, **Save as File...** writes the script to a `.sql` file, **Cancel** stops before anything is read. 200,000 rows of four columns make a script of about 30 MB, so the 2 MB come long before the rows.
+- **Save as File...** proposes `<schema>.<table>.sql` and reads the rows a second time, at the snapshot of the first read. The script goes to the file part by part, one `INSERT` at a time, in UTF-8 with `\n`, never whole in memory: into a temporary file next to the chosen one, which replaces it at the end (`replacingFile`, `src/export/file.ts`). Cancel in the notification stops reading and writing; a failure or a cancel leaves no partial file, and a file that was there stays.
+- **Time limit.** `aantje.queryTimeoutSeconds` covers the attach, not the reads, which run until they end or you cancel them.
 
 ## Script as DROP
 
@@ -246,7 +283,7 @@ Rules behind the matrix:
 - **Catalog text in a statement.** Names go through `quoteIdentifier`. A few fragments are copied as they are: macro bodies, parameter defaults and types, defaults and unknown types of a column, and view queries. If such a fragment contains `;`, `--` or `/*`, the statement is written as a comment, so it cannot start a second statement.
 - **Script as CREATE for a column** is `ALTER TABLE ... ADD COLUMN ...` with the default and `NOT NULL` of a top-level column (a struct field gets its type only). DuckLake adds a column with a literal default only; for an expression such as `now()` the script adds the column and sets the default in a second statement.
 - **List elements and map keys and values** have the context value `column.member`: they have no name to create or drop, so only SELECT and ALTER are offered.
-- **INSERT** is offered on a table only, so the matrix has no column for it ([Script as INSERT](#script-as-insert)).
+- **INSERT** is offered on a table only, so the matrix has no column for it ([Script as INSERT](#script-as-insert)). **INSERT with Data...** reads the rows of a table or view and is not part of the matrix either ([Script as INSERT with Data](#script-as-insert-with-data)).
 - **Not offered:** what DuckLake cannot do (see above), and UPDATE or DELETE templates.
 - **A pinned snapshot** adds `AT (VERSION => n)` to queries over tables and views, `snapshot_version => n` to the file list, and the newest-state note to every script that changes the lake or reads something DuckLake keeps only for the newest state. Script as DROP gets a note of its own instead and writes every statement as a comment.
 

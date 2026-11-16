@@ -27,3 +27,6 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm run typecheck
+      # The CloudFormation template of the AWS lake; pipx is on the runner.
+      - run: pipx install cfn-lint==1.60.1
+      - run: npm run check:aws-template

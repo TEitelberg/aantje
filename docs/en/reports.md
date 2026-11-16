@@ -46,11 +46,11 @@ The Reports submenu of a schema node offers the reports whose data is per table,
 
 ## Open as Markdown
 
-Every report has **Open as Markdown** in its header. It opens an untitled Markdown document with the content of the report, with the filters that are set, to copy into a ticket, keep or compare.
+Every report but the Iceberg report ([Sync to Iceberg](iceberg.md#the-report)) has **Open as Markdown** in its header. It opens an untitled Markdown document with the content of the report, with the filters that are set, to copy into a ticket, keep or compare.
 
 The page does not send the document. It posts `{ type: 'markdown' }`, with a `view` when the report has filters. The extension checks the view with the guard of the report, fits it to the data it holds and builds the text itself. A request with an undeclared field, a view of the wrong shape or a `markdown` text is ignored.
 
-Each report has a pure `toMarkdown(data, view)` in a module without `vscode`: `src/<report>/markdown.ts` (`statisticsMarkdown`, `snapshotReportMarkdown`, `schemaHistoryMarkdown`, `activityMarkdown`, `storageMarkdown`, `healthMarkdown`, `dependenciesMarkdown`, `advisorMarkdown`, `growthMarkdown`, `propertiesMarkdown`). Rules:
+Each report with **Open as Markdown** has a pure `toMarkdown(data, view)` in a module without `vscode`: `src/<report>/markdown.ts` (`statisticsMarkdown`, `snapshotReportMarkdown`, `schemaHistoryMarkdown`, `activityMarkdown`, `storageMarkdown`, `healthMarkdown`, `dependenciesMarkdown`, `advisorMarkdown`, `growthMarkdown`, `propertiesMarkdown`). Rules:
 
 - A title, a summary, then tables and details. The filters are named as text.
 - Everything from the catalog (names, authors, messages, the filter text) goes through `code()` in `src/markdown.ts`: a code span on one line with pipes escaped, so nothing renders and no table cell breaks. The connection name in the title goes through `markdownText`.
@@ -89,7 +89,7 @@ src/shell/
 - **Progress.** `withCancel(title, read, outer?)` (`src/progress.vscode.ts`) shows a notification with Cancel and passes an `AbortSignal` to the read.
 - **Reads.** `panels.read(key, run)` resolves to `undefined` when a newer read of the key started (the newer result wins) or the user closed the panel meanwhile; both abort the older read.
 - **Changes while the page is open.** `update(key, data, message)` replaces the data without sending it and posts `message` instead, for a page that applies changes (the Health check applies the events of a run). `onClose(key)` tells the report that the user closed the panel.
-- **Out of date.** When the explorer refreshes a connection, which the SQL editor does after a statement that may change the lake (see [SQL editor](sql-editor.md)), `openReport` marks the open panels of that connection with `panels.markStale(key)` (through `markStaleOnRefresh`; a statistics panel shows one snapshot, which does not change, and is not marked). The page then shows a note above the report (`The lake changed after this report was read ...`) until new data arrives with Refresh. The numbers are not read again by themselves: a report such as the Advisor runs dry runs and reads a lot, and a read would also pull the panel to the front. The Health check panel is not marked, because it shows the result of a run the user started. A Refresh of the explorer by hand marks the panels as well, whether or not the lake changed.
+- **Out of date.** When the explorer refreshes a connection, which the SQL editor does after a statement that may change the lake (see [SQL editor](sql-editor.md)), `openReport` marks the open panels of that connection with `panels.markStale(key)` (through `markStaleOnRefresh`; a statistics panel shows one snapshot, which does not change, and is not marked). The page then shows a note above the report (`The lake changed after this report was read ...`) until new data arrives with Refresh. The numbers are not read again by themselves: a report such as the Advisor runs dry runs and reads a lot, and a read would also pull the panel to the front. A sync to Iceberg is the exception: the user started it and waits for its result, so the report of that copy is read again if it is open (`refreshOpen` of `openReport`). The copy does not change the lake: the explorer reads the levels of the connection again without reopening it, and no panel is marked. The Health check panel is not marked, because it shows the result of a run the user started. A Refresh of the explorer by hand marks the panels as well, whether or not the lake changed.
 - **Removed connections.** A refresh or action of a panel whose connection was removed says `The connection of this … was removed. Close the report.` (`profileOf`).
 
 A report kind is a plain object:
@@ -101,7 +101,7 @@ interface ReportKind<Data, Action, View> {
   message: (data: Data) => unknown; // { type: 'properties', data }
   isAction?: (value: unknown) => value is Action; // none: the page sends no action
   isView?: (value: unknown) => value is View; // none: Open as Markdown takes no view
-  toMarkdown: (data: Data, view: View | undefined) => string;
+  toMarkdown?: (data: Data, view: View | undefined) => string; // none: no Open as Markdown (pageHeader gets markdown: false)
 }
 ```
 

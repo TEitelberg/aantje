@@ -1,4 +1,5 @@
 import { LAYOUT_CSS } from '../shell/style';
+import { ICON_BUTTON_CSS } from '../shell/svg-icon';
 import { KIND_VARIABLES } from './chart-colors';
 
 // The square of each kind of operator in the Statistics table, in the colour that the charts give the kind.
@@ -69,11 +70,17 @@ table.statistics th.num { text-align: right; }
 ${KIND_CSS}
 .profile-chart { flex: 1; min-height: 0; overflow: auto; padding: 6px 8px; }
 .profile-chart.flame .chart { width: 100%; min-height: 160px; }
-.profile-chart.operators { display: flex; }
-.operators-view { display: flex; flex: 1; gap: 16px; min-height: 260px; }
-.operators-view .chart { flex: 1 1 0; min-width: 0; min-height: 260px; }
 pre.text { flex: 1; min-height: 0; margin: 0; padding: 6px 8px; overflow: auto; font-family: var(--vscode-editor-font-family), "Cascadia Mono", Consolas, Menlo, "DejaVu Sans Mono", FreeMono, monospace; font-size: var(--vscode-editor-font-size); line-height: 1.2; white-space: pre; user-select: text; tab-size: 4; }
 .messages-view { flex: 1; min-height: 0; overflow: auto; }
+${ICON_BUTTON_CSS}
+div.tips { flex: 1; min-height: 0; overflow: auto; }
+div.tips:focus { outline: none; }
+table.tips { width: 100%; font-family: inherit; font-size: inherit; }
+table.tips td { max-width: none; white-space: normal; vertical-align: top; overflow-wrap: anywhere; }
+table.tips td.tip-kind, table.tips td.tip-action, table.tips th.tip-kind, table.tips th.tip-action { width: 22px; text-align: center; }
+table.tips td.tip-kind span { display: inline-flex; color: var(--vscode-icon-foreground, var(--vscode-foreground)); }
+table.tips td.tip-title { font-weight: 600; }
+table.tips td.tip-facts { color: var(--vscode-descriptionForeground); }
 table.messages { width: 100%; }
 table.messages td.sql { max-width: 60em; }
 table.messages td.num, table.messages th.num { text-align: right; }

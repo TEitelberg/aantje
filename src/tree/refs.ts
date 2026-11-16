@@ -11,6 +11,8 @@ import type {
   ViewInfo,
 } from '../catalog/model';
 import type { RelationColumn, TableRef } from '../data/types';
+import type { FileEntry } from '../files/listing';
+import type { FilesContext } from '../files/source';
 import type { HistoryEntry } from '../sql/history';
 
 /** Payload of a node: everything the commands need to act on it. */
@@ -59,7 +61,26 @@ export type NodeRef =
   | { readonly kind: 'detail'; readonly connectionId: string; readonly change?: ChangedTable }
   /** A statement of the Query History. */
   | { readonly kind: 'query'; readonly connectionId: string; readonly entry: HistoryEntry }
+  /** A root of the Files folder or a folder below it. */
+  | { readonly kind: 'fileFolder'; readonly connectionId: string; readonly place: FilePlace }
+  /** A file below a root of the Files folder. */
+  | {
+      readonly kind: 'file';
+      readonly connectionId: string;
+      readonly root: string;
+      readonly entry: FileEntry;
+    }
   | { readonly kind: 'message'; readonly connectionId: string; readonly text: string };
+
+/** A folder of the Files folder: the root it belongs to, its own path, and what the folder shares. */
+export interface FilePlace {
+  readonly root: string;
+  /** The directory: `root` itself or a folder below it, ending in `/` (on a disk, in its separator). */
+  readonly path: string;
+  readonly context: FilesContext;
+  /** Why the root is not listed with this connection; roots only. */
+  readonly problem?: string;
+}
 
 /** A table a snapshot changed, as it is at that snapshot. */
 export interface ChangedTable {
@@ -69,7 +90,8 @@ export interface ChangedTable {
 
 /**
  * What a folder groups; it carries what was read to show it, so only `snapshots` needs a query on expansion.
- * `queryHistory` reads aantje's own record of the statements it ran, not the catalog.
+ * `queryHistory` reads aantje's own record of the statements it ran, not the catalog; `files` lists the storage of the
+ * lake.
  */
 export type FolderRef =
   | { readonly folder: 'tables'; readonly schema: SchemaInfo; readonly tables: readonly TableInfo[] }
@@ -103,7 +125,10 @@ export type FolderRef =
       readonly tags: TagsInfo;
     }
   | { readonly folder: 'snapshots'; readonly total?: number }
-  | { readonly folder: 'queryHistory' };
+  | { readonly folder: 'queryHistory' }
+  /** A target that the lake was copied to: the row shows whether the copy has the state of the lake; a click opens its report. */
+  | { readonly folder: 'iceberg'; readonly targetId: string }
+  | { readonly folder: 'files' };
 
 /** A node of the explorer; connection nodes update in place because VS Code matches change events by identity. */
 export interface TreeNode {
@@ -116,8 +141,10 @@ export interface TreeNode {
   tooltip?: string;
   /** Codicon id, e.g. `table`. */
   icon: string;
-  /** Theme colour id for the icon, e.g. `charts.green`. */
+  /** Theme colour id for the icon, e.g. `charts.green`; on a row with a logo, the variant of the logo. */
   iconColor?: string;
+  /** A logo of `media/` (`media/<logo>-<variant>-<theme>.svg`) instead of the codicon, which stays for a tree that has no `media/`. */
+  logo?: 'iceberg-row';
   /** Matches the `viewItem` conditions of the menus in package.json. */
   contextValue: string;
   /** Runs on click; receives the node. */
@@ -135,4 +162,12 @@ export interface ConnectionState {
   readonly snapshot: SnapshotId | 'latest';
   /** Set in the `error` status. */
   readonly error?: string;
+}
+
+/** Something the user must see on a connection in any status, such as a delete of its lake that did not finish. */
+export interface ConnectionNotice {
+  /** Plain text before the description. */
+  readonly label: string;
+  /** Markdown for the tooltip. */
+  readonly tooltip: string;
 }

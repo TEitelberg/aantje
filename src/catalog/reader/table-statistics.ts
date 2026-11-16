@@ -154,7 +154,7 @@ function columnStatistics(
   });
 }
 
-type StatisticsReads = Pick<CatalogReader, 'tableStatistics'>;
+type StatisticsReads = Pick<CatalogReader, 'tableStatistics' | 'columnBytes' | 'columnFileRanges'>;
 
 /** Reads the files, partitions, columns and growth of a table. */
 export function statisticsReads(run: Run, attempt: Attempt): StatisticsReads {
@@ -209,6 +209,18 @@ export function statisticsReads(run: Run, attempt: Attempt): StatisticsReads {
         growth: points,
         ...(merged ? { growthMerged: true as const } : {}),
       };
+    },
+
+    async columnBytes(tableId, snapshot, signal) {
+      const rows = await attempt(queries.columnBytes(tableId, snapshot), signal);
+      return rows === undefined
+        ? undefined
+        : new Map(rows.map((row) => [toNumber(row.column_id), toNumber(row.size_bytes)]));
+    },
+
+    async columnFileRanges(tableId, columnId, snapshot, limit, signal) {
+      const rows = await attempt(queries.columnFileRanges(tableId, columnId, snapshot, limit), signal);
+      return rows?.map((row) => ({ min: toTextOrNull(row.min_value), max: toTextOrNull(row.max_value) }));
     },
   };
 }

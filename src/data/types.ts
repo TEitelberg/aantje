@@ -23,7 +23,10 @@ export interface GridColumn {
 /** Kind of a change grid row; an update is the pair `update-before`, directly followed by `update-after`. */
 export type RowKind = 'insert' | 'delete' | 'update-before' | 'update-after';
 
-/** A change grid starts with `snapshot_id`, `rowid` and `change_type`, then the table's columns. */
+/**
+ * A change grid starts with `snapshot_id`, `rowid` and `change_type`, then the table's columns; the grid of Data Compare
+ * with `#`, `difference` and `side`.
+ */
 export const CHANGE_COLUMNS = 3;
 
 export interface GridData {
@@ -38,6 +41,8 @@ export interface GridData {
   readonly rowKinds?: readonly RowKind[];
   /** Changes only: the line above the rows. */
   readonly summary?: string;
+  /** Changes only: `compare` for the rows of Data Compare, which word the marks for two tables. */
+  readonly rowMode?: 'compare';
 }
 
 export interface S3Settings {

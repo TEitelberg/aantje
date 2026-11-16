@@ -9,7 +9,8 @@ import type { LanguageService } from './language';
 import { actionPrefix, actionSql, cteRowLimitOf, lensStatements, statementOf } from './lens';
 import type { LensAction } from './lens';
 import type { SqlToken } from './tokens';
-import { profiler } from './profile';
+import { analysis, profiler } from './profile';
+import type { ProfilerOptions } from './profile';
 import { statementSpans } from './script';
 
 interface LensEnv {
@@ -18,6 +19,8 @@ interface LensEnv {
   readonly logger: Logger;
   readonly editorOf: (document: vscode.TextDocument) => EditorRef;
   readonly connectionOf: (document: vscode.TextDocument) => string | undefined;
+  /** The performance tips of Statistics and Analysis for a connection; without it neither shows a Tips tab. */
+  readonly tipsFor?: (connectionId: string) => ProfilerOptions['tips'];
 }
 
 /** What a lens passes to its command; the command reads the document again, so an edit since cannot run stale text. */
@@ -38,7 +41,7 @@ const isLensArgs = isShape({
 }) as (value: unknown) => value is LensArgs;
 
 /** A statement to act on: its text, where it starts, whether it only reads, and whether aantje built it (a CTE). */
-interface Target {
+export interface Target {
   readonly document: vscode.TextDocument;
   readonly text: string;
   readonly base: number;
@@ -155,8 +158,8 @@ async function lensTarget(service: LanguageService, args: LensArgs): Promise<Tar
       };
 }
 
-/** From a menu: the selection when it holds one statement, else the statement at the cursor. */
-async function menuTarget(service: LanguageService): Promise<Target | undefined> {
+/** From a menu: the selection when it holds one statement, else the statement at the cursor; Run to File uses it too. */
+export async function menuTarget(service: LanguageService): Promise<Target | undefined> {
   const editor = activeSqlEditor();
   if (!editor) return undefined;
   const { document, selection } = editor;
@@ -228,7 +231,13 @@ export function registerLenses(env: LensEnv): vscode.Disposable[] {
       // Execute goes into the Query History; Explain, Analysis and Statistics, which show a plan or a profile, do not.
       ...(action === 'execute' ? { record: true } : {}),
     };
-    await editors.run(editorOf(target.document), script, action === 'profile' ? profiler() : undefined);
+    // Statistics and Analysis measure the run, so both give performance tips.
+    const connectionId = connectionOf(target.document);
+    const tips = connectionId === undefined ? undefined : env.tipsFor?.(connectionId);
+    const options = tips ? { tips } : {};
+    const around =
+      action === 'profile' ? profiler(options) : action === 'analyze' && tips ? analysis(options) : undefined;
+    await editors.run(editorOf(target.document), script, around);
   };
 
   const command = (id: string, handler: (arg: unknown) => Promise<void>): vscode.Disposable =>

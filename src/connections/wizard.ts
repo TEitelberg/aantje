@@ -1,11 +1,11 @@
 import { userMessageOf } from '../errors';
-import type { StorageValues, StoredValueName } from '../storage/config';
+import { validateAwsProfile } from '../storage/config';
+import type { StorageValues } from '../storage/config';
+import { fileRootsSteps } from './file-roots';
 import type { PickItem, WizardUi } from './ports';
-import type { AzureAuthMode, ConnectionKind, ConnectionProfile } from './profile';
+import type { ConnectionKind, ConnectionProfile } from './profile';
 import {
   connectionTarget,
-  DEFAULT_PORT,
-  DEFAULT_QUACK_PORT,
   defaultSsl,
   effectiveStorage,
   isNameTaken,
@@ -18,18 +18,17 @@ import {
   validateRequired,
   validateTenant,
 } from './profile';
-import {
-  blankStorageAnswers,
-  dataPathReader,
-  sameStorage,
-  storageAnswersOf,
-  storageOf,
-  storageSteps,
-  storageValuesOf,
-} from './storage-steps';
-import type { StorageField } from './storage-steps';
+import { dataPathReader, storageSteps, storageValuesOf } from './storage-steps';
 import type { ConnectionStore } from './store';
 import type { TestedConnection } from './test';
+import {
+  initialAnswers,
+  signsInWithTokenAnswer,
+  SYSTEM_TRUST,
+  toProfile,
+  typedPasswordOf,
+} from './wizard-answers';
+import type { Answers, Field, SignInMode } from './wizard-answers';
 
 type FileProfile = Extract<ConnectionProfile, { kind: 'sqlite' | 'duckdb' }>;
 
@@ -65,23 +64,6 @@ export interface WizardDeps {
   readonly entraUser?: (tenant: string | undefined) => Promise<string>;
 }
 
-type Field =
-  | 'name'
-  | 'host'
-  | 'port'
-  | 'database'
-  | 'signIn'
-  | 'tenant'
-  | 'user'
-  | 'ssl'
-  | 'fingerprint'
-  | 'path'
-  | 'password'
-  | 'readOnly'
-  | StorageField
-  | StoredValueName;
-type Answers = Record<Field, string>;
-
 interface Step {
   readonly field: Field;
   /** What the input asks; a function when the words depend on the earlier answers. */
@@ -116,7 +98,7 @@ const READ_ONLY_ITEMS: readonly PickItem<'no' | 'yes'>[] = [
   { label: 'Yes', description: 'Read-only session: refuses statements that change the lake', value: 'yes' },
 ];
 
-const SIGN_IN_ITEMS: readonly PickItem<AzureAuthMode>[] = [
+const SIGN_IN_ITEMS: readonly PickItem<SignInMode>[] = [
   {
     label: 'Password',
     description: 'A user name and a password, kept in the secret storage',
@@ -126,6 +108,11 @@ const SIGN_IN_ITEMS: readonly PickItem<AzureAuthMode>[] = [
     label: 'Microsoft Entra ID',
     description: 'Your Microsoft account signs in with a token for every connection; no password is stored',
     value: 'entra',
+  },
+  {
+    label: 'AWS IAM',
+    description: 'An AWS profile signs a token for every connection (Amazon RDS); no password is stored',
+    value: 'aws',
   },
 ];
 
@@ -148,9 +135,6 @@ const AFTER_FAILURE: readonly PickItem<'save' | 'edit' | 'cancel'>[] = [
   { label: 'Edit settings', description: 'Go back and change the values', value: 'edit' },
   DISCARD,
 ];
-
-// The answer of the fingerprint step that pins nothing: the certificate is checked against the system trust store.
-const SYSTEM_TRUST = '';
 
 /** Asks for the kind and the connection details, tests the connection and saves it. Undefined when cancelled. */
 export async function addConnectionFlow(
@@ -205,8 +189,7 @@ async function configure(
   // The password the catalog is opened with: a typed one, else the stored one when it belongs to this server.
   let registered: string | undefined;
   const passwordOf = async (profile: ConnectionProfile): Promise<string | undefined> => {
-    // An Entra login has no password, also not one typed before the sign-in was switched in an earlier round.
-    const typed = answers.signIn === 'entra' ? undefined : answers.password || undefined;
+    const typed = typedPasswordOf(answers);
     if (typed !== registered) {
       registered = typed;
       deps.store.registerPassword(typed);
@@ -214,7 +197,7 @@ async function configure(
     // The stored password is reused only when it belongs to the edited target: if the host, port, database or user
     // changed, `password` returns undefined, so the test (and the save) do not send the old server's password to the new
     // one. The empty field then tests without a password; the password prompt says so.
-    return answers.signIn === 'entra' ? undefined : (typed ?? (await deps.store.password(profile)));
+    return signsInWithTokenAnswer(answers) ? undefined : (typed ?? (await deps.store.password(profile)));
   };
   const dataPath = dataPathReader(ui, deps.dataPathOf, answers, passwordOf, () =>
     toProfile(existing?.id ?? deps.store.newId(answers.name), kind, answers, existing),
@@ -226,48 +209,49 @@ async function configure(
     }
 
     const profile = toProfile(existing?.id ?? deps.store.newId(answers.name), kind, answers, existing);
-    const typedPassword = answers.signIn === 'entra' ? undefined : answers.password || undefined;
     const password = await passwordOf(profile);
     // The typed sign-in values of the storage are not stored before the connection is saved; the test gets them.
     const { storageValues, stored } = await typedStorageValues(deps, profile, existing, answers);
-    if (profile.kind === 'sqlite' || profile.kind === 'duckdb') {
-      const created = await offerNewLake(ui, deps, profile, storageValues);
-      if (created === 'edit') {
-        continue;
-      }
-      if (created === 'cancel') {
-        return undefined;
-      }
+    const created = await offerNewLake(ui, deps, profile, storageValues);
+    const tested =
+      created === 'ok' ? await testOrChoose(ui, deps, profile, password, storageValues ?? stored) : created;
+    if (tested === 'edit') {
+      continue;
     }
-    let info: TestedConnection | undefined;
-    try {
-      info = await ui.withProgress(`Testing connection "${profile.name}"...`, () =>
-        deps.testConnection(profile, password, storageValues ?? stored),
-      );
-    } catch (error) {
-      ui.error(`Connection test failed: ${userMessageOf(error)}`);
-      const choice = await ui.pick('The connection test failed', AFTER_FAILURE);
-      if (choice === 'edit') {
-        continue;
-      }
-      if (choice !== 'save') {
-        return undefined;
-      }
+    if (tested === 'cancel') {
+      return undefined;
     }
-
     await (existing
-      ? deps.store.update(profile, typedPassword, storageValues)
-      : deps.store.add(profile, typedPassword, storageValues));
+      ? deps.store.update(profile, typedPasswordOf(answers), storageValues)
+      : deps.store.add(profile, typedPasswordOf(answers), storageValues));
     if (storageValues) {
       await deps.storageSecretsChanged?.(profile);
     }
-    if (info) {
-      const storage = info.storage === 'reachable' ? ' The storage is reachable.' : '';
+    if (tested !== 'save') {
+      const storage = tested.storage === 'reachable' ? ' The storage is reachable.' : '';
       ui.info(
-        `Saved connection "${profile.name}". DuckLake spec version ${info.specVersion}, latest snapshot ${info.latestSnapshot}.${storage}`,
+        `Saved connection "${profile.name}". DuckLake spec version ${tested.specVersion}, latest snapshot ${tested.latestSnapshot}.${storage}`,
       );
     }
     return profile;
+  }
+}
+
+/** Tests the connection: what the test found, or, after a failure, whether to save anyway, go back or cancel. */
+async function testOrChoose(
+  ui: WizardUi,
+  deps: WizardDeps,
+  profile: ConnectionProfile,
+  password: string | undefined,
+  storageValues: StorageValues | undefined,
+): Promise<TestedConnection | 'save' | 'edit' | 'cancel'> {
+  try {
+    return await ui.withProgress(`Testing connection "${profile.name}"...`, () =>
+      deps.testConnection(profile, password, storageValues),
+    );
+  } catch (error) {
+    ui.error(`Connection test failed: ${userMessageOf(error)}`);
+    return (await ui.pick('The connection test failed', AFTER_FAILURE)) ?? 'cancel';
   }
 }
 
@@ -288,16 +272,21 @@ function proposedDataPath(path: string, hasStorage: boolean): string {
 
 /**
  * When the file of a SQLite or DuckDB profile is missing, offers to create a new lake in it and asks where its data
- * files go. `ok` also covers "nothing to do" (file there, or no way to create one); a failure is shown and goes back.
+ * files go. `ok` also covers "nothing to do" (another kind, file there, or no way to create one); a failure is shown
+ * and goes back.
  */
 async function offerNewLake(
   ui: WizardUi,
   deps: WizardDeps,
-  profile: FileProfile,
+  profile: ConnectionProfile,
   storageValues: StorageValues | undefined,
 ): Promise<'ok' | 'edit' | 'cancel'> {
   const fileLake = deps.fileLake;
-  if (!fileLake || (await fileLake.exists(profile.path))) {
+  if (
+    (profile.kind !== 'sqlite' && profile.kind !== 'duckdb') ||
+    !fileLake ||
+    (await fileLake.exists(profile.path))
+  ) {
     return 'ok';
   }
   const choice = await ui.pick(
@@ -435,13 +424,20 @@ function stepsFor(
       },
       readOnlyStep(kind),
       ...storageStepsOf(existing, ui, deps, dataPath),
+      ...fileRootsSteps(existing),
     ];
   }
   // The sign-in the user name was last answered for: switching to Entra prefills the name of the Microsoft account once.
   const userAnswered = {
-    for: existing?.kind === 'postgres' ? (existing.azureAuth ?? 'password') : undefined,
+    for:
+      existing?.kind === 'postgres'
+        ? existing.awsAuth === 'iam'
+          ? 'aws'
+          : (existing.azureAuth ?? 'password')
+        : undefined,
   };
-  const storedPassword = existing?.kind === 'postgres' && existing.azureAuth !== 'entra';
+  const storedPassword =
+    existing?.kind === 'postgres' && existing.azureAuth !== 'entra' && existing.awsAuth !== 'iam';
   // The stored password belongs to the server it was saved for: after the host, port, database or user changed, the
   // empty field would not keep it.
   const passwordPrompt = (answers: Answers): string => {
@@ -472,6 +468,13 @@ function stepsFor(
       skip: (answers) => answers.signIn !== 'entra',
     },
     {
+      field: 'iamProfile',
+      prompt:
+        'AWS profile that signs the IAM token, from ~/.aws/config. Leave empty for the profile of the storage, or the environment.',
+      validate: (value) => (value.trim() === '' ? undefined : validateAwsProfile(value.trim())),
+      skip: (answers) => answers.signIn !== 'aws',
+    },
+    {
       field: 'user',
       prompt: 'User name',
       ask: async (heading, answers) => {
@@ -483,23 +486,32 @@ function stepsFor(
           title: heading,
           prompt: entra
             ? 'Entra user name: the Microsoft Entra principal that is a role on the server, prefilled with your Microsoft account'
-            : 'User name',
+            : answers.signIn === 'aws'
+              ? 'Database user that has the role rds_iam (ducklake_iam for a lake that aantje created)'
+              : 'User name',
           value: answers.user,
           validate: validateRequired('User'),
         });
-        userAnswered.for = answers.signIn as AzureAuthMode;
+        userAnswered.for = answers.signIn;
         return user;
       },
     },
-    { field: 'ssl', prompt: 'Use TLS for the connection?', choices: TLS_ITEMS },
+    // RDS takes an IAM token only over TLS, so the answer is not asked.
+    {
+      field: 'ssl',
+      prompt: 'Use TLS for the connection?',
+      choices: TLS_ITEMS,
+      skip: (answers) => answers.signIn === 'aws',
+    },
     {
       field: 'password',
       prompt: passwordPrompt,
       password: true,
-      skip: (answers) => answers.signIn === 'entra',
+      skip: signsInWithTokenAnswer,
     },
     readOnlyStep(kind),
     ...storageStepsOf(existing, ui, deps, dataPath),
+    ...fileRootsSteps(existing),
   ];
 }
 
@@ -594,60 +606,6 @@ function readOnlyStep(kind: ConnectionKind): Step {
   };
 }
 
-function initialAnswers(kind: ConnectionKind, existing: ConnectionProfile | undefined): Answers {
-  const blank: Answers = {
-    name: '',
-    host: '',
-    port: String(kind === 'quack' ? DEFAULT_QUACK_PORT : DEFAULT_PORT),
-    database: '',
-    signIn: 'password',
-    tenant: '',
-    user: '',
-    ssl: 'no',
-    fingerprint: SYSTEM_TRUST,
-    path: '',
-    password: '',
-    readOnly: 'no',
-    ...blankStorageAnswers(),
-  };
-  if (!existing) {
-    return blank;
-  }
-  switch (existing.kind) {
-    case 'postgres':
-      return {
-        ...blank,
-        name: existing.name,
-        host: existing.host,
-        port: String(existing.port),
-        database: existing.database,
-        signIn: existing.azureAuth ?? 'password',
-        tenant: existing.azureTenant ?? '',
-        user: existing.user,
-        ssl: existing.ssl ? 'yes' : 'no',
-        readOnly: existing.readOnly ? 'yes' : 'no',
-        ...storageAnswersOf(effectiveStorage(existing)),
-      };
-    case 'quack':
-      return {
-        ...blank,
-        name: existing.name,
-        host: existing.host,
-        port: String(existing.port),
-        ssl: existing.ssl ? 'yes' : 'no',
-        fingerprint: existing.fingerprint ?? SYSTEM_TRUST,
-      };
-    default:
-      return {
-        ...blank,
-        name: existing.name,
-        path: existing.path,
-        readOnly: existing.readOnly ? 'yes' : 'no',
-        ...storageAnswersOf(effectiveStorage(existing)),
-      };
-  }
-}
-
 /** The items with the current one first, so that the picker offers it. */
 export function currentFirst<T extends string>(
   items: readonly PickItem<T>[],
@@ -667,60 +625,4 @@ export function nameValidator(
   return (value) =>
     validateRequired('Name')(value) ??
     (isNameTaken(value, others, exceptId) ? 'A connection with this name already exists.' : undefined);
-}
-
-// `metadataSchema` is not asked for; it is carried over from the profile being edited.
-function toProfile(
-  id: string,
-  kind: ConnectionKind,
-  answers: Answers,
-  existing: ConnectionProfile | undefined,
-): ConnectionProfile {
-  if (kind === 'quack') {
-    const ssl = answers.ssl === 'yes';
-    const fingerprint =
-      ssl && answers.fingerprint !== SYSTEM_TRUST ? { fingerprint: answers.fingerprint } : {};
-    return {
-      id,
-      name: answers.name,
-      kind,
-      host: answers.host,
-      port: Number(answers.port),
-      ssl,
-      ...fingerprint,
-    };
-  }
-  const readOnly = answers.readOnly === 'yes' ? { readOnly: true } : {};
-  const asked = storageOf(answers);
-  const storage = asked === undefined ? {} : { storage: asked };
-  if (kind !== 'postgres') {
-    return { id, name: answers.name, kind, path: answers.path, ...storage, ...readOnly };
-  }
-  const previous = existing?.kind === 'postgres' ? existing : undefined;
-  // A profile with the legacy `azureAccount` stays as it is while its storage answers describe the same storage; the
-  // first change of the storage writes `storage` and drops `azureAccount`.
-  const legacy =
-    previous?.azureAccount !== undefined && sameStorage(asked, effectiveStorage(previous))
-      ? { azureAccount: previous.azureAccount }
-      : {};
-  const entra = answers.signIn === 'entra';
-  return {
-    id,
-    name: answers.name,
-    kind,
-    host: answers.host,
-    port: Number(answers.port),
-    database: answers.database,
-    user: answers.user,
-    ssl: answers.ssl === 'yes',
-    ...readOnly,
-    ...(previous?.metadataSchema === undefined ? {} : { metadataSchema: previous.metadataSchema }),
-    // `azureAccount` and `storage` exclude each other.
-    ...(legacy.azureAccount === undefined ? storage : legacy),
-    // The tenant of the PostgreSQL token; the legacy account is read in the same tenant.
-    ...((entra || legacy.azureAccount !== undefined) && answers.tenant !== ''
-      ? { azureTenant: answers.tenant }
-      : {}),
-    ...(entra ? { azureAuth: 'entra' as const } : {}),
-  };
 }

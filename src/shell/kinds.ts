@@ -3,6 +3,7 @@ import { advisorPage } from '../advisor/page';
 import { dependenciesPage } from '../dependencies/page';
 import { growthPage } from '../growth/page';
 import { healthPage } from '../health-report/page';
+import { icebergPage } from '../iceberg-report/page';
 import { propertiesPage } from '../properties-report/page';
 import { snapshotReportPage } from '../snapshot-report/page';
 import { schemaHistoryPage } from '../schema-history/page';
@@ -22,4 +23,5 @@ export const pageKinds: readonly PageKind<unknown>[] = [
   advisorPage,
   dependenciesPage,
   growthPage,
+  icebergPage,
 ];

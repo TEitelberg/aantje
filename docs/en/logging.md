@@ -16,15 +16,16 @@ The channel works the same in desktop VS Code and in code-server.
 
 aantje logs what an operator needs to find out why a connection or command failed, and nothing about catalog content. The main lines:
 
-| Level   | Line                                                                | When                                         |
-| ------- | ------------------------------------------------------------------- | -------------------------------------------- |
-| `info`  | `Connected to "<name>" (DuckLake <version>, latest snapshot <id>).` | A catalog was opened.                        |
-| `info`  | `Disconnected from "<name>".`                                       | A connection was closed on purpose.          |
-| `info`  | `The command <id> was stopped: <message>`                           | The user cancelled a command.                |
-| `error` | `Cannot connect to "<name>".` and the error with its causes         | A catalog could not be opened.               |
-| `error` | `Cannot read the children of "<node>" in "<name>".` and the error   | A level of the tree could not be read.       |
-| `error` | `The command <id> failed.` and the error                            | A command threw.                             |
-| `warn`  | `Ignored an entry of "aantje.connections": <reason>`                | An invalid entry of the setting was skipped. |
+| Level   | Line                                                                     | When                                                                                                                                                        |
+| ------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `info`  | `Connected to "<name>" (DuckLake <version>, latest snapshot <id>).`      | A catalog was opened.                                                                                                                                       |
+| `info`  | `Disconnected from "<name>".`                                            | A connection was closed on purpose.                                                                                                                         |
+| `info`  | `The command <id> was stopped: <message>`                                | The user cancelled a command.                                                                                                                               |
+| `error` | `Cannot connect to "<name>".` and the error with its causes              | A catalog could not be opened.                                                                                                                              |
+| `error` | `Cannot read the children of "<node>" in "<name>".` and the error        | A level of the tree could not be read.                                                                                                                      |
+| `error` | `The command <id> failed.` and the error                                 | A command threw.                                                                                                                                            |
+| `warn`  | `Ignored an entry of "aantje.connections": <reason>`                     | An invalid entry of the setting was skipped.                                                                                                                |
+| `info`  | `MCP: <tool> on "<connection>" [<statement>]: <n> characters (<ms> ms).` | An AI assistant called a tool of the MCP server, with the statement it ran or opened; a failure says `failed (<ms> ms)` and why ([MCP server](mcp.md#log)). |
 
 Other `warn` and `error` lines report failures of reports, the SQL session or shutdown. What appears in the log: connection names, hosts, ports, database names, user names, file paths, error texts of the database server and snapshot ids. Read a log before you attach it to a bug report.
 

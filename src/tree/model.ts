@@ -4,22 +4,28 @@ import { isAzureLake } from '../connections/profile';
 import type { ConnectionProfile } from '../connections/profile';
 import type { RelationColumn } from '../data/types';
 import { isAantjeError, isAborted, userMessageOf } from '../errors';
+import type { FilesPort } from '../files/source';
 import { silentLogger } from '../log';
 import { byName } from '../order';
 import type { Logger } from '../log';
+import type { IcebergRow } from '../iceberg/service';
 import type { QueryHistory } from '../sql/history';
+import { tableTooltip } from './format';
+import { listsFiles, readFiles } from './files';
 import { readBelow } from './levels';
 import type { ViewReader } from './levels';
 import {
   connectionNodeId,
   connectionPresentation,
   folderId,
+  applyIcebergRow,
   folderNode,
+  icebergNode,
   messageNode,
   queryNodes,
   schemaNode,
 } from './nodes';
-import type { ConnectionState, TreeNode } from './refs';
+import type { ConnectionNotice, ConnectionState, TreeNode } from './refs';
 
 export interface CatalogTreeDeps {
   /** Connections in display order, read on every `roots()`; ids must be unique. */
@@ -36,6 +42,23 @@ export interface CatalogTreeDeps {
   ) => Promise<readonly RelationColumn[]>;
   /** The statements the SQL editor ran; without it, a connection has no folder Query History. */
   queryHistory?: Pick<QueryHistory, 'shown' | 'entries'>;
+  /** The storage of the lake; without it, a connection has no folder Files. A Quack connection never has one. */
+  files?: FilesPort;
+  /** The copies of a lake to Iceberg: their rows, the lines for the tooltips of copied tables, and the check that updates them. */
+  iceberg?: {
+    rows(connectionId: string): readonly IcebergRow[];
+    tableLines(connectionId: string, schema: string, table: string): readonly string[];
+    /** `Iceberg: 3 behind` while the lake changed a synced table after the sync; undefined otherwise. */
+    tableHint?(connectionId: string, schema: string, table: string): string | undefined;
+    check(connectionId: string): Promise<void>;
+    /** Tells when the rows or the state of a connection's copies changed. */
+    onDidChange(listener: (connectionId: string) => void): { dispose(): void };
+  };
+  /** What a connection must show in any status (a delete of its lake that did not finish), and when that changes. */
+  notices?: {
+    of(connectionId: string): ConnectionNotice | undefined;
+    onDidChange(listener: (connectionId: string) => void): { dispose(): void };
+  };
   logger?: Logger;
 }
 
@@ -75,8 +98,16 @@ export class CatalogTree {
   private readonly logger: Logger;
   private readonly limitViewReads = limiter(MAX_VIEW_READS);
 
+  private readonly icebergListener: { dispose(): void } | undefined;
+  private readonly noticeListener: { dispose(): void } | undefined;
+
   constructor(private readonly deps: CatalogTreeDeps) {
     this.logger = deps.logger ?? silentLogger;
+    this.icebergListener = deps.iceberg?.onDidChange((connectionId) => this.icebergChanged(connectionId));
+    this.noticeListener = deps.notices?.onDidChange((connectionId) => {
+      const conn = this.connections.get(connectionId);
+      if (conn) this.changed(conn);
+    });
   }
 
   /** One node per profile; connections without a profile are closed and dropped. */
@@ -186,15 +217,73 @@ export class CatalogTree {
     this.emit(node && targets[0]?.node);
   }
 
+  /** A sync to Iceberg was checked: its rows and the tooltips of the copied tables show the result. */
+  icebergChanged(connectionId: string): void {
+    const conn = this.connections.get(connectionId);
+    const rows = this.deps.iceberg?.rows(connectionId) ?? [];
+    for (const node of conn?.cache.nodes.values() ?? []) {
+      if (node.ref.kind === 'folder' && node.ref.folder === 'iceberg') {
+        const { targetId } = node.ref;
+        const row = rows.find((candidate) => candidate.targetId === targetId);
+        if (row) {
+          applyIcebergRow(node, row);
+          this.emit(node);
+        }
+      } else if (conn && this.showIceberg(conn, node)) {
+        // VS Code keeps the item it was given: a new line in the tooltip needs a change event.
+        this.emit(node);
+      }
+    }
+  }
+
+  /**
+   * The Iceberg state of a synced table: a line below its tooltip, and `Iceberg: n behind` as its description while
+   * the lake changed it after the sync; true when either changed.
+   */
+  private showIceberg(conn: Connection, node: TreeNode): boolean {
+    if (node.ref.kind !== 'table') return false;
+    const { schema, table } = node.ref;
+    const lines = this.deps.iceberg?.tableLines(conn.profile.id, schema.name, table.name) ?? [];
+    const tooltip = [tableTooltip(schema, table), ...lines].join('\n\n');
+    const description = this.deps.iceberg?.tableHint?.(conn.profile.id, schema.name, table.name);
+    if (tooltip === node.tooltip && description === node.description) return false;
+    node.tooltip = tooltip;
+    node.description = description;
+    return true;
+  }
+
   /** The folder Query History of a connection, once its level was read: the node to fire a change for after a run. */
   queryHistoryFolder(connectionId: string): TreeNode | undefined {
     const conn = this.connections.get(connectionId);
     return conn?.cache.nodes.get(folderId(conn.node.id, 'queryHistory'));
   }
 
-  /** Reads the levels of every connection again without reopening one, e.g. when the Query History is switched on or off. */
-  reread(): void {
+  /**
+   * Lists a part of the folder Files again (the folder, a root or a folder below it) without reopening the connection:
+   * the cached levels of the node and below are dropped, and the node is reported as changed.
+   */
+  refreshFiles(node: TreeNode): void {
+    const conn = this.connections.get(node.ref.connectionId);
+    if (!conn || !listsFiles(node) || conn.cache.nodes.get(node.id) !== node) {
+      return;
+    }
+    const below = `${node.id}/`;
+    for (const map of [conn.cache.children, conn.cache.parents, conn.cache.nodes]) {
+      for (const id of [...map.keys()]) {
+        if (id.startsWith(below)) map.delete(id);
+      }
+    }
+    conn.cache.children.delete(node.id);
+    this.emit(node);
+  }
+
+  /**
+   * Reads the levels of every connection, or of one, again without reopening it: when the Query History is switched on
+   * or off, or after a sync to Iceberg, which changes the rows of a lake but not the lake.
+   */
+  reread(connectionId?: string): void {
     for (const conn of this.sync()) {
+      if (connectionId !== undefined && conn.profile.id !== connectionId) continue;
       this.replaceCache(conn);
       this.changed(conn);
     }
@@ -234,6 +323,8 @@ export class CatalogTree {
   }
 
   async dispose(): Promise<void> {
+    this.icebergListener?.dispose();
+    this.noticeListener?.dispose();
     this.listeners.clear();
     this.refreshListeners.clear();
     const connections = [...this.connections.values()];
@@ -266,7 +357,8 @@ export class CatalogTree {
   private present(conn: Connection): void {
     const { phase } = conn;
     const expandable = phase.status !== 'disconnected' || phase.autoConnect;
-    Object.assign(conn.node, connectionPresentation(conn.profile, stateOf(conn), expandable));
+    const notice = this.deps.notices?.of(conn.profile.id);
+    Object.assign(conn.node, connectionPresentation(conn.profile, stateOf(conn), expandable, notice));
   }
 
   private changed(conn: Connection): void {
@@ -362,6 +454,7 @@ export class CatalogTree {
     for (const child of children) {
       cache.parents.set(child.id, node);
       cache.nodes.set(child.id, child);
+      this.showIceberg(conn, child);
     }
     return children;
   }
@@ -373,6 +466,12 @@ export class CatalogTree {
     const { phase } = conn;
     if (phase.status !== 'connected') {
       return Promise.resolve([]);
+    }
+    if (listsFiles(node)) {
+      const { files } = this.deps;
+      return files
+        ? readFiles(files, conn.profile, phase.reader, node, cache.stale.signal)
+        : Promise.resolve([]);
     }
     const { viewColumns } = this.deps;
     const columnsOfView: ViewReader | undefined =
@@ -407,6 +506,8 @@ export class CatalogTree {
       case 'error':
         return [messageNode(node, phase.error, 'error')];
       case 'connected': {
+        // Connecting and refreshing check the copies to Iceberg again; the rows show the result when it is in.
+        void this.deps.iceberg?.check(conn.profile.id);
         const [schemas, total] = await Promise.all([
           phase.reader.schemas(snapshotOf(conn.snapshot, phase.info)),
           this.snapshotCount(conn.profile, phase.reader),
@@ -415,6 +516,11 @@ export class CatalogTree {
           ...schemas.toSorted(byName).map((schema) => schemaNode(node, schema)),
           folderNode(node, { folder: 'snapshots', total }),
           ...(this.deps.queryHistory?.shown() ? [folderNode(node, { folder: 'queryHistory' })] : []),
+          // Quack: the server reads the files, not aantje.
+          ...(this.deps.files && conn.profile.kind !== 'quack'
+            ? [folderNode(node, { folder: 'files' })]
+            : []),
+          ...(this.deps.iceberg?.rows(conn.profile.id) ?? []).map((row) => icebergNode(node, row)),
         ];
       }
       default:

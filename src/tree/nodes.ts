@@ -1,8 +1,11 @@
 import { isMainSchema } from '../catalog/model';
 import type { ColumnInfo, MacroInfo, SchemaInfo, SnapshotInfo, TableInfo, ViewInfo } from '../catalog/model';
-import { isAzureLake } from '../connections/profile';
+import { isAwsLake, isAzureLake } from '../connections/profile';
 import type { ConnectionProfile } from '../connections/profile';
 import type { RelationColumn } from '../data/types';
+import { fileTypeOf } from '../files/kinds';
+import type { FileEntry } from '../files/listing';
+import type { IcebergRow } from '../iceberg/service';
 import { visibleLine as shown } from '../markdown';
 import type { HistoryEntry, HistoryStatus } from '../sql/history';
 import {
@@ -10,6 +13,10 @@ import {
   columnTooltip,
   connectionDescription,
   connectionTooltip,
+  fileDescription,
+  fileRootTooltip,
+  fileTooltip,
+  FILES_TOOLTIP,
   macroDescription,
   macroTooltip,
   partitioningTooltip,
@@ -27,7 +34,7 @@ import {
   viewTooltip,
 } from './format';
 import type { TreeDetail } from './format';
-import type { ChangedTable, ConnectionState, FolderRef, TreeNode } from './refs';
+import type { ChangedTable, ConnectionNotice, ConnectionState, FilePlace, FolderRef, TreeNode } from './refs';
 
 // Labels and descriptions from the catalog go through `shown`: no control or format character can reorder the tree.
 
@@ -40,8 +47,12 @@ const STATUS = {
   connecting: { icon: 'sync~spin', iconColor: undefined, contextValue: 'connection.disconnected' },
   // aantje-duck is contributed in package.json (contributes.icons), drawn from media/aantje-icons.woff.
   connected: { icon: 'aantje-duck', iconColor: 'charts.green', contextValue: 'connection.connected' },
-  error: { icon: 'error', iconColor: undefined, contextValue: 'connection.error' },
+  error: { icon: 'error', iconColor: 'charts.red', contextValue: 'connection.error' },
 } as const;
+
+// A notice (a delete of the lake that did not finish) makes the icon a red error in every status; connecting keeps its
+// spinner.
+const NOTICED = { icon: 'error', iconColor: 'charts.red' } as const;
 
 // An Azure DuckLake has its own context values, so that only its menu offers Allow My IP and Delete Azure DuckLake.
 const AZURE_STATUS = {
@@ -49,6 +60,14 @@ const AZURE_STATUS = {
   connecting: { contextValue: 'connection.disconnected.azure' },
   connected: { contextValue: 'connection.connected.azure' },
   error: { contextValue: 'connection.error.azure' },
+} as const;
+
+// An AWS DuckLake likewise, for its Allow My IP and Delete AWS DuckLake.
+const AWS_STATUS = {
+  disconnected: { contextValue: 'connection.disconnected.aws' },
+  connecting: { contextValue: 'connection.disconnected.aws' },
+  connected: { contextValue: 'connection.connected.aws' },
+  error: { contextValue: 'connection.error.aws' },
 } as const;
 
 // Create Notebook cannot sign in to an Azure DuckLake: its tables and views have context values of their own, so that
@@ -76,6 +95,16 @@ const FOLDERS = {
   tags: { label: 'Tags', segment: 'tags', contextValue: 'folder.tags' },
   snapshots: { label: 'Snapshots', segment: 'snapshots', contextValue: 'folder.snapshots' },
   queryHistory: { label: 'Query History', segment: 'queries', contextValue: 'folder.queryHistory' },
+  files: { label: 'Files', segment: 'files', contextValue: 'folder.files' },
+  iceberg: { label: 'Iceberg', segment: 'iceberg', contextValue: 'folder.iceberg' },
+} as const;
+
+// The nodes below Files: a file that DuckDB reads with a table function of its own gets the import scripts.
+const FILE_NODES = {
+  root: { icon: 'root-folder', contextValue: 'fileRoot' },
+  folder: { icon: 'folder', contextValue: 'fileFolder' },
+  file: { icon: 'file', contextValue: 'file' },
+  importable: { icon: 'file', contextValue: 'file.importable' },
 } as const;
 
 // A failed and a cancelled statement have icons of their own.
@@ -118,13 +147,17 @@ export function connectionPresentation(
   profile: ConnectionProfile,
   state: ConnectionState,
   expandable: boolean,
+  notice?: ConnectionNotice,
 ): Pick<TreeNode, 'label' | 'description' | 'tooltip' | 'icon' | 'contextValue' | 'hasChildren'> {
+  const description = connectionDescription(profile.kind, state);
   return {
     label: profile.name,
-    description: connectionDescription(profile.kind, state),
-    tooltip: connectionTooltip(profile, state),
+    description: notice === undefined ? description : `${notice.label} · ${description}`,
+    tooltip: connectionTooltip(profile, state, notice),
     ...STATUS[state.status],
+    ...(notice !== undefined && state.status !== 'connecting' ? NOTICED : {}),
     ...(isAzureLake(profile) ? AZURE_STATUS[state.status] : {}),
+    ...(isAwsLake(profile) ? AWS_STATUS[state.status] : {}),
     hasChildren: expandable,
   };
 }
@@ -139,6 +172,33 @@ export function schemaNode(parent: TreeNode, schema: SchemaInfo): TreeNode {
     ...(isMainSchema(schema.name) ? MAIN_SCHEMA : SCHEMA),
     hasChildren: true,
   };
+}
+
+/** What a row of an Iceberg sync shows: the icon is green when the copy has the state of the lake, red when not. */
+export function applyIcebergRow(
+  node: TreeNode,
+  row: Pick<IcebergRow, 'name' | 'color' | 'description' | 'tooltip'>,
+): void {
+  node.label = row.name;
+  node.description = row.description;
+  node.tooltip = row.tooltip;
+  node.iconColor = row.color === 'green' ? 'charts.green' : row.color === 'red' ? 'charts.red' : undefined;
+}
+
+/** The row of a target that the lake was copied to; its click opens the Iceberg report. */
+export function icebergNode(parent: TreeNode, row: IcebergRow): TreeNode {
+  const node: TreeNode = {
+    id: `${folderId(parent.id, 'iceberg')}-${row.targetId}`,
+    ref: { kind: 'folder', connectionId: parent.ref.connectionId, folder: 'iceberg', targetId: row.targetId },
+    label: row.name,
+    icon: 'database',
+    logo: 'iceberg-row',
+    contextValue: FOLDERS.iceberg.contextValue,
+    command: { id: 'aantje.showIcebergReport', title: 'Iceberg Report' },
+    hasChildren: false,
+  };
+  applyIcebergRow(node, row);
+  return node;
 }
 
 export function folderNode(parent: TreeNode, folder: FolderRef): TreeNode {
@@ -174,6 +234,10 @@ function folderPresentation(folder: FolderRef): Pick<TreeNode, 'description' | '
       };
     case 'queryHistory':
       return { tooltip: QUERY_HISTORY_TOOLTIP, hasChildren: true };
+    case 'files':
+      return { tooltip: FILES_TOOLTIP, hasChildren: true };
+    case 'iceberg':
+      return { hasChildren: false };
     case 'statistics':
     case 'history':
       return { hasChildren: false };
@@ -336,13 +400,64 @@ export function queryNodes(parent: TreeNode, entries: readonly HistoryEntry[], n
   }));
 }
 
-export function messageNode(parent: TreeNode, text: string, icon: 'info' | 'error'): TreeNode {
+/** A root of the Files folder; its label is the path, shown as text. */
+export function fileRootNode(parent: TreeNode, place: FilePlace, index: number): TreeNode {
+  return {
+    id: `${parent.id}/r${index}`,
+    ref: { kind: 'fileFolder', connectionId: parent.ref.connectionId, place },
+    label: shown(place.root),
+    tooltip: fileRootTooltip(place.root, place.problem),
+    ...FILE_NODES.root,
+    hasChildren: true,
+  };
+}
+
+/**
+ * A folder or a file of a level below a root. The name is data of whoever writes to the storage: the label shows it
+ * as text, and the id encodes it, so that a folder and a file of the same name (possible on an object store) differ.
+ */
+export function fileEntryNode(parent: TreeNode, place: FilePlace, entry: FileEntry): TreeNode {
+  const { connectionId } = parent.ref;
+  const name = encodeURIComponent(entry.name);
+  if (entry.folder) {
+    return {
+      id: `${parent.id}/d${name}`,
+      ref: {
+        kind: 'fileFolder',
+        connectionId,
+        place: { root: place.root, path: entry.path, context: place.context },
+      },
+      label: shown(entry.name),
+      tooltip: fileTooltip(entry),
+      ...FILE_NODES.folder,
+      hasChildren: true,
+    };
+  }
+  return {
+    id: `${parent.id}/f${name}`,
+    ref: { kind: 'file', connectionId, root: place.root, entry },
+    label: shown(entry.name),
+    description: fileDescription(entry),
+    tooltip: fileTooltip(entry),
+    ...(fileTypeOf(entry.name) ? FILE_NODES.importable : FILE_NODES.file),
+    hasChildren: false,
+  };
+}
+
+/** A message in place of a level; a click runs `command` for the connection, when given. */
+export function messageNode(
+  parent: TreeNode,
+  text: string,
+  icon: 'info' | 'error',
+  command?: TreeNode['command'],
+): TreeNode {
   return {
     id: `${parent.id}/message`,
     ref: { kind: 'message', connectionId: parent.ref.connectionId, text },
     label: text,
     icon,
     contextValue: 'message',
+    ...(command === undefined ? {} : { command }),
     hasChildren: false,
   };
 }

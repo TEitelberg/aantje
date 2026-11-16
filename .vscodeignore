@@ -11,10 +11,15 @@
 !dist/grid-client.js
 !dist/report-client.js
 !dist/plan-client.js
+!dist/mcp-bridge.js
+!dist/aws-sdk.js
+!dist/rds-ca-bundle.pem
 !media/icon.png
 !media/logo.png
 !media/aantje-activity.svg
 !media/aantje-icons.woff
+!media/iceberg.svg
+!media/iceberg-row-*.svg
 !package.json
 !CHANGELOG.md
 !LICENSE

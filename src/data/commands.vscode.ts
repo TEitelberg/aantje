@@ -6,6 +6,7 @@ import { effectiveStorage, validateRequired } from '../connections/profile';
 import type { ConnectionProfile } from '../connections/profile';
 import type { ConnectionStore } from '../connections/store';
 import { createWizardUi } from '../connections/ports.vscode';
+import type { Tokenize } from '../ddl-script/check';
 import type { GridPanels } from '../grid/grid.vscode';
 import { buildNotebook } from '../notebook/build';
 import { openNotebook } from '../notebook/open.vscode';
@@ -19,10 +20,14 @@ import { readDataSettings } from './access.vscode';
 import { readTrusting } from './confirm';
 import type { S3CredentialStore } from './credentials';
 import { checkRelation, previewTable, readChanges } from './engine';
+import { exportToFile } from './export.vscode';
+import { scriptInsertData } from './insert-data.vscode';
 import { changesKey, changesTitle, gridKey, gridTitle } from './relation';
 import { resolveTarget } from './resolve';
 import type { DataAccessFactory, DataTarget } from './resolve';
 import type { ViewTrustStore } from './trust';
+import type { DataAccess, GridData } from './types';
+import type { SessionAttachment } from '../sql/editor';
 
 /** What the data commands do once they know their target; the snapshot report calls them without a tree node. */
 export interface DataActions {
@@ -39,8 +44,26 @@ export interface DataActions {
     pinned: SnapshotId | undefined,
     shown: SnapshotId | undefined,
   ) => Promise<void>;
-  /** Opens the text in an untitled SQL document of the connection without running it. */
-  readonly openSql: (connectionId: string, text: string) => Promise<void>;
+  /**
+   * Opens the text in an untitled SQL document of the connection without running it; `attach` is a further connection
+   * that the session of the document attaches read-only.
+   */
+  readonly openSql: (connectionId: string, text: string, attach?: SessionAttachment) => Promise<void>;
+  /** Shows rows that a command read itself (Data Compare) in the grid panel of `key`. */
+  readonly showGrid: (key: string, title: string, data: GridData) => void;
+  /** The data access of a connection at the snapshot (undefined: the latest), for an engine with several lakes. */
+  readonly accessOf: (profile: ConnectionProfile, snapshot: SnapshotId | undefined) => Promise<DataAccess>;
+  /**
+   * Runs `read` with the data access of the relation's connection at the snapshot (undefined: the latest), under a
+   * notification with Cancel. When the guard finds a view and the connection is not trusted, it asks once and reads
+   * again trusted. Export and the other reads of a whole relation use it with `withWholeRelation`.
+   */
+  readonly read: <T>(
+    target: Pick<DataTarget, 'profile'>,
+    snapshot: SnapshotId | undefined,
+    title: string,
+    read: (access: DataAccess, signal: AbortSignal) => Promise<T>,
+  ) => Promise<T>;
 }
 
 interface DataActionsEnv {
@@ -54,48 +77,40 @@ interface DataActionsEnv {
 }
 
 export function createDataActions(env: DataActionsEnv): DataActions {
-  const trusting = <T>(profile: ConnectionProfile, read: (trusted: boolean) => Promise<T>): Promise<T> =>
-    readTrusting(profile, env, read);
-
-  const accessFor = async (
-    profile: ConnectionProfile,
-    snapshot: SnapshotId | undefined,
-    trusted: boolean,
-  ) => ({
-    ...(await env.dataAccess(profile, snapshot)),
-    viewsTrusted: trusted,
-  });
-
-  const showRows: DataActions['showRows'] = async ({ relation, profile }, snapshot) => {
-    const name = `${relation.table.schema}.${relation.table.table}`;
-    const data = await trusting(profile, (trusted) =>
-      withCancel(`Reading ${name}...`, async (signal) =>
-        previewTable(await accessFor(profile, snapshot, trusted), relation.table, signal),
+  const read: DataActions['read'] = ({ profile }, snapshot, title, run) =>
+    readTrusting(profile, env, (trusted) =>
+      withCancel(title, async (signal) =>
+        run({ ...(await env.dataAccess(profile, snapshot)), viewsTrusted: trusted }, signal),
       ),
+    );
+
+  const showRows: DataActions['showRows'] = async (target, snapshot) => {
+    const { relation, profile } = target;
+    const name = `${relation.table.schema}.${relation.table.table}`;
+    const data = await read(target, snapshot, `Reading ${name}...`, (access, signal) =>
+      previewTable(access, relation.table, signal),
     );
     env.grid.show(gridKey(relation, snapshot), gridTitle(relation, profile.name, snapshot, data.limit), data);
   };
 
-  const showChanges: DataActions['showChanges'] = async ({ relation, profile }, range) => {
+  const showChanges: DataActions['showChanges'] = async (target, range) => {
+    const { relation, profile } = target;
     const name = `${relation.table.schema}.${relation.table.table}`;
-    const { data } = await trusting(profile, (trusted) =>
-      withCancel(`Reading the changes of ${name}...`, async (signal) =>
-        // The latest snapshot is attached: the range may end after the one the tree shows.
-        readChanges(await accessFor(profile, undefined, trusted), relation.table, range, signal),
-      ),
+    // The latest snapshot is attached: the range may end after the one the tree shows.
+    const { data } = await read(target, undefined, `Reading the changes of ${name}...`, (access, signal) =>
+      readChanges(access, relation.table, range, signal),
     );
     env.grid.show(changesKey(relation, range), changesTitle(relation, profile.name, range), data);
   };
 
-  const createNotebook: DataActions['createNotebook'] = async ({ relation, profile }, pinned, shown) => {
+  const createNotebook: DataActions['createNotebook'] = async (target, pinned, shown) => {
+    const { relation, profile } = target;
     const { s3, extensionDirectory } = readDataSettings();
     // The guard of the preview runs first: the notebook hands the relation to the Python kernel of the user, which would
     // run a view that calls the maintenance functions of DuckLake, or read a name that two relations share.
     const name = `${relation.table.schema}.${relation.table.table}`;
-    await trusting(profile, (trusted) =>
-      withCancel(`Checking ${name}...`, async (signal) =>
-        checkRelation(await accessFor(profile, pinned, trusted), relation.table, signal),
-      ),
+    await read(target, pinned, `Checking ${name}...`, (access, signal) =>
+      checkRelation(access, relation.table, signal),
     );
     await openNotebook(
       buildNotebook({
@@ -112,7 +127,15 @@ export function createDataActions(env: DataActionsEnv): DataActions {
     );
   };
 
-  return { showRows, showChanges, createNotebook, openSql: env.openSql };
+  return {
+    showRows,
+    showChanges,
+    createNotebook,
+    openSql: env.openSql,
+    read,
+    showGrid: (key, title, data) => env.grid.show(key, title, data),
+    accessOf: (profile, snapshot) => env.dataAccess(profile, snapshot),
+  };
 }
 
 interface DataCommandEnv {
@@ -122,10 +145,15 @@ interface DataCommandEnv {
   readonly credentials: S3CredentialStore;
   readonly trust: ViewTrustStore;
   readonly confirmViews: (profile: ConnectionProfile) => Promise<void>;
+  /** DuckDB's tokenizer for the scripts that copy catalog text; it runs nothing. */
+  readonly tokenize: Tokenize;
   readonly register: Register;
 }
 
-/** Registers the commands that read table data: the Top 1000 grid, the notebook and the S3 credentials. */
+/**
+ * Registers the commands that read table data: the Top 1000 grid, Export, Script as INSERT with Data, the notebook and
+ * the S3 credentials.
+ */
 export function registerDataCommands(env: DataCommandEnv): vscode.Disposable[] {
   const { tree, store, register } = env;
   const ui = createWizardUi();
@@ -143,6 +171,25 @@ export function registerDataCommands(env: DataCommandEnv): vscode.Disposable[] {
       const found = await target(node);
       if (found) {
         await showRows(found, shownSnapshot(found.state));
+      }
+    }),
+
+    register('aantje.exportRelation', async (node) => {
+      const found = await target(node);
+      if (found) {
+        await exportToFile(env.actions, found, shownSnapshot(found.state));
+      }
+    }),
+
+    register('aantje.scriptInsertData', async (node) => {
+      const found = await target(node);
+      if (node && found) {
+        await scriptInsertData(
+          { actions: env.actions, tree, tokenize: env.tokenize },
+          node.ref,
+          found,
+          shownSnapshot(found.state),
+        );
       }
     }),
 

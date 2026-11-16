@@ -1,14 +1,14 @@
 import type { CatalogInfo } from '../catalog/model';
 import type { OpenedCatalog } from '../catalog/open';
 import { isAantjeError } from '../errors';
-import { signsInWithEntra, usesSecret } from './profile';
+import { signsInWithToken, usesSecret } from './profile';
 import type { ConnectionProfile } from './profile';
 import type { ConnectionStore } from './store';
 
 export interface ConnectDeps {
   readonly store: Pick<ConnectionStore, 'password' | 'registerPassword' | 'update'>;
-  /** The token that is the password of an Entra login (`azureAuth: "entra"`). */
-  entraToken?: (profile: ConnectionProfile) => Promise<string>;
+  /** The token that is the password of a login with Entra (`azureAuth: "entra"`) or AWS IAM (`awsAuth: "iam"`). */
+  signInToken?: (profile: ConnectionProfile) => Promise<string>;
   open(profile: ConnectionProfile, password: string | undefined): Promise<OpenedCatalog>;
   /** Asks for the password; `previousRejected` means a stored one was refused. Undefined or empty means cancelled. */
   askPassword(profile: ConnectionProfile, previousRejected: boolean): Promise<string | undefined>;
@@ -25,9 +25,9 @@ export async function openWithPassword(
   if (!usesSecret(profile)) {
     return deps.open(profile, undefined);
   }
-  if (signsInWithEntra(profile) && deps.entraToken) {
+  if (signsInWithToken(profile) && deps.signInToken) {
     // A new token for every open; a rejected one is no reason to ask for a password that does not exist.
-    return deps.open(profile, await deps.entraToken(profile));
+    return deps.open(profile, await deps.signInToken(profile));
   }
   const stored = await deps.store.password(profile);
   try {
@@ -64,7 +64,7 @@ export function openForTest(
   password: string | undefined,
   deps: ConnectDeps,
 ): Promise<OpenedCatalog> {
-  return signsInWithEntra(profile) ? openWithPassword(profile, deps) : deps.open(profile, password);
+  return signsInWithToken(profile) ? openWithPassword(profile, deps) : deps.open(profile, password);
 }
 
 async function openAndStore(

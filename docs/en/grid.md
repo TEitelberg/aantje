@@ -20,6 +20,8 @@ The data grid shows the rows of **Select Top 1000 Rows** (`aantje.previewTable`)
 | Copy the row / all     | **Copy row** (row of the selected cell) and **Copy all** (rows shown, with header), tab separated. |
 | Export                 | **Export CSV**: the rows shown, saved through a file dialog as `schema.table.csv`.                 |
 
+Export CSV writes the rows that were loaded. For all rows, use **Export...** on the table or view in the explorer ([Data access](data-access.md#export)) or **Run to File...** in the SQL editor ([SQL editor](sql-editor.md#run-to-file)); both apply the same formula rule for Excel in SQL.
+
 Rules (all in `src/grid/model.ts`):
 
 - **Sorting** is stable. Numbers compare by value; `BIGINT`, `HUGEINT` and `DECIMAL` arrive as strings and compare digit by digit, so no precision is lost. `false` sorts before `true`. Text uses a numeric, case- and accent-insensitive collation (`item 2` before `item 10`). **NULL is always last**, in both directions.
@@ -46,6 +48,7 @@ Rules (all in `src/grid/model.ts`):
 - **Changed cells** of an update are bold with a dotted underline and the tooltip `Changed by the update`. A NULL that stays NULL is no change; `snapshot_id`, `rowid` and `change_type` never count.
 - **No sorting and no filter.** Either would separate the row before an update from the row after it. The rows keep the order of the changes. Use **Copy all** or **Export CSV** to work on them elsewhere.
 - Copy and export include `snapshot_id`, `rowid` and `change_type`, not the mark column. The status line counts the rows of the grid; the summary counts all changes of the range.
+- **Data Compare** ([Data Compare](compare.md#what-data-compare-shows)) sends the same kinds with `rowMode: 'compare'` and the leading columns `#`, `difference` and `side`. The page keeps the marks, the pairs and the changed cells and words them for two tables, seen from Script as Update: `+` only in the source (the script inserts it), `−` only in the target (it deletes it), `←` and `→` the target's and the source's version of a row that differs; a changed cell has the tooltip `Differs between the target and the source`, and the mark column is titled `Difference` (`changeWording` in `src/grid/model.ts`).
 
 ## Results mode
 
@@ -62,12 +65,13 @@ The SQL editor ([SQL session](sql-session.md)) shows what a run returns in the s
 
 ### What the page shows
 
-- **Tabs.** `Messages` comes first. Each result set gets `Result 1 (1,234 rows)`; a cut one reads `Result 1 (10,000 of more rows)` and a banner says that sort, filter and export apply to the rows read. Tab names never come from the SQL text.
+- **Tabs.** `Messages` comes first. Each result set gets `Result 1 (1,234 rows)`; a cut one reads `Result 1 (10,000 of more rows)` and a banner says that sort, filter and export apply to the rows read. A profile of Statistics adds its three views. Statistics and Analysis add `Tips (n)` right after the Statistics table or the plan, when there are tips. Tab names never come from the SQL text.
 - **Selected tab.** `Messages` while the run goes on or has no result set, else the first result set. A tab the user clicked stays selected; a new run starts again.
 - **A result tab** shows the statement on one line (at most 200 characters, as text) above a full grid. Each grid is built when its tab is first selected and keeps sort and filter while the page lives.
 - **The Messages tab** has one line per statement: a status mark (`✓` OK, `✗` error, `…` running, `–` not run), the number, the statement (80 characters), the result (`3 rows affected`, `12 rows`) and the time. A failed statement shows the whole friendly message and **Go to statement**; a script that does not parse shows the syntax error.
 - **The end of the run** is shown at the bottom and in the tab bar (a live region): `Running...`, `Completed in 1.2 s` (milliseconds below a second, as in the status line of a grid and in the health report), `Cancelled after ...` or `Failed after ...`, plus `Transaction open` or `Transaction aborted: run ROLLBACK`.
 - **Go to statement** posts `{ type: 'reveal', index }`. The extension answers with the position of the error, else the start and length of the statement. An index that is not a known whole number does nothing.
+- **Open script** of a tip posts `{ type: 'openTipScript', set, tip }`: the result set and the tip by their place, never the script. The extension takes the script from its own state of the run and opens it in a new editor on the connection of the query; a place without a script does nothing.
 
 ### Messages, live updates and memory
 

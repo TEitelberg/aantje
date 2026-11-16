@@ -1,6 +1,6 @@
 /// <reference lib="dom" />
 // DOM builders of a data grid. They take the state as parameters and report input through callbacks.
-import { ROW_MARKS, cellDisplay, changedColumns } from './model';
+import { cellDisplay, changeWording, changedColumns } from './model';
 import type { GridData, GridValue, RowKind } from '../data/types';
 import { el } from '../shell/dom';
 
@@ -65,8 +65,9 @@ export function dataRow(
   row.append(el('td', 'rn', String(index + 1)));
   const kind = kinds?.[index];
   const changed = kinds ? changedColumns(data.rows, kinds, index) : new Set<number>();
+  const wording = changeWording(data.rowMode);
   if (kind) {
-    const { mark, label } = ROW_MARKS[kind];
+    const { mark, label } = wording.marks[kind];
     const marker = el('td', 'mk', mark);
     marker.title = label;
     marker.setAttribute('aria-label', label);
@@ -83,7 +84,7 @@ export function dataRow(
     if (title) {
       cell.title = title;
     } else if (changed.has(columnIndex)) {
-      cell.title = 'Changed by the update';
+      cell.title = wording.changed;
     }
     if (label) {
       cell.setAttribute('aria-label', label);
@@ -117,11 +118,14 @@ export function sizerRow(texts: readonly string[]): HTMLTableRowElement {
   return row;
 }
 
-/** The scrolling table around the header cells and the body, between spacers that stand for the rows not drawn. */
+/**
+ * The scrolling table around the header cells and the body, between spacers that stand for the rows not drawn.
+ * `kindTitle` is the title of the column of the marks of a change grid; there is no such column without it.
+ */
 export function gridTable(
   headers: readonly HTMLElement[],
   body: HTMLTableSectionElement,
-  withKind: boolean,
+  kindTitle: string | undefined,
   sizer: HTMLTableRowElement,
 ): {
   readonly table: HTMLTableElement;
@@ -130,10 +134,10 @@ export function gridTable(
   readonly below: HTMLElement;
 } {
   const markHeader = el('th', 'mk');
-  markHeader.title = 'Kind of the change';
+  markHeader.title = kindTitle ?? '';
   const head = el('tr');
   head.setAttribute('aria-rowindex', '1');
-  head.append(el('th', 'rn', '#'), ...(withKind ? [markHeader] : []), ...headers);
+  head.append(el('th', 'rn', '#'), ...(kindTitle === undefined ? [] : [markHeader]), ...headers);
   const thead = el('thead');
   thead.append(head, sizer);
   const table = el('table');

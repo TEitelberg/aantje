@@ -64,6 +64,8 @@ export function choiceSelect(
 
 interface HeaderSpec {
   readonly title: string;
+  /** Before the title, e.g. the logo of the product that the report is about. */
+  readonly logo?: Element;
   readonly subtitle: string;
   /** Adds Refresh; the text is the screen reader description. */
   readonly refresh?: string;
@@ -71,6 +73,8 @@ interface HeaderSpec {
   readonly view?: () => unknown;
   /** Buttons before Refresh and Open as Markdown. */
   readonly actions?: readonly HTMLElement[];
+  /** False leaves out Open as Markdown, for a report that has no Markdown document. */
+  readonly markdown?: false;
 }
 
 export interface Header {
@@ -79,7 +83,7 @@ export interface Header {
   settle(): void;
 }
 
-/** Title, one-line summary, and the Refresh (if the report can be re-read) and Open as Markdown buttons. */
+/** Title, one-line summary, and the Refresh (if the report can be re-read) and Open as Markdown (if it has one) buttons. */
 export function pageHeader(context: PageContext, spec: HeaderSpec): Header {
   const actions = el('div', 'actions');
   actions.append(...(spec.actions ?? []));
@@ -95,18 +99,22 @@ export function pageHeader(context: PageContext, spec: HeaderSpec): Header {
     );
     actions.append(refresh);
   }
-  actions.append(
-    actionButton(
-      'Open as Markdown',
-      () => {
-        const view = spec.view?.();
-        context.post(view === undefined ? { type: 'markdown' } : { type: 'markdown', view });
-      },
-      'Open this report as a Markdown document',
-    ),
-  );
+  if (spec.markdown !== false) {
+    actions.append(
+      actionButton(
+        'Open as Markdown',
+        () => {
+          const view = spec.view?.();
+          context.post(view === undefined ? { type: 'markdown' } : { type: 'markdown', view });
+        },
+        'Open this report as a Markdown document',
+      ),
+    );
+  }
   const element = el('header');
-  element.append(el('h1', undefined, spec.title), el('p', 'subtitle', spec.subtitle), actions);
+  const title = el('h1', undefined, spec.title);
+  if (spec.logo) title.prepend(spec.logo);
+  element.append(title, el('p', 'subtitle', spec.subtitle), actions);
   return {
     element,
     settle() {

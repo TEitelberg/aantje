@@ -39,6 +39,21 @@ x-oog-ducklake-env: &oog-ducklake-env
   OOG_DUCKLAKE_NAME: ${OOG_DUCKLAKE_NAME:-oog}
   OOG_DUCKLAKE_DATA_PATH: ${OOG_DUCKLAKE_DATA_PATH:-s3://${OOG_S3_BUCKET:-oog-lake}/ducklake/}
 
+# Polaris (Iceberg REST catalog). The state lives in the database polaris of the shared Postgres; the catalog's data goes to
+# the bucket OOG_ICEBERG_BUCKET in RustFS. The principal below is created by polaris-bootstrap and used by aantje.
+x-oog-polaris-env: &oog-polaris-env
+  OOG_POLARIS_URL: ${OOG_POLARIS_URL:-http://polaris:8181}
+  OOG_POLARIS_CLIENT_ID: ${OOG_POLARIS_CLIENT_ID:-root}
+  OOG_POLARIS_CLIENT_SECRET: &polaris-secret ${OOG_POLARIS_CLIENT_SECRET:-change-me-polaris}
+  OOG_POLARIS_CATALOG: ${OOG_POLARIS_CATALOG:-oog_iceberg}
+  OOG_ICEBERG_BUCKET: ${OOG_ICEBERG_BUCKET:-oog-iceberg}
+
+x-polaris-db-env: &polaris-db-env
+  QUARKUS_DATASOURCE_USERNAME: &polaris-db-user ${OOG_POLARIS_DB_USER:-polaris}
+  QUARKUS_DATASOURCE_PASSWORD: &polaris-db-password ${OOG_POLARIS_DB_PASSWORD:-change-me-polaris-db}
+  QUARKUS_DATASOURCE_JDBC_URL: jdbc:postgresql://${OOG_PG_HOST:-postgres}:${OOG_PG_PORT:-5432}/${OOG_POLARIS_DB:-polaris}?currentSchema=polaris_schema
+  POLARIS_PERSISTENCE_TYPE: relational-jdbc
+
 # Hardening of the services that run as a non-root user. Not applied to postgres and rustfs (their
 # entrypoints chown/gosu and need capabilities) nor to rustfs-perms (chown as root).
 x-hardening: &hardening
@@ -172,7 +187,7 @@ services:
     environment:
       <<: *oog-s3-env
       # Created in addition to OOG_S3_BUCKET; must include OOG_GITEA_BUCKET.
-      OOG_S3_EXTRA_BUCKETS: ${OOG_S3_EXTRA_BUCKETS:-oog-gitea}
+      OOG_S3_EXTRA_BUCKETS: ${OOG_S3_EXTRA_BUCKETS:-oog-gitea,oog-iceberg}
     networks: [oog]
     restart: "no"
 
@@ -214,6 +229,9 @@ services:
         condition: service_healthy
     environment:
       <<: [*oog-pg-env, *oog-gitea-db-env]
+      OOG_POLARIS_DB: ${OOG_POLARIS_DB:-polaris}
+      OOG_POLARIS_DB_USER: *polaris-db-user
+      OOG_POLARIS_DB_PASSWORD: *polaris-db-password
       OOG_BOOTSTRAP_TIMEOUT: "30"
     # The base image declares the Postgres data directory as a VOLUME; without these mounts every run
     # leaves an anonymous volume behind that `docker compose down` does not remove.
@@ -285,6 +303,68 @@ services:
     networks: [oog]
     restart: "no"
 
+  # One-shot: create the tables of Polaris and the principal that aantje signs in with (idempotent: a bootstrapped realm
+  # is skipped). The admin tool is the Polaris image's companion; it does not need the S3 side.
+  polaris-bootstrap:
+    image: apache/polaris-admin-tool:${POLARIS_VERSION:-1.9.0}
+    <<: *hardening
+    depends_on:
+      postgres-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *polaris-db-env
+    command: ["bootstrap", "-r", "POLARIS", "-c", "POLARIS,${OOG_POLARIS_CLIENT_ID:-root},${OOG_POLARIS_CLIENT_SECRET:-change-me-polaris}"]
+    networks: [oog]
+    restart: "no"
+
+  # Iceberg REST catalog (Apache Polaris, state in Postgres, data in RustFS). The server has no web UI. DuckDB gets
+  # short-lived S3 credentials from it (vended credentials, STS AssumeRole against RustFS). Image: apache/polaris.
+  polaris:
+    image: apache/polaris:${POLARIS_VERSION:-1.9.0}
+    <<: *hardening
+    depends_on:
+      polaris-bootstrap:
+        condition: service_completed_successfully
+      rustfs:
+        condition: service_healthy
+    environment:
+      <<: *polaris-db-env
+      POLARIS_REALM_CONTEXT_REALMS: POLARIS
+      # Credentials and region of the server itself, for the calls to RustFS (STS and file access).
+      AWS_REGION: ${OOG_S3_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: *s3-access-key
+      AWS_SECRET_ACCESS_KEY: *s3-secret-key
+      QUARKUS_OTEL_SDK_DISABLED: "true"
+      JAVA_OPTS_APPEND: -Xmx768m
+    ports:
+      - "127.0.0.1:${POLARIS_PORT-8181}:8181"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-o", "/dev/null", "http://127.0.0.1:8182/q/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+      start_interval: 2s
+    networks: [oog]
+    restart: unless-stopped
+
+  # One-shot: create the catalog (bucket oog-iceberg) and let the root principal manage it (idempotent).
+  polaris-init:
+    image: apache/polaris:${POLARIS_VERSION:-1.9.0}
+    entrypoint: ["/bin/sh", "/bootstrap-catalog.sh"]
+    <<: *hardening
+    depends_on:
+      polaris:
+        condition: service_healthy
+      rustfs-init:
+        condition: service_completed_successfully
+    environment:
+      <<: [*oog-polaris-env, *oog-s3-env]
+    volumes:
+      - ./images/polaris-init/bootstrap-catalog.sh:/bootstrap-catalog.sh:ro
+    networks: [oog]
+    restart: "no"
+
   # DuckDB server (Quack) that holds the metadata of the second DuckLake catalog. The data files are written by the
   # clients to s3://<bucket>/ducklake-quack/. Image: images/quack. Quack clients use TLS for every host but
   # localhost, so the server runs TLS with a self-signed certificate in the volume quack-certs. The service is not
@@ -332,8 +412,10 @@ services:
         condition: service_completed_successfully
       duckdb:
         condition: service_healthy
+      polaris-init:
+        condition: service_completed_successfully
     environment:
-      <<: [*oog-s3-env, *oog-pg-env, *oog-gitea-admin-env, *oog-ducklake-env, *oog-quack-env]
+      <<: [*oog-s3-env, *oog-pg-env, *oog-gitea-admin-env, *oog-ducklake-env, *oog-quack-env, *oog-polaris-env]
       OOG_QUACK_CA_FILE: /etc/oog/quack/quack.crt
       # The standard AWS names for the RustFS credentials: the aantje extension reads its S3 credentials from the environment
       # (never from the settings file); its endpoint comes from OOG_S3_ENDPOINT.

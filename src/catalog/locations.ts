@@ -37,7 +37,7 @@ export function isNetworkPath(path: string): boolean {
  */
 export function isBelowDataPath(path: string, dataPath: string | null): boolean {
   if (dataPath === null || dataPath === '') return false;
-  // eslint-disable-next-line no-control-regex -- a NUL or newline in a path is never a file of the lake
+  // oxlint-disable-next-line no-control-regex -- a NUL or newline in a path is never a file of the lake
   if (/[\x00-\x1f]/.test(path)) return false;
   const slashes = (text: string): string => text.replaceAll('\\', '/');
   const root = slashes(dataPath);

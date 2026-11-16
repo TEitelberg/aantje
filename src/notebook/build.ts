@@ -1,6 +1,7 @@
 import type { SnapshotId } from '../catalog/model';
 import { qualifiedName } from '../catalog/ddl';
-import { signsInWithEntra } from '../connections/profile';
+import { regionOfRdsHost } from '../aws/allow-ip';
+import { signsInWithAwsIam, signsInWithEntra } from '../connections/profile';
 import type { ConnectionProfile } from '../connections/profile';
 import { firstSchemaQuery } from '../data/attach';
 import { MEMORY_LIMIT } from '../data/instance';
@@ -97,11 +98,13 @@ function titleCell(spec: NotebookSpec, tableName: string): string[] {
       ? `follows the latest snapshot${shown}`
       : `pinned to snapshot ${spec.snapshot}`;
   const secretSource =
-    spec.profile.kind === 'postgres' && !signsInWithEntra(spec.profile)
-      ? 'The PostgreSQL password is read from the environment variable `PGPASSWORD` or asked for when you run the configuration cell. '
-      : spec.profile.kind === 'quack'
-        ? 'The token of the Quack server is read from the environment variable `QUACK_TOKEN` or asked for when you run the configuration cell. '
-        : '';
+    spec.profile.kind === 'postgres' && signsInWithAwsIam(spec.profile)
+      ? `The PostgreSQL server takes an IAM token as the password (valid 15 minutes): create one with \`aws rds generate-db-auth-token --hostname ${spec.profile.host} --port ${spec.profile.port} --username ${spec.profile.user}${regionOption(spec.profile.host)}\` and enter it when the configuration cell asks, or set \`PGPASSWORD\`. `
+      : spec.profile.kind === 'postgres' && !signsInWithEntra(spec.profile)
+        ? 'The PostgreSQL password is read from the environment variable `PGPASSWORD` or asked for when you run the configuration cell. '
+        : spec.profile.kind === 'quack'
+          ? 'The token of the Quack server is read from the environment variable `QUACK_TOKEN` or asked for when you run the configuration cell. '
+          : '';
   const attached = spec.profile.kind === 'quack' ? '' : ' read-only';
   return [
     `# ${inlineCode(tableName)}`,
@@ -614,4 +617,10 @@ function storageSecretsText({ storage, profile }: NotebookSpec): string {
       ? 'The storage needs no secret value here: it signs in with the credential chain or the certificate of this machine. '
       : `The storage secrets come from the environment variables ${names.join(', ')}; a missing one is asked for in the configuration cell. `
   }`;
+}
+
+/** The region option of `aws rds generate-db-auth-token`, from the host of an RDS endpoint. */
+function regionOption(host: string): string {
+  const region = regionOfRdsHost(host);
+  return region === undefined ? '' : ` --region ${region}`;
 }

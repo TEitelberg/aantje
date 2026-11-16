@@ -12,7 +12,7 @@ import {
   passwordSecretKey,
   effectiveStorage,
   passwordSecretValue,
-  signsInWithEntra,
+  signsInWithToken,
   toSettingEntry,
   usesSecret,
 } from './profile';
@@ -90,7 +90,7 @@ export class ConnectionStore {
   /**
    * Replaces the profile with the same id. A new password is stored; an empty password keeps the stored one only when it
    * still belongs to this server, and discards it when the target changed (the orphaned password of the old server).
-   * A profile that signs in with Entra keeps no password. An unchanged profile is not rewritten. New storage values
+   * A profile that signs in with a token (Entra or AWS IAM) keeps no password. An unchanged profile is not rewritten. New storage values
    * replace the stored ones; without them the stored ones stay only while they still belong to the storage (the same
    * service and sign-in), else they are deleted.
    */
@@ -103,7 +103,7 @@ export class ConnectionStore {
     }
     if (password) {
       await this.setPassword(profile, password);
-    } else if (signsInWithEntra(profile)) {
+    } else if (signsInWithToken(profile)) {
       // A token is fetched for every connect; the password of the earlier sign-in must not stay behind.
       await this.setPassword(profile, undefined);
     } else {

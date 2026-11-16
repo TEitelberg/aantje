@@ -18,11 +18,11 @@
 
 A profile says where the DuckLake metadata tables (`ducklake_*`) are stored. The `kind` selects one of three shapes; all have an `id` and a `name`.
 
-| Kind               | Further fields                                                                                                                                                                                                                 |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `postgres`         | `host`, `port` (default 5432), `database`, `user`, optional `metadataSchema`, `ssl` (default `true`; `false` for `localhost`, `127.0.0.1` and `::1`), optional `storage`, `azureAuth` and `azureTenant`; legacy `azureAccount` |
-| `sqlite`, `duckdb` | `path` of the database file, optional `storage`                                                                                                                                                                                |
-| `quack`            | `host` (not `quack`), `port` (default 9494), `ssl` (default as for `postgres`), optional `fingerprint`                                                                                                                         |
+| Kind               | Further fields                                                                                                                                                                                                                              |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `postgres`         | `host`, `port` (default 5432), `database`, `user`, optional `metadataSchema`, `ssl` (default `true`; `false` for `localhost`, `127.0.0.1` and `::1`), optional `storage`, `fileRoots`, `azureAuth` and `azureTenant`; legacy `azureAccount` |
+| `sqlite`, `duckdb` | `path` of the database file, optional `storage` and `fileRoots`                                                                                                                                                                             |
+| `quack`            | `host` (not `quack`), `port` (default 9494), `ssl` (default as for `postgres`), optional `fingerprint`                                                                                                                                      |
 
 A `quack` profile is a DuckDB server that serves the catalog over Quack. It reuses the `ssl` property of `postgres`, with the same meaning and the same default rule (`defaultSsl`), instead of a new `tls` property: one TLS property, one wizard question. `fingerprint` is the SHA-256 fingerprint of the server certificate, 64 hex digits with or without colons, stored as `AB:CD:...` (`normalizeFingerprint`). It pins that certificate instead of the system trust store and needs `ssl: true`. The host name `quack` is refused (`validateQuackHost`), because the quack client then parses `quack:quack:<port>` wrongly.
 
@@ -40,6 +40,10 @@ The settings hold no secret and the parser names any field a kind does not know,
 A profile without `storage` keeps working as before: it uses the machine settings `aantje.s3.*` and the global S3 keys (**Set S3 Credentials...**), and a `postgres` profile with the legacy `azureAccount` is read as an Azure storage with Microsoft Entra (`azureTenant` names the tenant). aantje does not rewrite such an entry. A new Azure lake writes `storage` (`{ "kind": "azure", "account": ..., "tenant": ..., "signIn": "entra" }`); **Create Azure DuckLake...**, **Finish Creating Azure DuckLake...** and **Import Azure DuckLake...** write it, and so do Add Connection and Edit Connection ([below](#storage)). `isAzureLake` is true for a `postgres` profile whose storage is of kind `azure`, in either form, so the Azure menus stay when only the sign-in changes ([Azure DuckLake](azure-lake.md)).
 
 `azureAuth` is `"password"` (the default when absent) or `"entra"` and describes the sign-in to PostgreSQL: with `entra` a token of your Microsoft account is the password, `user` is your user principal name and no password is stored. The connection then ignores any stored password and does not ask for one. `azureTenant` names the tenant of that token. Add Connection and Edit Connection ask for these ([below](#signing-in-with-microsoft-entra-id)).
+
+`awsAuth` is `"iam"` for IAM database authentication of Amazon RDS: a token that the AWS profile `awsProfile` signs is the password of `user`, a role with `rds_iam`, and no password is stored. Without `awsProfile` the profile of an AWS `storage` signs it, else the credentials of the environment. `awsAuth` and `azureAuth: "entra"` exclude each other ([below](#signing-in-with-aws-iam)).
+
+**File roots.** `postgres`, `sqlite` and `duckdb` profiles can carry `fileRoots`, a list of paths: the roots of the folder **Files** below the connection ([Files](files.md)). Without it the folder has one root, the bucket, container or OneLake workspace of the data path, or for a local data path the folder above it. A root lies on the storage of the lake (a local root next to a local data path, any other on the service of the connection's storage, in any bucket or container) and is listed with the access of the connection; a root on another storage needs a connection of its own. Edit Connection asks for the roots, separated by semicolons; a root that holds a semicolon can only be written in the setting, and Edit Connection then leaves the roots as they are. A `quack` profile with `fileRoots` is refused: the server reads the files there, not aantje.
 
 `postgres`, `sqlite` and `duckdb` profiles can carry `readOnly`: the SQL editor then opens its sessions on this connection read-only ([SQL editor](sql-editor.md)). Absent means writable. The explorer ignores it, because it is read-only anyway. A `quack` profile with `readOnly` is refused: the switch exists to avoid the lock of a DuckDB file, a Quack server has none, and what the token may do is the server's decision.
 
@@ -112,6 +116,7 @@ The storage entry is bound the same way, to the service it was entered for: the 
 - `sqlite` and `duckdb`: `path` is required and must not be wrapped in quotes.
 - `quack`: `host` is required and must not be `quack`; `port` and `ssl` as for `postgres`; `fingerprint` must be a SHA-256 fingerprint and needs `"ssl": true`; `readOnly` is refused.
 - `storage` (`postgres`, `sqlite`, `duckdb`): an object with a known `kind` and `signIn`; `s3` needs exactly one of `endpoint` and `accountId`; `azure` needs `account`; a service principal needs `tenant` and `clientId`; a field that its kind does not have, or that belongs to another sign-in, is refused by name. `storage` with `kind: "quack"` or together with `azureAccount` is refused.
+- `fileRoots` (`postgres`, `sqlite`, `duckdb`): a list of paths that are not empty and hold no control character; an empty list means the default root. Refused for `quack`.
 - Unknown properties of the entry are ignored; text values are trimmed.
 - An entry that breaks a rule is skipped and reported as `aantje.connections[<index>]: <reason>` (the first reason per entry). The other entries are not affected.
 - A value that is not an array is one problem, and nothing is written over it.
@@ -134,7 +139,7 @@ The setting belongs to the user. `ConnectionStore` replaces only the entry it wo
 Passwords exist only in the secret storage and in memory while the wizard or a connect runs. Settings are plain text that people sync and commit. A Quack token is handled like a password in everything below.
 
 - `add` stores the password; without one it deletes a leftover secret of an earlier connection with the same id.
-- `update` replaces the password; an empty password keeps the stored one. A profile that signs in with Entra (`azureAuth: "entra"`) keeps none: `update` deletes the stored password.
+- `update` replaces the password; an empty password keeps the stored one. A profile that signs in with a token (`azureAuth: "entra"` or `awsAuth: "iam"`) keeps none: `update` deletes the stored password.
 - `remove` deletes the entry and the secret.
 - The same holds for the storage entry: `add` and `update` store the values typed in the wizard, an empty answer keeps what is stored, and `remove` deletes the entry.
 - Every password the store reads, stores or is told about is passed to the log redactor, so it is masked in the log.
@@ -193,7 +198,7 @@ Edit Connection asks the same, prefilled. A secret is never prefilled: an empty 
 
 ### Signing in with Microsoft Entra ID
 
-The sign-in of a PostgreSQL catalog is a pick after the database: **Password** (the default) or **Microsoft Entra ID**, for Azure Database for PostgreSQL. With Entra:
+The sign-in of a PostgreSQL catalog is a pick after the database: **Password** (the default), **Microsoft Entra ID**, for Azure Database for PostgreSQL, or **AWS IAM**, for Amazon RDS ([below](#signing-in-with-aws-iam)). With Entra:
 
 - **Tenant** comes next, optional. The tenant (`azureTenant`, a GUID) picks the directory of the token for PostgreSQL; empty uses the home tenant of the account. The storage account and its sign-in are a question of their own ([Storage](#storage)); an Azure lake that reads its files with the Microsoft account has `storage` of kind `azure` with `signIn` `entra`, and the data engine then uses a token of the same account instead of a key ([Azure DuckLake](azure-lake.md#reading-and-writing-the-data-files)).
 - **User** is prefilled with the sign-in name of the Microsoft account (`upn`, else `preferred_username`, of a token for that tenant). VS Code asks to sign in when there is no session. If that fails, the error is shown and the user types the name: any Entra principal that is a role on the server, also a group or a managed identity.
@@ -208,9 +213,20 @@ Edit Connection asks the same. Switching to Entra deletes the stored password; s
 
 Azure Database for PostgreSQL has no Kerberos login anyway; Entra is its passwordless login.
 
+### Signing in with AWS IAM
+
+With **AWS IAM** (IAM database authentication of Amazon RDS):
+
+- **AWS profile** comes next, optional: the profile of `~/.aws/config` that signs the token (`awsProfile`). Empty uses the profile of an AWS storage of the connection, else the credentials of the environment.
+- **User** is the database role that has `rds_iam`; for a lake that aantje created it is `ducklake_iam` ([AWS DuckLake](aws-lake.md#signing-in)).
+- **TLS** is not asked: RDS takes an IAM token only over TLS, so the profile saves `ssl: true`.
+- **No password** is asked or stored. The test and every connect get a new token (valid 15 minutes), signed with the AWS SDK; the profile saves `awsAuth: "iam"`.
+
+Edit Connection asks the same; switching to AWS IAM deletes the stored password.
+
 ### Edit
 
-The same questions, prefilled. TLS and read-only list the current value first. The password or token is never prefilled: empty keeps the stored one, and the test uses it. If the host, port, database or user was changed, the stored password belongs to the previous server and is not reused: the prompt says so, and an empty field tests without a password. For Quack the certificate is read again: an unchanged one is kept without a question, a changed one is shown with the note that it is not the pinned one. Kind and id never change; `metadataSchema` is carried over, and the sign-in, tenant and storage are asked again, prefilled. On a profile with the legacy `azureAccount` the entry stays untouched unless the storage is changed; then `storage` is written and `azureAccount` removed. The own name is accepted, another connection's name is not. The wizard does not use the password retry. After saving, Edit Connection refreshes the connection explicitly (a new password does not change the setting), and the setting listener leaves it alone while the flow runs, so it opens once.
+The same questions, prefilled. TLS and read-only list the current value first. The password or token is never prefilled: empty keeps the stored one, and the test uses it. If the host, port, database or user was changed, the stored password belongs to the previous server and is not reused: the prompt says so, and an empty field tests without a password. For Quack the certificate is read again: an unchanged one is kept without a question, a changed one is shown with the note that it is not the pinned one. Kind and id never change; `metadataSchema` is carried over, and the sign-in, tenant and storage are asked again, prefilled. The last question of a PostgreSQL, SQLite or DuckDB connection is the one for the roots of the Files folder (`fileRoots`), prefilled with the current roots separated by semicolons; empty means the default root. Add Connection does not ask it: a new connection starts with the default root. On a profile with the legacy `azureAccount` the entry stays untouched unless the storage is changed; then `storage` is written and `azureAccount` removed. The own name is accepted, another connection's name is not. The wizard does not use the password retry. After saving, Edit Connection refreshes the connection explicitly (a new password does not change the setting), and the setting listener leaves it alone while the flow runs, so it opens once.
 
 ### Remove
 

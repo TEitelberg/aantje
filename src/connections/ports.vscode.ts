@@ -14,6 +14,18 @@ export function createSettingsPort(): SettingsPort {
   };
 }
 
+/** The raw `aantje.icebergTargets` setting (Iceberg targets without their secrets). */
+export function createIcebergSettingsPort(): SettingsPort {
+  return {
+    read: () => vscode.workspace.getConfiguration('aantje').get<unknown>('icebergTargets'),
+    write: async (value) => {
+      await vscode.workspace
+        .getConfiguration('aantje')
+        .update('icebergTargets', value, vscode.ConfigurationTarget.Global);
+    },
+  };
+}
+
 export function createSecretsPort(secrets: vscode.SecretStorage): SecretsPort {
   return {
     get: async (key) => secrets.get(key),

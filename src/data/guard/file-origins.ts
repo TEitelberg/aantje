@@ -15,11 +15,14 @@ const SCHEME = /^[a-z][a-z0-9+.-]*:\/\//;
 // catalog names (`origin`, lower case, for comparison and the message).
 type Server = 'local' | 'home' | { readonly origin: string };
 
-// Whether an object-store path lies on the service of the connection's storage: the S3 endpoint (any bucket there), the
-// R2 account, the hosts of the Azure account (any container), OneLake. The service is the unit, not the bucket: what the
-// connection's account may read is the storage's decision. Aliases of the same service (s3a, s3n; az, abfss) count. A
-// connection without a storage of its own keeps the rule it always had: `s3://` goes to the configured endpoint.
-function isHomeService(place: StorageLocation, storage: StorageConfig | undefined): boolean {
+/**
+ * Whether an object-store path lies on the service of the connection's storage: the S3 endpoint (any bucket there), the
+ * R2 account, the hosts of the Azure account (any container), OneLake. The service is the unit, not the bucket: what the
+ * connection's account may read is the storage's decision. Aliases of the same service (s3a, s3n; az, abfss) count. A
+ * connection without a storage of its own keeps the rule it always had: `s3://` goes to the configured endpoint. The
+ * Files folder lists its roots by the same rule.
+ */
+export function isHomeService(place: StorageLocation, storage: StorageConfig | undefined): boolean {
   switch (place.family) {
     case 's3':
       return (
@@ -85,8 +88,9 @@ async function snapshotFilePaths(
   rows: Rows,
   table: TableRef,
   snapshot: number | undefined,
+  alias: string | undefined,
 ): Promise<string[]> {
-  const rows_ = await rows(snapshotFilesQuery(table, snapshot));
+  const rows_ = await rows(snapshotFilesQuery(table, snapshot, alias));
   return rows_.flatMap(([f]) => (typeof f === 'string' ? [f] : []));
 }
 
@@ -110,8 +114,8 @@ async function rangeFilePaths(
 }
 
 // The stored data path of the catalog, '' when there is none.
-export async function storedDataPath(rows: Rows): Promise<string> {
-  const value = (await rows(dataPathQuery()))[0]?.[0];
+export async function storedDataPath(rows: Rows, alias?: string): Promise<string> {
+  const value = (await rows(dataPathQuery(alias)))[0]?.[0];
   return typeof value === 'string' ? value : '';
 }
 
@@ -128,11 +132,12 @@ export async function foreignOrigins(
   range: { readonly from: number; readonly to: number } | undefined,
   base: string,
   storage?: StorageConfig,
+  alias?: string,
 ): Promise<string[]> {
   // The table exists (the caller found it), so a failing listing is a real failure and is not swallowed.
   const paths = range
     ? await rangeFilePaths(rows, table, at, range, base)
-    : await snapshotFilePaths(rows, table, snapshot);
+    : await snapshotFilePaths(rows, table, snapshot, alias);
   const home = serverOf(normalise(base), storage);
   const homeOrigin = typeof home === 'object' ? home.origin : undefined;
   return [

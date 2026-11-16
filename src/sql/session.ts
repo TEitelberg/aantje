@@ -1,3 +1,4 @@
+import type { Tip } from '../tips/model';
 import { stat } from 'node:fs/promises';
 import type * as Duckdb from '@duckdb/node-api';
 import { quoteIdentifier } from '../catalog/ddl';
@@ -8,6 +9,10 @@ import {
   setupStatements,
   USE_LAKE,
 } from '../data/attach';
+import type { AttachedLake } from '../data/attach';
+import type { ConnectionProfile } from '../connections/profile';
+import type { DataAccessFactory } from '../data/resolve';
+import type { SessionAttachment } from './editor';
 import { MISSING_LOCAL_FILE, MISSING_OBJECT, secretsOf } from '../data/errors';
 import type { Phase } from '../data/errors';
 import { kindOf, toGridValue } from '../data/grid-values';
@@ -42,6 +47,11 @@ export interface SqlSessionOptions {
   readonly maxRows?: number;
   /** Cancels opening the session (the first open downloads the extensions). */
   readonly signal?: AbortSignal;
+  /**
+   * Further lakes the session attaches read-only, under their aliases and with secrets of their own (Script as Update of
+   * Data Compare reads the source through one). Their tokens are not renewed.
+   */
+  readonly also?: readonly AttachedLake[];
 }
 
 export interface RunOptions {
@@ -80,8 +90,18 @@ export type SqlEvent =
       readonly elapsedMs: number;
     }
   | { readonly kind: 'error'; readonly index: number; readonly message: string; readonly position?: Range }
-  /** The profile of Statistics as DuckDB's profiler wrote it (JSON); the results show it as a table, as charts and as text. */
-  | { readonly kind: 'profile'; readonly index: number; readonly json: string };
+  /**
+   * The profile of Statistics as DuckDB's profiler wrote it (JSON), with its performance tips; the results show it as a
+   * table, the tips, a chart and text.
+   */
+  | {
+      readonly kind: 'profile';
+      readonly index: number;
+      readonly json: string;
+      readonly tips?: readonly Tip[];
+    }
+  /** The performance tips of Analysis, after the plan of the statement; the results add their tab at the end. */
+  | { readonly kind: 'tips'; readonly index: number; readonly tips: readonly Tip[] };
 
 /**
  * A long-lived DuckDB with the DuckLake attached; one session per editor. It runs any SQL its credentials allow;
@@ -134,11 +154,13 @@ export async function openSqlSession(options: SqlSessionOptions): Promise<SqlSes
     );
   }
   const engine = await loadEngine();
+  const also = options.also ?? [];
+  const secrets = [access, ...also.map((lake) => lake.access)].flatMap(secretsOf);
   return openLakeSession({
     engine,
     access,
     signal,
-    setup: setupStatements(access, { readOnly: mode === 'read-only' }),
+    setup: setupStatements(access, { readOnly: mode === 'read-only' }, undefined, undefined, also),
     run: (connection, sql) => (sql === USE_LAKE ? useLake(connection) : connection.run(sql)),
     cancelledText: 'Opening the SQL session was cancelled.',
     activity: 'Opening the DuckLake',
@@ -154,8 +176,38 @@ export async function openSqlSession(options: SqlSessionOptions): Promise<SqlSes
         connection,
         parser,
         temporary,
+        secrets,
       }),
-    fail: (cause, phase) => openError(cause, phase, access, mode),
+    fail: (cause, phase) => openError(cause, phase, access, mode, secrets),
+  });
+}
+
+/**
+ * The session of a SQL document: its connection at the newest snapshot, and the connection it attaches as well (the
+ * source of Script as Update of Data Compare), read-only under its alias, its storage secret limited to its data path.
+ */
+export async function openEditorSession(
+  dataAccess: DataAccessFactory,
+  profile: ConnectionProfile,
+  mode: SessionMode,
+  signal: AbortSignal,
+  attach?: SessionAttachment & { readonly profile: ConnectionProfile },
+): Promise<SqlSession> {
+  return openSqlSession({
+    access: await dataAccess(profile, undefined),
+    mode,
+    signal,
+    also:
+      attach === undefined
+        ? []
+        : [
+            {
+              access: await dataAccess(attach.profile, undefined),
+              alias: attach.alias,
+              scope: attach.dataPath,
+              atSnapshot: false,
+            },
+          ],
   });
 }
 
@@ -177,8 +229,14 @@ async function useLake(connection: Duckdb.DuckDBConnection): Promise<void> {
   }
 }
 
-function openError(cause: unknown, phase: Phase, access: DataAccess, mode: SessionMode): AantjeError {
-  const { text: raw, line } = scrubbed(cause, secretsOf(access));
+function openError(
+  cause: unknown,
+  phase: Phase,
+  access: DataAccess,
+  mode: SessionMode,
+  secrets: readonly string[],
+): AantjeError {
+  const { text: raw, line } = scrubbed(cause, secrets);
   const safeCause = new Error(line);
   if (phase === 'extension') {
     return extensionFailure('A DuckDB extension that aantje needs for the SQL editor', line);
@@ -208,6 +266,8 @@ interface LiveSessionOptions {
   /** A second connection that parses while `connection` runs a statement. */
   readonly parser: Duckdb.DuckDBConnection;
   readonly temporary: { readonly temp_directory: string };
+  /** Every secret of the lakes of the session, masked in what it reports. */
+  readonly secrets: readonly string[];
 }
 
 class LiveSession implements SqlSession {
@@ -245,7 +305,7 @@ class LiveSession implements SqlSession {
       kind: options.access.profile.kind,
       storage: storageContextOf(options.access.storage),
     };
-    this.secrets = secretsOf(options.access);
+    this.secrets = [...options.secrets];
     this.keepAzureTokenFresh(options.access);
   }
 

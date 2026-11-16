@@ -9,7 +9,7 @@ import { scriptOf } from '../script-templates';
 import { openScript } from '../script.vscode';
 import type { CatalogTree } from '../tree/model';
 import { holdsFileExclusively } from './editor';
-import type { QueryEditors, QueryUi } from './editor';
+import type { QueryEditors, QueryUi, SessionAttachment } from './editor';
 import { queryMenuItems, queryStatusContent } from './editor-status';
 import { activeSqlEditor, documentKey, documentOfKey, editorOf } from './glue.vscode';
 import { scriptToRun } from './script';
@@ -29,13 +29,17 @@ interface QueryEnv {
   };
 }
 
-/** Opens the text in an untitled SQL document bound to the connection, so that F5 runs it there; never runs it. */
+/**
+ * Opens the text in an untitled SQL document bound to the connection, so that F5 runs it there; never runs it. `attach`
+ * is a further connection the session of the document attaches read-only.
+ */
 export async function openForConnection(
   editors: QueryEditors,
   text: string,
   connectionId: string,
+  attach?: SessionAttachment,
 ): Promise<void> {
-  await openScript(text, (document) => editors.associate(editorOf(document), connectionId));
+  await openScript(text, (document) => editors.associate(editorOf(document), connectionId, attach));
 }
 
 export function createQueryUi(): QueryUi {
@@ -158,7 +162,7 @@ export function registerQueryEditor(env: QueryEnv): vscode.Disposable[] {
     register('aantje.newQuery', async (node) => {
       const connectionId = node?.ref.connectionId ?? (await editors.pickConnection());
       if (!connectionId) return;
-      // A table or view opens with its SELECT; a connection or schema opens empty.
+      // A table or view opens with its SELECT; any other node of the lake opens empty (#84).
       const starts = node?.ref.kind === 'table' || node?.ref.kind === 'view';
       await openForConnection(
         editors,

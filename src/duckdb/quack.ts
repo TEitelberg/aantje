@@ -8,9 +8,12 @@ export function quackUri(profile: { readonly host: string; readonly port: number
   return `quack:${profile.host}:${profile.port}`;
 }
 
-/** The secret that carries the token of a Quack server; its scope keeps the token away from any other server. */
-export function quackSecretStatement(uri: string, token: string): string {
-  return `CREATE OR REPLACE TEMPORARY SECRET ${QUACK_SECRET} (TYPE quack, TOKEN ${quoteLiteral(token)}, SCOPE ${quoteLiteral(uri)})`;
+/**
+ * The secret that carries the token of a Quack server; its scope keeps the token away from any other server. A second
+ * lake of an engine passes its own `name`, so that it replaces none of the first.
+ */
+export function quackSecretStatement(uri: string, token: string, name: string = QUACK_SECRET): string {
+  return `CREATE OR REPLACE TEMPORARY SECRET ${name} (TYPE quack, TOKEN ${quoteLiteral(token)}, SCOPE ${quoteLiteral(uri)})`;
 }
 
 interface QuackProblem {

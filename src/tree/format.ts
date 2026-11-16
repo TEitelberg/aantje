@@ -16,12 +16,13 @@ import type {
 } from '../catalog/model';
 import type { ConnectionKind, ConnectionProfile } from '../connections/profile';
 import type { RelationColumn } from '../data/types';
+import type { FileEntry } from '../files/listing';
 import { codeBlock, inlineCode, markdownText, withoutInvisible } from '../markdown';
 import { count, formatBytes, formatDuration } from '../shell/numbers';
 import { describeAction } from '../catalog/changes';
 import { describeChanges, formatUtc } from '../snapshot';
 import type { HistoryEntry, HistoryStatus } from '../sql/history';
-import type { ConnectionState } from './refs';
+import type { ConnectionNotice, ConnectionState } from './refs';
 
 // Descriptions and Markdown tooltips of the explorer nodes; pure.
 
@@ -42,7 +43,11 @@ export function connectionDescription(kind: ConnectionKind, state: ConnectionSta
   }
 }
 
-export function connectionTooltip(profile: ConnectionProfile, state: ConnectionState): string {
+export function connectionTooltip(
+  profile: ConnectionProfile,
+  state: ConnectionState,
+  notice?: ConnectionNotice,
+): string {
   const facts = [
     profile.kind === 'postgres'
       ? `Server: ${inlineCode(`${profile.host}:${profile.port}/${profile.database}`)}`
@@ -62,6 +67,8 @@ export function connectionTooltip(profile: ConnectionProfile, state: ConnectionS
   return blocks(
     `**${markdownText(profile.name)}** (${profile.kind})`,
     list(facts),
+    // aantje's own Markdown, without text of the catalog.
+    notice?.tooltip,
     state.error && markdownText(state.error),
   );
 }
@@ -328,4 +335,36 @@ function blocks(...parts: (string | false | null | undefined)[]): string {
 
 function list(items: readonly string[]): string {
   return items.map((item) => `- ${item}`).join('\n');
+}
+
+export const FILES_TOOLTIP =
+  'The storage of the lake, read-only. Lists what the storage shows to the sign-in of the connection, without the data files of the lake.';
+
+/** A file: its size and the time of its last change (local time), as far as the storage gives them. */
+export function fileDescription(entry: FileEntry): string {
+  const parts = [
+    ...(entry.size === undefined ? [] : [formatBytes(entry.size)]),
+    ...(entry.modified === undefined
+      ? []
+      : [`${localDay(new Date(entry.modified))} ${localTime(new Date(entry.modified))}`]),
+  ];
+  return parts.join(' · ');
+}
+
+/** The path as code, then the size in bytes and the time of the last change in UTC. */
+export function fileTooltip(entry: FileEntry): string {
+  const facts = [
+    ...(entry.size === undefined
+      ? []
+      : [`Size: ${integer.format(entry.size)} bytes (${formatBytes(entry.size)})`]),
+    ...(entry.modified === undefined
+      ? []
+      : [`Last change: ${formatUtc(new Date(entry.modified).toISOString())}`]),
+  ];
+  return blocks(inlineCode(entry.path), facts.length > 0 ? list(facts) : undefined);
+}
+
+/** A root: its path, and why it is not listed with this connection. */
+export function fileRootTooltip(root: string, problem: string | undefined): string {
+  return blocks(inlineCode(root), problem && markdownText(problem));
 }

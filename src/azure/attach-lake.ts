@@ -12,6 +12,8 @@ import { isRolePropagation, withBackoff } from './retry';
 
 export interface AttachDeps {
   readonly sleep: (ms: number) => Promise<void>;
+  /** The storage in words, for the waits; default `the storage account`. */
+  readonly storageName?: string;
   readonly report: (step: string) => void;
   readonly log: Pick<Logger, 'warn'>;
 }
@@ -58,9 +60,10 @@ export async function attachNewLake(access: DataAccess, dataPath: string, deps: 
     isRetryable: isRolePropagation,
     sleep: deps.sleep,
     onRetry: (number, error) => {
-      deps.report(`Waiting for the access to the storage account to take effect (try ${number})`);
+      const storage = deps.storageName ?? 'the storage account';
+      deps.report(`Waiting for the access to ${storage} to take effect (try ${number})`);
       deps.log.warn(
-        `The access to the storage account has not taken effect yet (try ${number}): ${userMessageOf(error)}`,
+        `The access to ${storage} has not taken effect yet (try ${number}): ${userMessageOf(error)}`,
       );
     },
   });

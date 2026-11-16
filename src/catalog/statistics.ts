@@ -90,7 +90,7 @@ export function growth(
   return { points, merged: true };
 }
 
-type Compare = (a: string, b: string) => number;
+export type Compare = (a: string, b: string) => number;
 
 const compareNumbers = (a: number, b: number): number => (a < b ? -1 : a > b ? 1 : 0);
 const compareBigInts = (a: bigint, b: bigint): number => (a < b ? -1 : a > b ? 1 : 0);
@@ -131,8 +131,8 @@ const instant = (text: string): number =>
 // Compared as instants to the millisecond; the text breaks a tie.
 const compareInstants: Compare = (a, b) => compareNumbers(instant(a), instant(b)) || compareText(a, b);
 
-// Undefined for types without a natural text order: blobs, intervals, nested types.
-function comparatorOf(type: string): Compare | undefined {
+/** How values of a DuckLake type compare as the catalog writes them; undefined for types without a natural text order (blobs, intervals, nested types). A comparison throws for text that is no value of the type. */
+export function comparatorOf(type: string): Compare | undefined {
   if (/^u?int(8|16|32|64|128)$/.test(type)) {
     return compareIntegers;
   }

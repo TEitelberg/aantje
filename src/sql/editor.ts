@@ -21,10 +21,17 @@ export interface RunScript {
 /** Runs SQL on the session without showing it; the rows of the last result set, or throws. */
 export type QuietRun = (sql: string) => Promise<readonly (readonly GridValue[])[]>;
 
-/** Statements around a script on the same session, hidden from the results; Statistics uses it for the profiler. */
+/**
+ * Statements around a script on the same session, hidden from the results; Statistics uses it for the profiler, Run to
+ * File to bind the statement and to report the file it wrote.
+ */
 export interface RunAround {
   /** Before the script; when it fails, the failure is shown and the script does not run. */
   before(run: QuietRun): Promise<void>;
+  /** After `before`: the text that runs in place of the script's text, which the results show at the start. */
+  script?(run: QuietRun): Promise<string>;
+  /** An event of the script as the results and the Query History get it. */
+  event?(event: SqlEvent): SqlEvent;
   /** Puts back what `before` changed, also after a failure or a cancel; false when the session refused it. */
   restore(run: QuietRun): Promise<boolean>;
   /** What to show after the script's own events. */
@@ -57,12 +64,27 @@ export interface QueryUi {
   withProgress<T>(title: string, task: (cancel: AbortSignal) => Promise<T>): Promise<T>;
 }
 
+/**
+ * A further connection that the session of one document attaches read-only, under `alias`: the source of Script as
+ * Update of Data Compare. `dataPath` limits its storage secret.
+ */
+export interface SessionAttachment {
+  readonly connectionId: string;
+  readonly alias: string;
+  readonly dataPath: string | null;
+}
+
 interface QueryEditorDeps {
   readonly profiles: {
     list(): readonly ConnectionProfile[];
     get(id: string): ConnectionProfile | undefined;
   };
-  openSession(profile: ConnectionProfile, mode: SessionMode, signal: AbortSignal): Promise<SqlSession>;
+  openSession(
+    profile: ConnectionProfile,
+    mode: SessionMode,
+    signal: AbortSignal,
+    attach?: SessionAttachment & { readonly profile: ConnectionProfile },
+  ): Promise<SqlSession>;
   readonly results: ResultsView;
   readonly explorer: ExplorerPort;
   readonly ui: QueryUi;
@@ -107,6 +129,8 @@ interface Entry {
   last?: RunScript;
   /** Settings that a run changed and could not put back yet (an aborted transaction); tried after every run. */
   pending?: RunAround;
+  /** A connection the session attaches as well, with its opening signature; a change of it closes the session. */
+  attach?: SessionAttachment & { signature: string };
 }
 
 /** The SQL editor without the VS Code API: one session per document, opened at the first run. */
@@ -140,14 +164,21 @@ export class QueryEditors {
     };
   }
 
-  /** Binds the document to the connection and closes a session on another connection. */
-  async associate(editor: EditorRef, connectionId: string): Promise<void> {
+  /**
+   * Binds the document to the connection and closes a session on another connection; `attach` is a further connection
+   * its session attaches read-only (a new document of Script as Update).
+   */
+  async associate(editor: EditorRef, connectionId: string, attach?: SessionAttachment): Promise<void> {
     const profile = this.deps.profiles.get(connectionId);
     if (!profile) {
       throw new AantjeError('INVALID_PROFILE', 'The connection does not exist (any more).');
     }
+    const attached = attach && this.deps.profiles.get(attach.connectionId);
+    if (attach && !attached) {
+      throw new AantjeError('INVALID_PROFILE', 'The connection to attach does not exist (any more).');
+    }
     const entry = this.entries.get(editor.key);
-    if (entry?.connectionId === connectionId) {
+    if (entry?.connectionId === connectionId && attach === undefined) {
       entry.name = editor.name;
       return;
     }
@@ -162,6 +193,7 @@ export class QueryEditors {
       signature: openingSignature(profile),
       reconnect: false,
       base: 0,
+      ...(attach && attached ? { attach: { ...attach, signature: openingSignature(attached) } } : {}),
     });
     this.fire({ key: editor.key, association: true });
   }
@@ -249,6 +281,14 @@ export class QueryEditors {
         entry.override = undefined;
         await this.closeSession(entry);
         this.fire({ key, association: false });
+      } else if (entry.attach) {
+        // The attached connection was edited or removed: the next run opens the session again, or says it is gone.
+        const attached = this.deps.profiles.get(entry.attach.connectionId);
+        if (!attached || openingSignature(attached) !== entry.attach.signature) {
+          if (attached) entry.attach.signature = openingSignature(attached);
+          await this.closeSession(entry);
+          this.fire({ key, association: false });
+        }
       }
     }
   }
@@ -301,7 +341,7 @@ export class QueryEditors {
     around: RunAround | undefined,
   ): Promise<RunSummary> {
     const { results, ui } = this.deps;
-    const now = (): number => (this.deps.now ?? Date.now)();
+    const now = (): number => this.deps.now?.() ?? Date.now();
     const run = new RunTracker({
       target: { key, title: `${entry.name} · ${profile.name}` },
       results,
@@ -349,7 +389,9 @@ export class QueryEditors {
     const quiet = quietRun(session);
     try {
       await around?.before(quiet);
-      for await (const event of session.run(script.text, options)) run.statementEvent(event);
+      const text = (await around?.script?.(quiet)) ?? script.text;
+      for await (const event of session.run(text, options))
+        run.statementEvent(around?.event?.(event) ?? event);
       for (const event of (await around?.report()) ?? []) run.forward(event);
     } finally {
       // Settings go back even after a failure or a cancel; an earlier run's leftovers get another try.
@@ -409,8 +451,20 @@ export class QueryEditors {
     const exclusive = holdsFileExclusively(profile, mode);
     const letGo = exclusive && explorer.status(profile.id) === 'connected';
     if (exclusive) await explorer.disconnect(profile.id);
+    const attached = entry.attach && this.deps.profiles.get(entry.attach.connectionId);
+    if (entry.attach && !attached) {
+      throw new AantjeError(
+        'INVALID_PROFILE',
+        'The connection that this document reads as its source was removed, so its session cannot attach it.',
+      );
+    }
     try {
-      entry.session = await this.deps.openSession(profile, mode, signal);
+      entry.session = await this.deps.openSession(
+        profile,
+        mode,
+        signal,
+        entry.attach && attached ? { ...entry.attach, profile: attached } : undefined,
+      );
     } catch (error) {
       if (letGo) explorer.connect(profile.id);
       throw error;

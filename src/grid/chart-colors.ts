@@ -7,7 +7,7 @@ import type { OperatorKind } from './plan';
 
 /**
  * The theme variable and its fallback for each kind of operator. One table for the squares of the Statistics table
- * (GRID_CSS) and for the flame graph, the treemap and the bars, so that a kind has the same colour everywhere.
+ * (GRID_CSS) and for the flame graph, so that a kind has the same colour everywhere.
  */
 export const KIND_VARIABLES: Readonly<Record<OperatorKind, readonly [string, string]>> = {
   scan: ['--vscode-charts-blue', '#3794ff'],

@@ -11,23 +11,27 @@ aantje is an explorer and SQL editor for DuckLake catalogs in VS Code and code-s
 
 ## Using aantje
 
-| Page                                                          | Covers                                                                              |
-| ------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| [Connections](connections.md)                                 | Profiles, settings format, passwords, wizard, provisioning.                         |
-| [Azure DuckLake](azure-lake.md)                               | Create, import and delete a lake in Azure; Entra access to ADLS.                    |
-| [Tree](tree.md)                                               | Nodes, lifecycle, refresh, tooltips, errors.                                        |
-| [Snapshots, search and status bar](snapshot-search-status.md) | Snapshot selection, catalog search, status bar item.                                |
-| [Time travel](time-travel.md)                                 | Query at Snapshot, Compare Table and Snapshots, Show Changes, both restore scripts. |
-| [Schema Compare](compare.md)                                  | Two tables or two schemas, and Script as Update that aligns them.                   |
-| [Data access](data-access.md)                                 | Select Top 1000 Rows: the private DuckDB, S3, views and trust.                      |
-| [Data grid](grid.md)                                          | The webview grid and its protocol.                                                  |
-| [Notebooks](notebooks.md)                                     | Create Notebook.                                                                    |
-| [SQL editor](sql-editor.md)                                   | Documents, connections, sessions, runs.                                             |
-| [SQL session](sql-session.md)                                 | The long-lived DuckDB session of the editor.                                        |
-| [SQL IntelliSense](sql-intellisense.md)                       | Completion, hover, signature help, syntax errors, unknown names.                    |
-| [DDL generation](ddl.md)                                      | Copy DDL, Script as SELECT / CREATE / ALTER / DROP, Generate Scripts.               |
-| [Maintenance scripts](maintenance.md)                         | The Maintenance submenu.                                                            |
-| [Logging](logging.md)                                         | The output channel and the secret filter.                                           |
+| Page                                                          | Covers                                                                                    |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| [Connections](connections.md)                                 | Profiles, settings format, passwords, wizard, provisioning.                               |
+| [Azure DuckLake](azure-lake.md)                               | Create, import and delete a lake in Azure; Entra access to ADLS.                          |
+| [AWS DuckLake](aws-lake.md)                                   | Create a lake in AWS: RDS for PostgreSQL and an S3 bucket in one CloudFormation stack.    |
+| [Sync to Iceberg](iceberg.md)                                 | Targets, the copy of a lake to an Iceberg REST catalog, its green or red row and report.  |
+| [Tree](tree.md)                                               | Nodes, lifecycle, refresh, tooltips, errors.                                              |
+| [Files](files.md)                                             | The storage of a lake in the tree, and import scripts for CSV, Parquet, JSON, Excel.      |
+| [Snapshots, search and status bar](snapshot-search-status.md) | Snapshot selection, catalog search, status bar item.                                      |
+| [Time travel](time-travel.md)                                 | Query at Snapshot, Compare Table and Snapshots, Show Changes, both restore scripts.       |
+| [Schema Compare and Data Compare](compare.md)                 | Two tables or two schemas, the rows of two tables, and Script as Update that aligns them. |
+| [Data access](data-access.md)                                 | Select Top 1000 Rows: the private DuckDB, S3, views and trust.                            |
+| [Data grid](grid.md)                                          | The webview grid and its protocol.                                                        |
+| [Notebooks](notebooks.md)                                     | Create Notebook.                                                                          |
+| [SQL editor](sql-editor.md)                                   | Documents, connections, sessions, runs.                                                   |
+| [SQL session](sql-session.md)                                 | The long-lived DuckDB session of the editor.                                              |
+| [SQL IntelliSense](sql-intellisense.md)                       | Completion, hover, signature help, syntax errors, unknown names.                          |
+| [DDL generation](ddl.md)                                      | Copy DDL, Script as SELECT / CREATE / ALTER / DROP, Generate Scripts.                     |
+| [Maintenance scripts](maintenance.md)                         | The Maintenance submenu.                                                                  |
+| [Logging](logging.md)                                         | The output channel and the secret filter.                                                 |
+| [MCP server](mcp.md)                                          | How Copilot and Claude Code read the connected lakes: the tools, the log, the limits.     |
 
 ## Reports
 

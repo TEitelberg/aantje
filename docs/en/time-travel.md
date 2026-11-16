@@ -13,7 +13,7 @@ The tree shows the whole catalog at one snapshot ([Snapshots, search and status 
 
 Query at Snapshot, Compare Table at Two Snapshots, Show Changes and Restore Table to Snapshot are in the submenu **Time Travel** (`aantje.timeTravel`, group `2_travel`) of a table; a view has only Query at Snapshot. Compare Snapshots is in the context menu of an open connection, Restore Dropped Object in the one of a schema. A seventh command, **Show Rows Changed** (`aantje.showSnapshotChanges`), is the entry of a change in the Snapshots folder, see [Show Rows Changed](#show-rows-changed).
 
-Two different tables or two schemas, also of two connections, are compared by **Schema Compare...** ([Schema Compare](compare.md)), which also writes a script that aligns them.
+Two different tables or two schemas, also of two connections, are compared by **Schema Compare...** ([Schema Compare](compare.md)), which also writes a script that aligns them; the rows of two tables by **Data Compare...** ([Data Compare](compare.md#data-compare)).
 
 ## Which snapshots a table has
 

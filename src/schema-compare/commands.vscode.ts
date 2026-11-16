@@ -12,6 +12,8 @@ import type { TableState } from '../ddl-script/table-state';
 import type { DependencyGraph } from '../dependencies/graph';
 import { scriptGraph } from '../dependencies/order';
 import type { SqlParser, SqlTokenizer } from '../dependencies/parser';
+import { registerDataCompare } from '../data-compare/commands.vscode';
+import type { DataCompareEnv } from '../data-compare/commands.vscode';
 import type { Logger } from '../log';
 import { pickOne } from '../pick.vscode';
 import { cancellable } from '../progress.vscode';
@@ -32,11 +34,13 @@ import { tablesScript } from './update-table';
 
 interface SchemaCompareEnv {
   readonly tree: Pick<CatalogTree, 'state' | 'reader'>;
-  readonly store: Pick<ConnectionStore, 'list'>;
+  readonly store: Pick<ConnectionStore, 'list' | 'get'>;
   readonly active: Pick<ActiveConnection, 'current'>;
   readonly schemaDocuments: Pick<SchemaDocuments, 'show' | 'preview'>;
-  /** Opens the text in a new SQL document bound to the connection, and runs nothing. */
-  readonly openSql: (connectionId: string, text: string) => Promise<void>;
+  /** Opens a script in a new SQL document bound to a connection, and runs nothing; Data Compare also shows its grid. */
+  readonly actions: DataCompareEnv['actions'];
+  /** Where Data Compare keeps the key columns of a pair of tables. */
+  readonly keys: DataCompareEnv['keys'];
   readonly logger: Logger;
   readonly register: Register;
   /**
@@ -71,7 +75,7 @@ const tokenizer =
     env.parser.tokenize(text);
 
 /** The connected catalogs at the snapshot that their trees show, the connection in use first. */
-function connected({ tree, store, active }: SchemaCompareEnv): Side[] {
+function connected({ tree, store, active }: Pick<SchemaCompareEnv, 'tree' | 'store' | 'active'>): Side[] {
   const inUse = active.current()?.id;
   return store
     .list()
@@ -131,7 +135,7 @@ async function compareTables(env: SchemaCompareEnv, source: Picked, target: Pick
       continue;
     }
     if (choice === SCRIPT) {
-      await env.openSql(right.connectionId, await tablesScript(left, right, tokenizer(env)));
+      await env.actions.openSql(right.connectionId, await tablesScript(left, right, tokenizer(env)));
     }
     return;
   }
@@ -207,7 +211,7 @@ async function compareSchemasOf(env: SchemaCompareEnv, source: Picked, target: P
       const text = await cancellable('Writing the script...', (signal) =>
         schemaUpdate(env, current, comparison, signal),
       );
-      await env.openSql(current.right.connectionId, text);
+      await env.actions.openSql(current.right.connectionId, text);
     }
     return;
   }
@@ -244,7 +248,10 @@ async function run(env: SchemaCompareEnv): Promise<void> {
     : compareSchemasOf(env, source.value, target.value));
 }
 
-/** Schema Compare: two tables or two schemas of the connected catalogs, what differs, and a script that aligns them. */
+/**
+ * Schema Compare: two tables or two schemas of the connected catalogs, what differs, and a script that aligns them; and
+ * Data Compare, which compares the rows of two tables of the same catalogs.
+ */
 export function registerSchemaCompare(env: SchemaCompareEnv): vscode.Disposable[] {
-  return [env.register(COMMAND, () => run(env))];
+  return [env.register(COMMAND, () => run(env)), ...registerDataCompare(env, () => connected(env))];
 }

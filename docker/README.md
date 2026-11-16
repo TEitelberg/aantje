@@ -10,6 +10,7 @@ with DuckDB.
 | **postgres** | PostgreSQL 17: the DuckLake catalog (database `ducklake`) and the Gitea database | `localhost:5433` |
 | **rustfs** | S3-compatible object storage: the DuckLake data files (bucket `oog-lake`) and the Git objects of Gitea (`oog-gitea`) | S3 http://localhost:9000, console http://localhost:9001 |
 | **duckdb** | DuckDB 2.0.0 server that serves a second DuckLake catalog over [Quack](https://duckdb.org/quack/) (client-server protocol, experimental); the data files are in RustFS | `localhost:9494` (TLS, see below) |
+| **polaris** | Apache Polaris, an Iceberg REST catalog (state in Postgres, data in the RustFS bucket `oog-iceberg`); no web UI. aantje's **Sync to Iceberg...** writes to it; the target "Oog Polaris" is preconfigured | API http://localhost:8181/api/catalog |
 | **gitea** | Git server with LFS; holds the `oog-workspace` repository with the notebooks | http://localhost:3000 |
 
 DuckLake is not a service of its own. In the catalog `oog` the metadata lives in Postgres and the Parquet files in RustFS;
@@ -51,9 +52,14 @@ password before the stack is reachable by anyone else. All ports are published o
    extracts of an online shop (10 tables, September 2026, one extract per day) to `s3://oog-lake/bronze/`.
    Set `SCALE` in the first cell (for example `0.01`) for a quick run; `1.0` is up to a million order items per day.
 3. Open `02-medallion-pipeline.ipynb`, set `LOAD_DATE` and run all cells: one load date goes through Bronze, Silver
-   (clean, deduplicate, quarantine, history) and Gold (star schema with SCD2 dimensions, facts and five reporting views).
+   (clean, deduplicate, quarantine, history) and Gold (star schema with SCD2 dimensions, facts, five reporting views and
+   13 views that build on each other in five levels, for the Dependencies report).
    `LOAD_WHOLE_MONTH = True` loads every day in a loop. The notebook proves that repeating a day changes nothing.
 4. Refresh the catalog in aantje: schemas `bronze`, `silver`, `gold`, `ops`, snapshots and table changes.
+   To copy the lake to Iceberg, right-click the connected connection and choose **Sync to Iceberg...**: the target
+   **Oog Polaris** (the Polaris service, catalog `oog_iceberg`) is preconfigured. The first copy asks for the client secret
+   (`OOG_POLARIS_CLIENT_ID` `root`, `OOG_POLARIS_CLIENT_SECRET` default `change-me-polaris`) and keeps it in the secret storage.
+   The Iceberg data lands in the RustFS bucket `oog-iceberg`.
 5. `03-medallion-cleanup.ipynb` undoes it (every step has a switch; the default is a dry run).
 6. To build the same lake on the Quack server, use the notebooks in `notebooks/quack/`: the same three, but the lake is
    the catalog `oog_quack` that the DuckDB server serves over Quack (no PostgreSQL catalog). The catalogs `oog`
@@ -63,6 +69,21 @@ password before the stack is reachable by anyone else. All ports are published o
 The notebooks of this tour are in `notebooks/local/` (DuckLake on PostgreSQL) and `notebooks/quack/` (DuckLake on the
 Quack server). `notebooks/azure/` has the same three notebooks for an Azure DuckLake ([below](#azure-notebooks)).
 The Quack server and its token are described in [The Quack server](#the-quack-server).
+
+## AWS profiles in the workbench
+
+For **Create AWS DuckLake...** the workbench has the AWS CLI (v2 of Debian). Create a profile in a terminal of the
+workbench and sign in with a device code, because the browser of the sign-in runs on your machine, not in the container:
+
+```sh
+aws configure sso --use-device-code          # IAM Identity Center: start URL, region, account, role, profile name
+aws sso login --use-device-code --profile <name>
+```
+
+A profile with keys works too (`aws configure --profile <name>`). The profiles are in `/home/coder/.aws`, which is no
+volume: a re-created container (a rebuild of the image) starts without them. The `AWS_ACCESS_KEY_ID` and
+`AWS_SECRET_ACCESS_KEY` of the container are the keys of RustFS, not of AWS: **Environment** in the AWS wizard of aantje
+means those, and AWS refuses them. Pick the profile.
 
 ## Azure notebooks
 
