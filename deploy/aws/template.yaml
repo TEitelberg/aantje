@@ -1,0 +1,314 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  A DuckLake for aantje: PostgreSQL on Amazon RDS as the catalog and an S3 bucket for the data files, in a VPC of its
+  own. Only the address in ClientIp reaches the database, over TLS.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label: { default: The lake }
+        Parameters: [LakeName, Size, PostgresVersion, BucketName]
+      - Label: { default: Access }
+        Parameters: [ClientIp, MasterUsername, MasterPassword, IamAuthentication, PrincipalArn]
+      - Label: { default: Protection }
+        Parameters: [DeletionProtection]
+
+Parameters:
+  LakeName:
+    Type: String
+    Description: The name of the lake. It is the value of the tag aantje:lake on every resource.
+    AllowedPattern: '^[a-z][a-z0-9-]{1,22}[a-z0-9]$'
+    ConstraintDescription: 3 to 24 lower-case letters, digits and hyphens, starting with a letter.
+  Size:
+    Type: String
+    Description: 'small: db.t4g.small, 32 GiB gp3, Single-AZ. medium: db.m7g.large, 128 GiB gp3, Multi-AZ.'
+    AllowedValues: [small, medium]
+    Default: small
+  PostgresVersion:
+    Type: String
+    Description: The major version of PostgreSQL; RDS takes its default minor version.
+    AllowedValues: ['14', '15', '16', '17', '18']
+    Default: '17'
+  BucketName:
+    Type: String
+    Description: The S3 bucket of the data files. Bucket names are global; choose one that is free.
+    AllowedPattern: '^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$'
+  ClientIp:
+    Type: String
+    Description: The public IPv4 address that may reach PostgreSQL, without a prefix length; the rule admits it as /32.
+    AllowedPattern: '^((25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])$'
+    ConstraintDescription: an IPv4 address such as 203.0.113.7.
+  MasterUsername:
+    Type: String
+    Description: The administrator of PostgreSQL.
+    AllowedPattern: '^[a-z][a-z0-9_]{0,15}$'
+    Default: ducklakeadmin
+  MasterPassword:
+    Type: String
+    Description: The password of the administrator; 16 to 128 letters, digits, hyphens and underscores.
+    NoEcho: true
+    MinLength: 16
+    MaxLength: 128
+    AllowedPattern: '^[A-Za-z0-9_-]+$'
+  IamAuthentication:
+    Type: String
+    Description: >-
+      true: PostgreSQL also takes IAM database authentication, and the output names the role ducklake_iam, which aantje
+      creates after the stack (CREATE ROLE ducklake_iam LOGIN; GRANT rds_iam TO ducklake_iam). The administrator keeps
+      its password login.
+    AllowedValues: ['true', 'false']
+    Default: 'false'
+  PrincipalArn:
+    Type: String
+    Description: >-
+      The IAM user or role (its ARN with the path) that the bucket policy allows to read and write the data. Empty: only
+      the IAM policies of the account decide.
+    Default: ''
+  DeletionProtection:
+    Type: String
+    Description: Whether RDS refuses to delete the database. Delete AWS DuckLake switches it off first.
+    AllowedValues: ['true', 'false']
+    Default: 'true'
+
+Mappings:
+  Sizes:
+    small:
+      InstanceClass: db.t4g.small
+      Storage: 32
+      MultiAz: 'false'
+    medium:
+      InstanceClass: db.m7g.large
+      Storage: 128
+      MultiAz: 'true'
+
+Conditions:
+  HasPrincipal: !Not [!Equals [!Ref PrincipalArn, '']]
+  UsesIam: !Equals [!Ref IamAuthentication, 'true']
+
+Resources:
+  # A VPC of its own, so the lake depends on no default VPC and goes with the stack: two public subnets in two
+  # availability zones (the DB subnet group needs them), an internet gateway, no NAT gateway.
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.42.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - { Key: 'aantje:lake', Value: !Ref LakeName }
+        - { Key: Name, Value: !Sub 'aantje-${LakeName}' }
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - { Key: 'aantje:lake', Value: !Ref LakeName }
+
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags:
+        - { Key: 'aantje:lake', Value: !Ref LakeName }
+
+  DefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GatewayAttachment
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.42.0.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - { Key: 'aantje:lake', Value: !Ref LakeName }
+
+  SubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.42.1.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - { Key: 'aantje:lake', Value: !Ref LakeName }
+
+  SubnetARoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetA
+      RouteTableId: !Ref RouteTable
+
+  SubnetBRoutes:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetB
+      RouteTableId: !Ref RouteTable
+
+  DatabaseSubnets:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub 'The subnets of the DuckLake ${LakeName}'
+      SubnetIds: [!Ref SubnetA, !Ref SubnetB]
+      Tags:
+        - { Key: 'aantje:lake', Value: !Ref LakeName }
+
+  # Allow My IP replaces the address with a stack update of ClientIp, so the rule never drifts from the stack.
+  DatabaseAccess:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub 'PostgreSQL of the DuckLake ${LakeName} from one address'
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          CidrIp: !Sub '${ClientIp}/32'
+          Description: client-ip
+      Tags:
+        - { Key: 'aantje:lake', Value: !Ref LakeName }
+
+  # TLS is required: the server refuses a connection without it.
+  DatabaseParameters:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description: !Sub 'PostgreSQL of the DuckLake ${LakeName}: TLS required'
+      Family: !Sub 'postgres${PostgresVersion}'
+      Parameters:
+        rds.force_ssl: '1'
+      Tags:
+        - { Key: 'aantje:lake', Value: !Ref LakeName }
+
+  # Created last: a failure of any other resource rolls back before the database exists, so its deletion protection
+  # never blocks a rollback.
+  Database:
+    Type: AWS::RDS::DBInstance
+    DependsOn: [DefaultRoute, SubnetARoutes, SubnetBRoutes, BucketPolicy]
+    # Deleting the stack by hand keeps a final snapshot. Delete AWS DuckLake deletes the database itself first, with a
+    # final snapshot or without one, as the user chose.
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Metadata:
+      cfn-lint:
+        config:
+          # The password is generated by aantje and kept in the secret storage of VS Code, like the one of the Azure
+          # lake; a secret in Secrets Manager would cost per month, and its rotation would break the stored password.
+          ignore_checks: [W1011]
+    Properties:
+      Engine: postgres
+      EngineVersion: !Ref PostgresVersion
+      DBInstanceClass: !FindInMap [Sizes, !Ref Size, InstanceClass]
+      AllocatedStorage: !FindInMap [Sizes, !Ref Size, Storage]
+      StorageType: gp3
+      MultiAZ: !FindInMap [Sizes, !Ref Size, MultiAz]
+      # The key that AWS manages for RDS: a customer managed key would stay 7 to 30 days in pending deletion.
+      StorageEncrypted: true
+      DBName: ducklake_catalog
+      MasterUsername: !Ref MasterUsername
+      MasterUserPassword: !Ref MasterPassword
+      DBSubnetGroupName: !Ref DatabaseSubnets
+      VPCSecurityGroups: [!GetAtt DatabaseAccess.GroupId]
+      DBParameterGroupName: !Ref DatabaseParameters
+      PubliclyAccessible: true
+      DeletionProtection: !Ref DeletionProtection
+      EnableIAMDatabaseAuthentication: !Ref IamAuthentication
+      BackupRetentionPeriod: 7
+      CopyTagsToSnapshot: true
+      AutoMinorVersionUpgrade: true
+      Tags:
+        - { Key: 'aantje:lake', Value: !Ref LakeName }
+
+  # The data files: no public access, no ACLs, SSE-S3 (the key that S3 manages).
+  Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules:
+          - ObjectOwnership: BucketOwnerEnforced
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - { Key: 'aantje:lake', Value: !Ref LakeName }
+
+  # Requests without TLS are denied; the principal that created the lake may read and write the data.
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref Bucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyWithoutTls
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource: [!GetAtt Bucket.Arn, !Sub '${Bucket.Arn}/*']
+            Condition:
+              Bool:
+                aws:SecureTransport: 'false'
+          - !If
+            - HasPrincipal
+            - Sid: LakeBucket
+              Effect: Allow
+              Principal:
+                AWS: !Ref PrincipalArn
+              Action: [s3:ListBucket, s3:GetBucketLocation, s3:ListBucketMultipartUploads]
+              Resource: !GetAtt Bucket.Arn
+            - !Ref AWS::NoValue
+          - !If
+            - HasPrincipal
+            - Sid: LakeObjects
+              Effect: Allow
+              Principal:
+                AWS: !Ref PrincipalArn
+              Action:
+                [
+                  s3:GetObject,
+                  s3:PutObject,
+                  s3:DeleteObject,
+                  s3:AbortMultipartUpload,
+                  s3:ListMultipartUploadParts,
+                ]
+              Resource: !Sub '${Bucket.Arn}/*'
+            - !Ref AWS::NoValue
+
+Outputs:
+  # What aantje and a person who attaches the lake by hand need; never the password.
+  ducklake:
+    Description: The lake as JSON, for Import AWS DuckLake.
+    Value: !Sub
+      - >-
+        {"authentication":"${Authentication}","attach":"ATTACH 'ducklake:postgres:dbname=ducklake_catalog host=${Host}
+        port=${Port} user=${User} sslmode=verify-full sslrootcert=rds-ca-bundle.pem' AS aws_lake (DATA_PATH
+        's3://${Bucket}/data/')","s3Secret":{"provider":"credential_chain","region":"${AWS::Region}","bucket":"${Bucket}"},"postgres":{"host":"${Host}","port":${Port},"database":"ducklake_catalog","user":"${User}"},"stack":{"account":"${AWS::AccountId}","region":"${AWS::Region}","lake":"${LakeName}"}}
+      - Host: !GetAtt Database.Endpoint.Address
+        Port: !GetAtt Database.Endpoint.Port
+        Authentication: !If [UsesIam, iam, password]
+        User: !If [UsesIam, ducklake_iam, !Ref MasterUsername]
+  PostgresHost:
+    Description: The host name of PostgreSQL.
+    Value: !GetAtt Database.Endpoint.Address
+  DatabaseInstance:
+    Description: The identifier of the RDS instance.
+    Value: !Ref Database
+  BucketName:
+    Description: The S3 bucket of the data files.
+    Value: !Ref Bucket

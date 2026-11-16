@@ -4,12 +4,16 @@ import type { Logger } from './log';
 import { invalidEntriesText, reopenedIds, signaturesOf } from './profile-changes';
 import type { QueryEditors } from './sql/editor';
 import type { CatalogTree } from './tree/model';
+import { whenShown } from './tree/shown';
+import type { ShownView } from './tree/shown';
 
 interface ProfileWatchEnv {
   readonly store: ConnectionStore;
   readonly tree: CatalogTree;
   readonly editors: Pick<QueryEditors, 'profilesChanged'>;
   readonly logger: Logger;
+  /** The view of aantje: the warning about the setting waits until the user has seen it, the log does not. */
+  readonly view: ShownView;
   /** Runs after each setting change, once the tree and sessions know about it. */
   readonly onChanged: () => void;
 }
@@ -17,8 +21,6 @@ interface ProfileWatchEnv {
 interface ProfileWatch {
   /** Ids Edit Connection is saving; the setting change must not reopen them. */
   readonly editing: Set<string>;
-  /** Logs skipped setting entries and warns once per new set. */
-  readonly reportProblems: () => void;
   readonly disposable: vscode.Disposable;
 }
 
@@ -28,7 +30,11 @@ export function watchProfiles(env: ProfileWatchEnv): ProfileWatch {
   const { store, tree, logger } = env;
   const editing = new Set<string>();
   let known = signaturesOf(store.list());
-  let reported = '';
+  // The set of problems last logged, and the one last warned about.
+  let logged = '';
+  let warned = '';
+  // The user has seen the view of aantje in this window; only then does it warn.
+  let shown = false;
 
   function reopenChanged(): void {
     const profiles = store.list();
@@ -41,36 +47,47 @@ export function watchProfiles(env: ProfileWatchEnv): ProfileWatch {
     }
   }
 
+  /** Logs skipped setting entries once per new set, and warns once per new set when the user has seen the view. */
   function reportProblems(): void {
     const problems = store.problems();
     const text = problems.join('\n');
-    if (text === reported) {
+    if (text !== logged) {
+      logged = text;
+      for (const problem of problems) {
+        logger.warn(`Ignored an entry of "aantje.connections": ${problem}`);
+      }
+    }
+    if (!shown || text === warned) {
       return;
     }
-    reported = text;
-    for (const problem of problems) {
-      logger.warn(`Ignored an entry of "aantje.connections": ${problem}`);
-    }
+    warned = text;
     const warning = invalidEntriesText(problems.length);
     if (warning) {
       void vscode.window.showWarningMessage(warning);
     }
   }
 
+  // The log at once, also in a window that uses aantje only through its commands or its MCP server.
+  reportProblems();
   return {
     editing,
-    reportProblems,
-    disposable: vscode.workspace.onDidChangeConfiguration((event) => {
-      if (!event.affectsConfiguration('aantje.connections')) {
-        return;
-      }
-      tree.profilesChanged();
-      reopenChanged();
-      env.editors.profilesChanged().catch((error: unknown) => {
-        logger.error('Updating the SQL sessions after a change of the connections failed.', error);
-      });
-      reportProblems();
-      env.onChanged();
-    }),
+    disposable: vscode.Disposable.from(
+      whenShown(env.view, () => {
+        shown = true;
+        reportProblems();
+      }),
+      vscode.workspace.onDidChangeConfiguration((event) => {
+        if (!event.affectsConfiguration('aantje.connections')) {
+          return;
+        }
+        tree.profilesChanged();
+        reopenChanged();
+        env.editors.profilesChanged().catch((error: unknown) => {
+          logger.error('Updating the SQL sessions after a change of the connections failed.', error);
+        });
+        reportProblems();
+        env.onChanged();
+      }),
+    ),
   };
 }

@@ -630,6 +630,12 @@ export interface HealthScopeRef {
 }
 
 /** Read-only view of one DuckLake catalog; reads take a snapshot id (`info().latestSnapshot` for the current state). */
+/** The smallest and largest value of a column in one file or row group, as text; null when it is not recorded. */
+export interface ValueRange {
+  readonly min: string | null;
+  readonly max: string | null;
+}
+
 export interface CatalogReader {
   /** Validates that the database is a supported DuckLake catalog; throws `NOT_A_DUCKLAKE` / `UNSUPPORTED_VERSION`. */
   info(): Promise<CatalogInfo>;
@@ -719,6 +725,20 @@ export interface CatalogReader {
    * DuckDB and Quack queries, not SQLite's.
    */
   tableStatistics(tableId: number, snapshot: SnapshotId, signal?: AbortSignal): Promise<TableStatistics>;
+  /** The bytes of each column (by column id) over the visible data files; undefined when the catalog cannot say. */
+  columnBytes(
+    tableId: number,
+    snapshot: SnapshotId,
+    signal?: AbortSignal,
+  ): Promise<ReadonlyMap<number, number> | undefined>;
+  /** Minimum and maximum of one column in each visible data file, at most `limit`; undefined when unreadable. */
+  columnFileRanges(
+    tableId: number,
+    columnId: number,
+    snapshot: SnapshotId,
+    limit: number,
+    signal?: AbortSignal,
+  ): Promise<readonly ValueRange[] | undefined>;
   /**
    * Counts the rows that break each check and returns the first `sampleLimit`; `snapshot` is the newest. With
    * `scope.tableId` only checks and rows that concern the table run.
@@ -756,7 +776,14 @@ export interface CatalogReader {
     dataPath: string | null,
     limit: number,
     signal?: AbortSignal,
+    /** Only the files that the newest snapshot still uses. */
+    current?: boolean,
   ): Promise<FileLocations>;
+  /**
+   * The directory of every schema and table of every version, resolved against `dataPath` (absolute paths stay as they
+   * are); empty when the catalog cannot list them. The Files folder hides them.
+   */
+  storedDirectories(dataPath: string | null, signal?: AbortSignal): Promise<string[]>;
   /**
    * The newest `limit` schema versions of a table: one per snapshot at which its name, a column or a column comment
    * began or ended.

@@ -78,12 +78,33 @@ export function cellDisplay(value: GridValue, kind: GridColumn['kind']): CellDis
   };
 }
 
-export const ROW_MARKS: Readonly<Record<RowKind, { readonly mark: string; readonly label: string }>> = {
+type RowMarks = Readonly<Record<RowKind, { readonly mark: string; readonly label: string }>>;
+
+export const ROW_MARKS: RowMarks = {
   insert: { mark: '+', label: 'Inserted row' },
   delete: { mark: '−', label: 'Deleted row' },
   'update-before': { mark: '←', label: 'Updated row, before the change' },
   'update-after': { mark: '→', label: 'Updated row, after the change' },
 };
+
+// Data Compare sees the rows from Script as Update, which makes the target like the source.
+const COMPARE_MARKS: RowMarks = {
+  insert: { mark: '+', label: 'Only in the source: Script as Update inserts it into the target' },
+  delete: { mark: '−', label: 'Only in the target: Script as Update deletes it' },
+  'update-before': { mark: '←', label: 'Differs: the row in the target' },
+  'update-after': { mark: '→', label: 'Differs: the row in the source' },
+};
+
+/** The words of a change grid: the marks of the rows, the tooltip of a changed cell, the title of the mark column. */
+export function changeWording(mode: GridData['rowMode']): {
+  readonly marks: RowMarks;
+  readonly changed: string;
+  readonly column: string;
+} {
+  return mode === 'compare'
+    ? { marks: COMPARE_MARKS, changed: 'Differs between the target and the source', column: 'Difference' }
+    : { marks: ROW_MARKS, changed: 'Changed by the update', column: 'Kind of the change' };
+}
 
 /** The columns of an update pair that differ, without `snapshot_id`, `rowid` and `change_type`. */
 export function changedColumns(
@@ -253,10 +274,14 @@ export function toCsv(columns: readonly GridColumn[], rows: readonly Row[]): str
     .join('\r\n')}\r\n`;
 }
 
-const PLAIN_NUMBER = /^-?\d+(\.\d+)?$/;
+/** How text that a spreadsheet reads as a formula starts; a `-` counts only before text that is no `PLAIN_NUMBER`. */
+export const FORMULA_START = /^[=+@\t\r]/;
+/** A number such as `-5` or `-0.5`, which stays as it is. Run to File uses both patterns in SQL, as RE2 reads them too. */
+export const PLAIN_NUMBER = /^-?\d+(\.\d+)?$/;
 
-function neutralised(text: string): string {
-  return /^[=+@\t\r]/.test(text) || (text.startsWith('-') && !PLAIN_NUMBER.test(text)) ? `'${text}` : text;
+/** The text with a leading `'` when a spreadsheet would read it as a formula. */
+export function neutralised(text: string): string {
+  return FORMULA_START.test(text) || (text.startsWith('-') && !PLAIN_NUMBER.test(text)) ? `'${text}` : text;
 }
 
 // A row's cells for copy or export, with text cells neutralised so a spreadsheet does not read them as a formula; a
@@ -291,14 +316,25 @@ function quoted(field: string, delimiter: string): string {
 const RESERVED_WINDOWS_NAME = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])$/i;
 const MAX_FILE_NAME_CHARACTERS = 80;
 
-/** A file name that is safe in a save dialog: no separators or reserved names, at most 80 characters, ends in `.csv`. */
-export function safeCsvFileName(name: string): string {
-  const stem = Array.from(name.replace(/[\\/:*?"<>|\p{Cc}]/gu, '_').replace(/\.csv$/i, ''))
+/**
+ * A file name that is safe in a save dialog: no separators or reserved names, at most 80 characters, ends in
+ * `.<extension>` (a plain word such as `csv`).
+ */
+export function safeFileName(name: string, extension: string): string {
+  const word = extension.replace(/\W/g, '');
+  const ending = `.${word}`;
+  const bare = name.replace(/[\\/:*?"<>|\p{Cc}]/gu, '_').replace(new RegExp(`\\.${word}$`, 'i'), '');
+  const stem = Array.from(bare)
     .slice(0, MAX_FILE_NAME_CHARACTERS)
     .join('')
     .replace(/[. ]+$/, '');
   const safe = RESERVED_WINDOWS_NAME.test(stem.split('.')[0]?.trimEnd() ?? '') ? `_${stem}` : stem;
-  return `${safe === '' ? 'export' : safe}.csv`;
+  return `${safe === '' ? 'export' : safe}${ending}`;
+}
+
+/** `safeFileName` with the extension `csv`. */
+export function safeCsvFileName(name: string): string {
+  return safeFileName(name, 'csv');
 }
 
 /** `schema.table.csv` */

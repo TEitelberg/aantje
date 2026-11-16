@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import { signsInWithEntra } from '../connections/profile';
-import type { ConnectionProfile } from '../connections/profile';
+import { signsInWithAwsIam, signsInWithEntra, signsInWithToken } from '../connections/profile';
+import type { ConnectionProfile, PostgresProfile } from '../connections/profile';
 import type { ConnectionStore } from '../connections/store';
 import type { Logger } from '../log';
 import type { StorageValues } from '../storage/config';
@@ -18,9 +18,11 @@ export function readDataSettings(): DataSettings {
   return parseDataSettings((key) => config.get<unknown>(key));
 }
 
-/** The Microsoft sign-in, as far as the data engine needs it. */
+/** The Microsoft sign-in and the IAM token of AWS, as far as the data engine needs them. */
 export interface DataSignIn extends StorageTokenSource {
   postgresToken(tenantId: string | undefined, silent?: boolean): Promise<string>;
+  /** A token of IAM database authentication for the profile; it never asks anything. */
+  awsDbToken(profile: PostgresProfile): Promise<string>;
 }
 
 /**
@@ -39,10 +41,21 @@ export function createDataAccessFactory(
   return async (profile, snapshot) => {
     const { s3, extensionDirectory } = readDataSettings();
     const entra = signsInWithEntra(profile) ? profile : undefined;
+    const iam = signsInWithAwsIam(profile) ? profile : undefined;
+    // A token is valid for minutes: a long session renews it.
+    const renew = entra
+      ? () => signIn.postgresToken(entra.azureTenant, true)
+      : iam
+        ? () => signIn.awsDbToken(iam)
+        : undefined;
     return {
       profile,
-      password: entra ? await signIn.postgresToken(entra.azureTenant, silent) : await store.password(profile),
-      renewPassword: entra ? () => signIn.postgresToken(entra.azureTenant, true) : undefined,
+      password: entra
+        ? await signIn.postgresToken(entra.azureTenant, silent)
+        : iam
+          ? await signIn.awsDbToken(iam)
+          : await store.password(profile),
+      renewPassword: renew,
       snapshot,
       storage: await resolveStorage(profile, {
         settings: s3,
@@ -69,5 +82,5 @@ export async function testAccess(
   storageValues: StorageValues | undefined,
 ): Promise<DataAccess> {
   const access = await factory(storageValues)(profile, undefined);
-  return signsInWithEntra(profile) ? access : { ...access, password };
+  return signsInWithToken(profile) ? access : { ...access, password };
 }

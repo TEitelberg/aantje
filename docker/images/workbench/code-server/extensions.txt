@@ -30,6 +30,16 @@ ms-toolsai.vscode-jupyter-slideshow@0.1.6
 # --- CSV files (Parquet: look into a file in a notebook with con.sql("select * from 'file.parquet'"))
 mechatroner.rainbow-csv@3.24.1
 
+# --- Claude Code (Anthropic, verified publisher on Open VSX; platform-specific build, picked by the CLI).
+# It reaches the MCP server of aantje after "aantje: Add MCP Server to Claude Code"; signing in is the user's step.
+anthropic.claude-code@2.1.325
+
+# --- PostgreSQL (Microsoft, verified publisher; the Open VSX build of ms-ossdata.vscode-pgsql, which is not on Open
+# VSX itself). Proprietary licence (LICENSE.txt in the VSIX): installing and using it is allowed, distributing it is
+# not, so the build downloads it and a built image must not be published. It may send usage data to Microsoft; the
+# workbench sets telemetry.telemetryLevel to off. entrypoint.sh adds the connection "Oog PostgreSQL" to the user settings.
+microsoft.cursor-pgsql@1.34.0
+
 # --- Not installed on purpose: SQLTools + DuckDB driver (both exist on Open VSX and install fine).
 # The driver downloads its own DuckDB (@duckdb/node-api, DuckDB 1.5.x) with `npm` on the first
 # connection. The image has no node/npm in PATH, so no connection can be made, and it would be a

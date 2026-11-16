@@ -4,14 +4,15 @@ The explorer tree (view `aantje.catalogs`) shows the catalogs of your connection
 
 ## Code
 
-| File                          | Job                                                                         |
-| ----------------------------- | --------------------------------------------------------------------------- |
-| `src/tree/model.ts`           | `CatalogTree`: lazy levels, connection states, the snapshot per connection. |
-| `src/tree/levels.ts`          | `readBelow`: the levels below a connection, read from its catalog.          |
-| `src/tree/nodes.ts`           | Node factories: ids, labels, icons, context values.                         |
-| `src/tree/refs.ts`            | `TreeNode`, `NodeRef`, `FolderRef`, `ChangedTable`, `ConnectionState`.      |
-| `src/tree/format.ts`          | Descriptions and Markdown tooltips.                                         |
-| `src/tree/provider.vscode.ts` | `CatalogTreeProvider`: maps nodes to VS Code tree items. Decides nothing.   |
+| File                          | Job                                                                               |
+| ----------------------------- | --------------------------------------------------------------------------------- |
+| `src/tree/model.ts`           | `CatalogTree`: lazy levels, connection states, the snapshot per connection.       |
+| `src/tree/levels.ts`          | `readBelow`: the levels below a connection, read from its catalog.                |
+| `src/tree/nodes.ts`           | Node factories: ids, labels, icons, context values.                               |
+| `src/tree/refs.ts`            | `TreeNode`, `NodeRef`, `FolderRef`, `ChangedTable`, `ConnectionState`.            |
+| `src/tree/format.ts`          | Descriptions and Markdown tooltips.                                               |
+| `src/tree/files.ts`           | The levels below the folder **Files**, listed by the storage ([Files](files.md)). |
+| `src/tree/provider.vscode.ts` | `CatalogTreeProvider`: maps nodes to VS Code tree items. Decides nothing.         |
 
 `CatalogTree` knows nothing about VS Code. It gets the profiles and a function that opens a catalog (`CatalogTreeDeps`) and hands out plain `TreeNode` objects. Everything users rely on (lazy connect, snapshots, refresh, errors) is decided there, so the unit tests run it against the real reader and a real SQLite fixture. The Markdown and panels of the connection reports come from the report folders, not from the tree.
 
@@ -54,10 +55,15 @@ Fixture lake                       sqlite · DuckLake 1.1 · @13
       main.plain                   Altered table
   Query History
     No queries yet.
+  Files
+    /tmp/aantje-fixture
+      exports
+        orders.csv                 12.4 KB · 2026-11-10 08:12
+      readme.txt                   2 KB · 2026-10-01 09:00
 ```
 
 - One connection node per profile, in profile order.
-- A connection lists the schemas of the shown snapshot (`main` included, sorted by name), then the folders **Snapshots** and **Query History**. Storage is a report, not a node ([Storage report](storage-report.md)).
+- A connection lists the schemas of the shown snapshot (`main` included, sorted by name), then the folders **Snapshots**, **Query History** and **Files**, and one row **Iceberg · <target>** for each Iceberg catalog that the lake was copied to ([Sync to Iceberg](iceberg.md#the-row-in-the-tree): an iceberg icon, green or red by the state of the copy, a click opens its report). **Files** lists the storage of the lake itself, without its data files, and is missing on a Quack connection ([Files](files.md)); the figures of the stored files are a report ([Storage report](storage-report.md)).
 - A schema always lists **Tables**, **Views** and **Macros**, also when empty (with a hint such as `No tables.`). **Script as CREATE** on **Macros** writes a template for the first macro ([DDL generation](ddl.md#scripts-for-macros)).
 - Names are sorted case-insensitively with numbers by value (`table2` before `table10`), with a fixed English locale, whatever the machine.
 - A table has the leaves **Statistics** and **History** and the folders **Columns**, **Partitioning**, **Sort Order** and **Tags**, in that order. `Statistics`, `History` and `Columns` are always there. The others appear only when the table has them at the shown snapshot.
@@ -81,13 +87,17 @@ The `kind` of `NodeRef` is the discriminator. The `contextValue` is what the men
 | `snapshot`   | `@<id>`                                                      | time in UTC                               | `snapshot`                                              | one `detail` per change, or one `message` |
 | `detail`     | the changed object, partition column, sort expression or tag | the action, transform, direction or value | `detail`, `detail.table`                                | none                                      |
 | `query`      | the statement on one line, shortened                         | local time and duration                   | `query`                                                 | none                                      |
+| `fileFolder` | the path of a root, or the name of a folder                  | none                                      | `fileRoot`, `fileFolder`                                | one level of the storage                  |
+| `file`       | the name of the file                                         | size and time of the last change          | `file`, `file.importable` (CSV, Parquet, JSON, Excel)   | none                                      |
 | `message`    | the text                                                     | none                                      | `message`                                               | none                                      |
 
-A `connecting` connection has the context value `connection.disconnected`, because the menus know no fourth value. Only a connected connection has an icon colour (`charts.green`). Its icon `aantje-duck` is the duck of the Activity Bar, contributed as an icon font (`contributes.icons`, `media/aantje-icons.woff`), so the theme colours it like a codicon.
+A `connecting` connection has the context value `connection.disconnected`, because the menus know no fourth value. A connected connection has a green icon (`charts.green`), a failed one a red one (`charts.red`), the others none. Its icon `aantje-duck` is the duck of the Activity Bar, contributed as an icon font (`contributes.icons`, `media/aantje-icons.woff`), so the theme colours it like a codicon.
 
-Folders: `tables`, `views`, `macros` (below a schema), `columns`, `viewColumns`, `partitioning`, `sortOrder`, `tags` (below a table or view), `snapshots` and `queryHistory` (below a connection). `statistics` and `history` are leaves: no children, no description, no tooltip, and a click runs **Show Statistics** and **Schema History** for the table (`TreeNode.command`).
+Folders: `tables`, `views`, `macros` (below a schema), `columns`, `viewColumns`, `partitioning`, `sortOrder`, `tags` (below a table or view), `snapshots`, `queryHistory` and `files` (below a connection). Below `files` the roots and folders are `fileFolder` nodes and the files `file` nodes; they read the storage, not the catalog ([Files](files.md)). `statistics` and `history` are leaves: no children, no description, no tooltip, and a click runs **Show Statistics** and **Schema History** for the table (`TreeNode.command`).
 
 A `detail` node is a leaf that shows a fact and has no command. The exception is the change of a table in a snapshot, which carries `change` and the context value `detail.table`.
+
+A `message` node has no command either, with one exception: below **Files**, the message that the connection has no sign-in values for its storage runs **Set Storage Sign-in...** for the connection on a click ([Files](files.md#how-each-storage-lists-one-level)).
 
 A `NodeRef` holds what a command needs (`schema`, `table`, `view`, `column`, the `path` of a nested field, a folder's entries). Entries are in the folder because they were read to decide that it exists, so expanding reads nothing more. Only `snapshots` reads on expansion. Commands that need a table (`relationOf`, `qualifiedNameOf`, `ddlOf`) answer `undefined` for folders and details.
 
@@ -97,21 +107,23 @@ Menus: the exact entries per kind are in `package.json`. Their conditions are an
 
 A node id is the id of its parent plus one segment, built only from catalog ids: `fixture/s1/tables/t2/columns/c2/c3`. The connection id is URI-encoded.
 
-- **Unique in the whole tree.** Folders use fixed words, entries a letter and a number (`t2`, `v4`, `m16`, `n13`, `p0`, and `q7` for the statement with the sequence number 7 of the Query History), so no leaf can look like a folder.
+- **Unique in the whole tree.** Folders use fixed words, entries a letter and a number (`t2`, `v4`, `m16`, `n13`, `p0`, and `q7` for the statement with the sequence number 7 of the Query History), so no leaf can look like a folder. Below **Files** a root is `r` and its position in the roots, a folder `d` and a file `f`, each followed by the URI-encoded name; an object store can hold a folder and a file of the same name.
 - **Stable.** No snapshot, counter or position is in the id (except list leaves such as `p0`), so VS Code keeps expansion and selection after a refresh or a time-travel to a snapshot that still has the object.
 - **Shared with the search.** `treeNodePath` (`src/search.ts`) builds the same ids, from the schema down to a table, view, column or nested field, so the search can reveal its node.
 - Every child that a level returns is recorded with its parent, folders too, so `reveal` finds its way up.
 
 ## Connection lifecycle
 
-| Status         | What the node shows                                 | Children                                    |
-| -------------- | --------------------------------------------------- | ------------------------------------------- |
-| `disconnected` | Icon `plug`, description `sqlite`.                  | Expandable; expanding opens it.             |
-| `connecting`   | Icon `sync~spin`, `sqlite · connecting…`.           | Like `connected` once the attempt is over.  |
-| `connected`    | Green `aantje-duck`, `sqlite · DuckLake 1.1 · @13`. | Schemas, `Snapshots`, `Query History`.      |
-| `error`        | Icon `error`, `sqlite · connection failed`.         | One `message` node; the tooltip repeats it. |
+| Status         | What the node shows                                 | Children                                        |
+| -------------- | --------------------------------------------------- | ----------------------------------------------- |
+| `disconnected` | Icon `plug`, description `sqlite`.                  | Expandable; expanding opens it.                 |
+| `connecting`   | Icon `sync~spin`, `sqlite · connecting…`.           | Like `connected` once the attempt is over.      |
+| `connected`    | Green `aantje-duck`, `sqlite · DuckLake 1.1 · @13`. | Schemas, `Snapshots`, `Query History`, `Files`. |
+| `error`        | Red `error`, `sqlite · connection failed`.          | One `message` node; the tooltip repeats it.     |
 
 `state(connectionId)` returns the same as data (`status`, `specVersion`, `latestSnapshot`, `snapshot`, `error`). The status bar reads it.
+
+**Notices.** `CatalogTreeDeps.notices` gives a connection a notice that shows in every status: its label before the description, its Markdown in the tooltip after the facts, and a red `error` icon (a `connecting` connection keeps its spinner). The tree presents the connection again when `notices.onDidChange` names it. The only notice is an AWS DuckLake whose delete did not finish ([AWS DuckLake](aws-lake.md#deleting-a-lake)); the context value stays, so its menu still offers **Delete AWS DuckLake...**.
 
 **Lazy connect.** `roots()` opens nothing. Expanding a disconnected connection calls `deps.open(profile)`, which returns the reader together with the info from the catalog check (version, latest snapshot), so one query serves both. The tree then asks `snapshotCount()`. The count is not shown; it decides whether `Snapshots` is expandable and whether its tooltip says that only the newest are listed. If counting fails, the schemas still show.
 
@@ -128,7 +140,7 @@ A node id is the id of its parent plus one segment, built only from catalog ids:
 `selectSnapshot(connectionId, snapshot)` sets a snapshot id or `'latest'`.
 
 - `latest` is resolved to a number from `info().latestSnapshot` on connect and refresh. It does not follow the catalog by itself. The description shows `@13`; a pin shows `@5 (pinned)`.
-- Every level reads at the shown snapshot, as does the Storage report. The folder `Snapshots` is the exception: it shows what happened in the catalog.
+- Every level reads at the shown snapshot, as does the Storage report. The folder `Snapshots` is the exception: it shows what happened in the catalog. So are `Query History` and `Files`, which list aantje's record and the storage as they are now.
 - All levels of a connection use one snapshot. Selecting drops the cached levels and fires a change for the connection node. Stable ids keep the expansion of objects in both snapshots.
 - A selection before the first connect is used at connect. A refresh keeps the pin. `disconnect()` resets to `latest`.
 - The snapshot is not validated; the picker offers only existing snapshots.
@@ -148,6 +160,7 @@ A connection that was never expanded or is disconnected is not opened.
 - **Why reopen.** The SQLite driver reads an in-memory copy taken at open, so a new commit is invisible to an open reader. For PostgreSQL it is a cheap reconnect that also heals a dropped session.
 - **Why the whole connection.** Refreshing one table to snapshot 14 while its sibling shows 13 would mix snapshots.
 - **Stale nodes.** A node produced by a replaced cache is answered with `[]` and not cached; VS Code then reads the parents again.
+- **Files.** **Refresh** on the folder **Files**, a root or a folder (`aantje.refreshFiles`, `refreshFiles(node)`) drops the cached levels of that node and below and lists them again. The connection stays open and the catalog is not read again.
 
 Change events carry the same node object that `roots()` returned, because VS Code matches events to elements by identity.
 
@@ -233,7 +246,7 @@ A message node is cached like any level, so a failing catalog is not queried on 
 
 `extension.ts` creates the `CatalogTree` with `profiles: () => store.list()` and `open: openWithPassword(...)`, the provider and the tree view with `showCollapseAll`. It also passes `viewColumns` and `queryHistory`, and subscribes to `trust.onDidTrust`. The tree is disposed in `deactivate()`, not through `context.subscriptions`, because VS Code does not await asynchronous dispose functions there.
 
-`CatalogTreeProvider` maps `id`, `label`, `description`, `contextValue` one to one, the tooltip to an untrusted `MarkdownString`, the icon to a `ThemeIcon` (with a `ThemeColor` for `iconColor`), `hasChildren` to `Collapsed` or `None`, and a node's `command` to the item's command. `getChildren` returns `tree.roots()` or `tree.children(node)`. `onDidChangeTreeData` forwards `tree.onDidChange`, and fires the folder Query History of a connection whose history changed (`QueryHistory.onDidChange`).
+`CatalogTreeProvider` maps `id`, `label`, `description`, `contextValue` one to one, the tooltip to an untrusted `MarkdownString`, the icon to a `ThemeIcon` (with a `ThemeColor` for `iconColor`) or, for a node with a `logo`, to the light and dark files `media/<logo>-<variant>-<light|dark>.svg` of its colour (`green` for `charts.green`, `red` for `charts.red`, else `plain`; the label keeps the colour of the text; `extension.ts` passes `context.extensionUri`), `hasChildren` to `Collapsed` or `None`, and a node's `command` to the item's command. `getChildren` returns `tree.roots()` or `tree.children(node)`. `onDidChangeTreeData` forwards `tree.onDidChange`, and fires the folder Query History of a connection whose history changed (`QueryHistory.onDidChange`).
 
 ## Known limits
 

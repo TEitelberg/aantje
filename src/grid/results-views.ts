@@ -24,6 +24,7 @@ import {
 } from './results-model';
 import type { ResultSet, ResultsRunState, Statement } from './results-model';
 import { profileView } from './statistics-view';
+import { tipsView } from './tips-view';
 
 export interface MessagesView {
   readonly element: HTMLElement;
@@ -137,6 +138,7 @@ export function resultView(host: HostPort, run: ResultsRunState, index: number):
   const header = el('div', 'sql', oneLine(sql, HEADER_CHARS));
   header.title = clip(sql, TITLE_CHARS);
   view.append(header);
+  if (set.view === 'tips') return tipsView(host, view, set.tips ?? [], index);
   if (set.view === 'text' && set.profile !== undefined) return textView(host, view, profileText(set.profile));
   if (set.profile !== undefined) {
     return profileView(view, set.profile, set.view ?? 'table', (text) =>

@@ -12,8 +12,8 @@ export interface ReportKind<Data, Action, View> {
   readonly isAction?: (value: unknown) => value is Action;
   /** Guards the user's choices the page sends with Open as Markdown. */
   readonly isView?: (value: unknown) => value is View;
-  /** Built from the extension's data and the view the page named (none without one). */
-  readonly toMarkdown: (data: Data, view: View | undefined) => string;
+  /** Built from the extension's data and the view the page named (none without one); none: no Open as Markdown. */
+  readonly toMarkdown?: (data: Data, view: View | undefined) => string;
 }
 
 /** A webview panel as the shell needs it; the VS Code adapter implements it. */
@@ -169,7 +169,7 @@ export class ReportPanels<Data, Action, View> {
         return;
       } else if (message.type === 'refresh') {
         this.handlers.onRefresh?.(key);
-      } else {
+      } else if (this.kind.toMarkdown) {
         this.handlers.openMarkdown(
           this.kind.toMarkdown(entry.data, own(message, 'view') as View | undefined),
         );

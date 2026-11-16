@@ -1,6 +1,7 @@
 import type { GridColumn, GridValue } from '../data/types';
 import { count, formatDuration, groupedPlural } from '../shell/numbers';
 import type { SqlEvent } from '../sql/session';
+import type { Tip } from '../tips/model';
 import { clip } from './model';
 import type { ResultsMessage } from './protocol';
 
@@ -36,16 +37,26 @@ export interface ResultSet {
   readonly label?: string;
   /** The profile of Statistics (DuckDB's JSON) and the view of it that this tab shows. */
   readonly profile?: string;
-  readonly view?: ProfileView;
+  readonly view?: ProfileView | 'tips';
+  /** The performance tips of a profile (view `tips`). */
+  readonly tips?: readonly Tip[];
 }
 
-export type ProfileView = 'table' | 'flame' | 'operators' | 'text';
+export type ProfileView = 'table' | 'flame' | 'text';
+
+/** The label of the Tips tab: how many tips it has. */
+export const tipsLabel = (tips: readonly Tip[]): string => `Tips (${count(tips.length)})`;
+
+const tabOf = (statement: number) => ({ statement, columns: [], rows: [], truncated: false, elapsedMs: 0 });
+
+/** The result set of the Tips tab, or none without tips. */
+const tipsSets = (statement: number, tips: readonly Tip[] = []): ResultSet[] =>
+  tips.length === 0 ? [] : [{ ...tabOf(statement), view: 'tips', label: tipsLabel(tips), tips }];
 
 /** The tabs that a profile adds, in their order, with their labels. */
 export const PROFILE_VIEWS: readonly (readonly [ProfileView, string])[] = [
   ['table', 'Statistics'],
   ['flame', 'Flame Graph'],
-  ['operators', 'Treemap & Top Operators'],
   ['text', 'Text Statistics'],
 ];
 
@@ -182,24 +193,28 @@ export function applyEvent(run: ResultsRunState, event: SqlEvent): ResultsRunSta
         summary: '',
         error: { message: event.message, ...(event.position ? { position: event.position } : {}) },
       });
-    case 'profile':
-      // One tab per view of the profile; the statement's line in Messages keeps its own outcome.
+    case 'profile': {
+      // One tab per view of the profile, the tips right after the table; the statement's line in Messages keeps its
+      // own outcome. All at once: the page keeps its tabs by their place, so result sets are only ever appended.
+      const [table, ...rest] = PROFILE_VIEWS.map(([view, label]): ResultSet => ({
+        ...tabOf(event.index),
+        profile: event.json,
+        view,
+        label,
+      }));
       return {
         ...run,
         resultSets: [
           ...run.resultSets,
-          ...PROFILE_VIEWS.map(([view, label]) => ({
-            statement: event.index,
-            columns: [],
-            rows: [],
-            truncated: false,
-            elapsedMs: 0,
-            profile: event.json,
-            view,
-            label,
-          })),
+          ...(table ? [table] : []),
+          ...tipsSets(event.index, event.tips),
+          ...rest,
         ],
       };
+    }
+    case 'tips':
+      // Analysis: its plan is the last result set, so the tips follow it.
+      return { ...run, resultSets: [...run.resultSets, ...tipsSets(event.index, event.tips)] };
   }
 }
 

@@ -156,8 +156,18 @@ write_quack_profile() {
         "${OOG_QUACK_HOST:-duckdb}" "${OOG_QUACK_PORT:-9494}" "$fp" > "$1"
 }
 
+# The Iceberg target "Oog Polaris" (aantje: Sync to Iceberg...): the REST endpoint of the Polaris service and its catalog.
+# The client secret is not part of it; aantje asks for it on the first copy and keeps it in the secret storage.
+write_iceberg_target() {
+    printf '[{"name": "Oog Polaris", "endpoint": "%s/api/catalog", "warehouse": "%s", "signIn": "oauth2", "clientId": "%s", "region": "%s", "vendedCredentials": true}]\n' \
+        "${OOG_POLARIS_URL:-http://polaris:8181}" "${OOG_POLARIS_CATALOG:-oog_iceberg}" \
+        "${OOG_POLARIS_CLIENT_ID:-root}" "${OOG_S3_REGION:-us-east-1}" > "$1"
+}
+
 write_machine_settings() {
     if aantje_installed; then
+        iceberg_target="$USER_DATA_DIR/Machine/.iceberg-targets.json"
+        write_iceberg_target "$iceberg_target"
         quack_profile="$USER_DATA_DIR/Machine/.quack-profile.json"
         if ! write_quack_profile "$quack_profile"; then
             rm -f "$quack_profile"
@@ -165,19 +175,34 @@ write_machine_settings() {
         fi
         python "$DEFAULTS_DIR/write-machine-settings.py" "$DEFAULTS_DIR/machine-settings.json" \
             "$USER_DATA_DIR/Machine/settings.json" "$DEFAULTS_DIR/aantje-connections.json" \
-            $([ -f "$quack_profile" ] && echo "$quack_profile") \
+            $([ -f "$quack_profile" ] && echo "$quack_profile") "$iceberg_target" \
             || { log "warning: could not write the aantje connection profile, using the plain machine settings"
                  cp --no-preserve=mode "$DEFAULTS_DIR/machine-settings.json" "$USER_DATA_DIR/Machine/settings.json"; }
-        rm -f "$quack_profile"
+        rm -f "$quack_profile" "$iceberg_target"
     else
         cp --no-preserve=mode "$DEFAULTS_DIR/machine-settings.json" "$USER_DATA_DIR/Machine/settings.json"
     fi
+}
+
+# True if the PostgreSQL extension is part of the image (extensions.txt).
+pgsql_installed() {
+    for dir in "$EXTENSIONS_DIR"/microsoft.cursor-pgsql-*; do
+        [ -d "$dir" ] && return 0
+    done
+    return 1
 }
 
 install_default_settings() {
     mkdir -p "$USER_DATA_DIR/User" "$USER_DATA_DIR/Machine" || return 1
     if [ ! -f "$USER_DATA_DIR/User/settings.json" ]; then
         cp --no-preserve=mode "$DEFAULTS_DIR/settings.json" "$USER_DATA_DIR/User/settings.json" || return 1
+    fi
+    # The connection "Oog PostgreSQL" of the PostgreSQL extension, once: only while the user settings have no
+    # pgsql.connections (the extension saves the connections users add there).
+    if pgsql_installed; then
+        python "$DEFAULTS_DIR/write-user-settings.py" "$DEFAULTS_DIR/pgsql-connections.json" \
+            "$USER_DATA_DIR/User/settings.json" \
+            || log "warning: cannot add the PostgreSQL connection to the user settings"
     fi
     write_machine_settings
 }
@@ -192,7 +217,8 @@ fi
 start_startpage() {
     [ -d "$STARTPAGE_DIR" ] || return 1
     if aantje_installed; then aantje=true; else aantje=false; fi
-    printf '{"aantje": %s}\n' "$aantje" > "$STARTPAGE_DIR/features.json" \
+    if pgsql_installed; then pgsql=true; else pgsql=false; fi
+    printf '{"aantje": %s, "pgsql": %s}\n' "$aantje" "$pgsql" > "$STARTPAGE_DIR/features.json" \
         || log "warning: cannot write $STARTPAGE_DIR/features.json, the start page shows only the tools that always exist"
     python3 -m http.server "$STARTPAGE_PORT" --bind 127.0.0.1 --directory "$STARTPAGE_DIR" >/dev/null 2>&1 &
 }

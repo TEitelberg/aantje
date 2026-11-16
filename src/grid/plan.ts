@@ -28,7 +28,7 @@ export interface Plan {
 }
 
 /** More operators than any honest plan has; a larger tree is not drawn. */
-const MAX_PLAN_OPERATORS = 5000;
+export const MAX_PLAN_OPERATORS = 5000;
 
 /** The operators that the result, EXPLAIN ANALYZE and a prepared statement (the SQL editor prepares each one) put above a plan. */
 export const PLAN_WRAPPERS: ReadonlySet<string> = new Set(['RESULT_COLLECTOR', 'EXPLAIN_ANALYZE', 'EXECUTE']);

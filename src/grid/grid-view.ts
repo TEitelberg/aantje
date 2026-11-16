@@ -5,6 +5,7 @@
 import {
   NULL_NOT_COPIED,
   cellCopyText,
+  changeWording,
   filterRows,
   nextSort,
   restoreView,
@@ -103,7 +104,12 @@ function windowedRows(
     ...(kinds ? [''] : []),
     ...widestTexts(data.columns, data.rows),
   ]);
-  const { table, scroll, above, below } = gridTable(headers, body, kinds !== undefined, sizer);
+  const { table, scroll, above, below } = gridTable(
+    headers,
+    body,
+    kinds === undefined ? undefined : changeWording(data.rowMode).column,
+    sizer,
+  );
   let rows: Rows = [];
   let drawn: RowWindow = { first: 0, last: 0 };
   let rowHeight = ROW_PX;

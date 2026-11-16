@@ -45,12 +45,15 @@ ENV VIRTUAL_ENV=/opt/oog-venv \
 
 # --- System packages and directories (the only root steps besides the final one below) -----------
 # git-lfs is already part of the base image; it is listed so that the image does not depend on that.
+# awscli (v2 of Debian, signed by apt) lets a user of the workbench create AWS profiles and sign in for the AWS lake of
+# aantje: `aws configure sso --use-device-code`, `aws sso login --use-device-code --profile <name>`. The profiles live in
+# /home/coder/.aws, which is no volume: a re-created container starts without them.
 # /home/coder/.local/share/code-server is the mount point of the user data volume: it must exist and
 # belong to coder, so that a new named volume inherits the ownership on its first mount (copy-up).
 # Every path component is listed, otherwise .local and .local/share would stay owned by root.
 USER root
 RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 python3-venv git-lfs \
+ && apt-get install -y --no-install-recommends python3 python3-venv git-lfs awscli \
  && rm -rf /var/lib/apt/lists/* \
  && install -d -o coder -g coder /opt/oog /opt/oog-venv /opt/duckdb-extensions /home/coder/workspace \
       /home/coder/.local /home/coder/.local/share /home/coder/.local/share/code-server
@@ -172,7 +175,8 @@ USER coder
 # workspace repository: notebooks/ and the files of the repository root (fallback copy, used by the
 # entrypoint only when the repository directory is empty and the clone of the Gitea repository fails).
 COPY --chown=coder:coder images/workbench/code-server/settings.json images/workbench/code-server/machine-settings.json \
-    images/workbench/code-server/write-machine-settings.py /opt/oog/code-server/
+    images/workbench/code-server/write-machine-settings.py images/workbench/code-server/write-user-settings.py \
+    images/workbench/code-server/pgsql-connections.json /opt/oog/code-server/
 COPY --chown=coder:coder notebooks/ /opt/oog/workspace-seed/notebooks/
 COPY --chown=coder:coder workspace/ /opt/oog/workspace-seed/
 # Static start page (index.html + tools.json). entrypoint.sh serves it with `python3 -m http.server` on

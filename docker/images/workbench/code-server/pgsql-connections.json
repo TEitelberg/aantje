@@ -1,0 +1,12 @@
+[
+  {
+    "id": "oog-postgres",
+    "profileName": "Oog PostgreSQL",
+    "server": "postgres",
+    "port": "5432",
+    "database": "ducklake",
+    "user": "ducklake",
+    "authenticationType": "SqlLogin",
+    "sslmode": "disable"
+  }
+]

@@ -52,16 +52,20 @@ export function storageExtensions(
 /**
  * The one `CREATE OR REPLACE SECRET` of the storage, or undefined when there is nothing to put in it (S3 without keys,
  * endpoint or region: DuckDB then uses its own defaults, or none for a public bucket). The same statement replaces the
- * secret when an Entra token is renewed. There is no scope: an engine belongs to one connection, and what its account
- * may read is the storage's decision. Every secret value appears here and nowhere else in the setup. A notebook passes
- * its own `name` (one per connection).
+ * secret when an Entra token is renewed. There is no scope when an engine belongs to one connection: what its account
+ * may read is the storage's decision. An engine with a second lake limits that lake's secret to its data path (`scope`),
+ * so that neither lake's credentials go to the other's storage. Every secret value appears here and nowhere else in the
+ * setup. A notebook passes its own `name` (one per connection).
  */
 export function storageSecretStatement(
   storage: ResolvedStorage,
   name: string = storageSecretName(storage),
+  scope?: string,
 ): string | undefined {
   const fields = storageSecretFields(storage);
-  return fields === undefined ? undefined : `CREATE OR REPLACE SECRET ${name} (${fields.join(', ')})`;
+  return fields === undefined
+    ? undefined
+    : `CREATE OR REPLACE SECRET ${name} (${[...fields, ...(scope === undefined ? [] : [`SCOPE ${quoteLiteral(scope)}`])].join(', ')})`;
 }
 
 function storageSecretFields(storage: ResolvedStorage): string[] | undefined {

@@ -1,6 +1,6 @@
-# Schema Compare
+# Schema Compare and Data Compare
 
-**Schema Compare...** (`aantje.schemaCompare`) compares two tables or two schemas of the connected catalogs: in one schema, across schemas and across connections. It shows what differs and writes a script that makes one side like the other. One table at two snapshots is the job of **Compare Table at Two Snapshots...** ([Time travel](time-travel.md#compare-table-at-two-snapshots)).
+**Schema Compare...** (`aantje.schemaCompare`) compares two tables or two schemas of the connected catalogs: in one schema, across schemas and across connections. It shows what differs and writes a script that makes one side like the other. One table at two snapshots is the job of **Compare Table at Two Snapshots...** ([Time travel](time-travel.md#compare-table-at-two-snapshots)). **Data Compare...** compares the rows of two tables ([below](#data-compare)).
 
 ## Starting
 
@@ -212,3 +212,81 @@ CREATE OR REPLACE MACRO "prod"."diff_macro"("x") AS (x - 1);
 - Tags other than the comment, the options of a table that both sides have, and the data are not compared.
 - At most 200 tables that both schemas have are compared.
 - A view or macro is compared as text: two texts that do the same differ.
+
+## Data Compare
+
+**Data Compare...** (`aantje.dataCompare`) compares the rows of two tables: in one schema, across schemas and across connections. It shows the rows that only one side has and the rows that differ, and writes a script that makes the rows of the target like those of the source. Schema Compare compares the structure of two tables; **Show Changes...** compares one table between two snapshots ([Time travel](time-travel.md#show-changes)).
+
+### Starting Data Compare
+
+The command is in the Command Palette (**aantje: Data Compare...**) and in the **...** menu of the view title of **DuckLake Catalogs**, below **Schema Compare...** and above **Info**. It is not in the context menus of the tree. Three pickers follow:
+
+1. The source, the left side: the tables of every connected connection as `<connection> · <schema>.<table>`, the connection in use first.
+2. The target, the right side: the same list without the source.
+3. **Key columns**, several: the columns that both tables have, with their type (`INTEGER · target VARCHAR` when the target's type differs). Selected are the key chosen last for the same two tables, else the columns named `id` or ending in `_id`. No column selected compares whole rows. The choice is kept per pair of tables in the global state of aantje (`aantje.dataCompareKeys`, the newest 200 pairs).
+
+- Without a connected connection the command says `Connect to a catalog first to compare the rows of two tables.`; with fewer than two tables it says so instead of opening a picker. Cancelling a picker does nothing.
+- Each side is read at the snapshot that its tree shows; the pickers, the title of the grid and the message name it (`@56`). Views are not offered.
+
+### How Data Compare compares
+
+- **One engine.** A private, read-only, in-memory DuckDB with both lakes attached, each under its own name (`source`, `target`) at its snapshot; two tables of one connection share one attach. Each lake gets secrets of its own names (`aantje_pg_<name>`, `aantje_storage_<name>`), and the storage secret of each is limited to the data path of its lake (`SCOPE`), so that neither lake's credentials reach the other's storage. The credentials are those of the data preview. The checks of a read (the files of a table stay at home, a name means one relation) run for both tables first, in the transaction of the compare. A progress notification with **Cancel** runs while it reads; both tables are read in full, with no time limit besides Cancel.
+- **Columns** match by name the way DuckDB compares names. A column of one side only is left out and named in the message. A column whose types differ is compared after a cast of the target's values to the type of the source (`TRY_CAST`) when every value of the target casts; a column with a value that does not cast is left out and named. DuckDB binds a cast between any two types and fails only on a value, so this is decided on the values. A type whose text is not plain SQL is never cast; such a column is left out too.
+- **With a key:** a full outer join on the key, in which NULL keys match each other; the other columns are compared with `IS DISTINCT FROM`, so two NULLs are equal. A key that repeats on one side stops the compare: the message counts the repeated keys on each side, suggests adding a column that tells the versions of a row apart, such as a time stamp, to the key, and offers **Compare Whole Rows**. A table that keeps every version of a row (a change log with one row per load, for example) has such a column: `address_id` and `updated_at` together name a row where `address_id` alone does not. A key column of the target whose values do not cast stops it too.
+- **Without a key:** `EXCEPT ALL` in both directions, so duplicates count: a row that the source has twice and the target once is once only in the source. There is no "differs", only "only in the source" and "only in the target": a row that changed in one column is one row only in the source and one only in the target, and the message says so when the compare found rows on both sides. Key columns pair them as one row that differs.
+- The counts are exact: rows only in the source, only in the target, different, equal.
+
+### What Data Compare shows
+
+- **The grid of Show Changes** in its compare mode ([Data grid](grid.md#the-changes-of-a-table)), seen from Script as Update, which makes the target like the source: a row only in the source has the mark `+` (Script as Update inserts it into the target), a row only in the target `−` (it deletes it), and a row that differs comes as two rows, the target's version (`←`) and the source's (`→`), with the cells that differ marked. The marks do not depend on colour. The grid starts with the columns `#` (the number of the difference), `difference` and `side`, then the compared columns, in the order of the key (without a key, of all columns). It holds at most 1000 rows and never splits a row that differs; the line above the rows has the counts, the key and, for a cut grid, `showing the first 999 of 1201 rows`. The title names both sides: `lake · staging.orders @56 ↔ prod · gold.orders @12`.
+- **An information message** with the counts, the key and what was left out, and the buttons **Script as Update** and **Swap Sides**. **Swap Sides** compares again with the sides exchanged and the same key. Without a difference the message has no buttons.
+
+```text
+"lake · staging.orders @56" and "prod · gold.orders @12" differ: 2 rows only in the source, 1 only in the target, 3 differ, 120 equal (key "id"). Not compared: only in the target: "legacy".
+```
+
+### Script as Update of Data Compare
+
+**Script as Update** opens a new, unsaved SQL document bound to the **target** connection. Nothing runs: read it, change it and run it (**F5**) in a read/write session ([SQL editor](sql-editor.md)).
+
+- **The source is read at the snapshot that was compared** (`AT (VERSION => n)`), so the script applies what the grid showed, even when the source moved on. The statements act on the newest state of the target.
+- **Same connection:** the script reads the source by its name.
+- **Two connections:** the session of the document attaches the source connection read-only as `"source_lake"`, with the credentials of that connection, set up as the engine of the compare sets it up (secrets of their own names, the storage secret limited to the data path of the source). The script never names a credential; a comment at its top says that the session has the source attached. Editing or removing the source connection closes the session; the next run attaches the source again or says that it is gone. The tokens of the source (an Entra sign-in) are not renewed in a long session.
+- **With a key,** in one transaction (`MERGE`, then a `DELETE`). DuckLake allows one `UPDATE` or `DELETE` action per `MERGE` (`WHEN NOT MATCHED BY SOURCE THEN DELETE` next to an `UPDATE` is refused), so the rows that only the target has go in a `DELETE` of their own. A row that is equal is not updated.
+- **Without a key:** the script replaces the content of the target: `DELETE`, then `INSERT ... SELECT` from the source, under a warning.
+- Columns that only the target has are not touched; a new row gets their default. Columns that only the source has, and columns whose values did not cast, are not written; a comment names them and points to Schema Compare. A column whose types differ is written through `CAST` to the type of the target and matched through `TRY_CAST` to the type of the source, as the compare did.
+- Every step that deletes or replaces rows has a warning comment above it.
+- DuckDB takes the alias of a relation before its `AT`: `FROM "staging"."orders" AS s AT (VERSION => 56)`; `AT (VERSION => 56) AS s` is a syntax error.
+
+```sql
+-- Script as Update (Data Compare): makes the rows of the table on the right (target) like the rows of the table on the left (source). Nothing has run: read the statements, change what you need and run them in a read/write SQL session.
+-- Source: lake · "staging"."orders" @56. Target: prod · "gold"."orders" @12.
+-- The source is read at snapshot 56, as compared; the statements act on the newest state of the target.
+-- The session of this document has the source connection "lake" attached read-only as "source_lake", with its credentials; the script names no credential.
+
+BEGIN TRANSACTION;
+MERGE INTO "gold"."orders" AS t
+USING (SELECT "id", "customer", "amount" FROM "source_lake"."staging"."orders" AT (VERSION => 56)) AS s
+ON s."id" IS NOT DISTINCT FROM t."id"
+WHEN MATCHED AND (t."customer" IS DISTINCT FROM s."customer" OR t."amount" IS DISTINCT FROM s."amount")
+  THEN UPDATE SET "customer" = s."customer", "amount" = s."amount"
+WHEN NOT MATCHED THEN INSERT ("id", "customer", "amount") VALUES (s."id", s."customer", s."amount");
+-- Warning: this deletes the rows that only the target has (12 at the compare).
+DELETE FROM "gold"."orders" AS t
+WHERE NOT EXISTS (SELECT 1 FROM "source_lake"."staging"."orders" AS s AT (VERSION => 56) WHERE s."id" IS NOT DISTINCT FROM t."id");
+COMMIT;
+```
+
+### Safety of Data Compare
+
+- Every name in a statement is quoted. A comment line holds fixed text, a number, or a name in its quoted form without line breaks and control characters.
+- The only text from the catalog in a statement is the SQL type of a column whose types differ, and only when it is plain SQL: words, numbers, spaces, `,()[]` and quoted names (`isSafeType` in `src/data-compare/model.ts`).
+- The engine of the compare attaches both lakes read-only, locks its configuration and loads no extension after the setup; it reads tables only, after the checks of a read. Its messages are masked with the secrets of both lakes, and so are those of a session with an attached source.
+
+### Known limits of Data Compare
+
+- Views, two whole schemas and sources other than a DuckLake table are not compared.
+- Both tables are read in full; a large table takes its time, and **Cancel** stops it.
+- A key column whose types differ matches through `TRY_CAST`: a value that does not convert would become NULL, so such a key column stops the compare instead.
+- The storage secret of each lake is limited by its data path; two lakes whose data paths lie one inside the other and whose credentials differ can read the inner one with the outer one's credentials. Two Quack connections of one server share the scope of their token.
+- The tokens of the source attached to a document are not renewed in a long session.

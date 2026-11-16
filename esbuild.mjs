@@ -11,6 +11,8 @@ const watch = process.argv.includes('--watch');
 mkdirSync('dist', { recursive: true });
 // sql.js loads its WebAssembly binary from disk; the SQLite driver reads it from dist/.
 copyFileSync(require.resolve('sql.js/dist/sql-wasm.wasm'), 'dist/sql-wasm.wasm');
+// The certificate authorities of Amazon RDS, for the TLS check of a PostgreSQL catalog on RDS.
+copyFileSync('deploy/aws/rds-ca-bundle.pem', 'dist/rds-ca-bundle.pem');
 
 const options = {
   entryPoints: ['src/extension.ts'],
@@ -22,6 +24,8 @@ const options = {
   sourcemap: true,
   minify: !watch,
   external: ['vscode', '@duckdb/node-bindings*', 'pg-native'],
+  // The CloudFormation template of the AWS lake goes into the bundle as text.
+  loader: { '.yaml': 'text' },
   logLevel: 'info',
 };
 
@@ -53,14 +57,42 @@ const planClientOptions = {
   sourcemap: true,
 };
 
-const bundles = [options, gridClientOptions, reportClientOptions, planClientOptions];
+// The stdio bridge that Claude Code starts; Node only, nothing of the extension's dependencies.
+const bridgeOptions = {
+  ...options,
+  entryPoints: ['src/mcp/bridge.ts'],
+  outfile: 'dist/mcp-bridge.js',
+  sourcemap: false,
+  external: [],
+};
+
+// The AWS SDK, apart from extension.js: it is loaded only when an AWS command runs, so it does not slow every start.
+const awsOptions = {
+  ...options,
+  entryPoints: ['src/aws/sdk.ts'],
+  outfile: 'dist/aws-sdk.js',
+};
+
+const bundles = [
+  options,
+  gridClientOptions,
+  reportClientOptions,
+  planClientOptions,
+  bridgeOptions,
+  awsOptions,
+];
 
 if (watch) {
   await Promise.all(bundles.map(async (config) => (await esbuild.context(config)).watch()));
 } else {
   await Promise.all(bundles.map((config) => esbuild.build(config)));
   writeNotices({
-    mapFiles: ['dist/extension.js.map', 'dist/report-client.js.map', 'dist/plan-client.js.map'],
+    mapFiles: [
+      'dist/extension.js.map',
+      'dist/report-client.js.map',
+      'dist/plan-client.js.map',
+      'dist/aws-sdk.js.map',
+    ],
     outFile: 'THIRD-PARTY-NOTICES.md',
   });
 }

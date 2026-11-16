@@ -153,6 +153,18 @@ export async function checkedScript(
   write: (check: CatalogCheck) => readonly string[],
   tokenize: Tokenize,
 ): Promise<string> {
+  const { entries } = await checkedWrite((check) => ({ entries: write(check) }), tokenize);
+  return entries.join('\n');
+}
+
+/**
+ * `checkedScript` for a writer that makes more than the entries: what its final call made, whose entries passed the
+ * checks. Script as INSERT with Data checks one INSERT and writes the others like it.
+ */
+export async function checkedWrite<T extends { readonly entries: readonly string[] }>(
+  write: (check: CatalogCheck) => T,
+  tokenize: Tokenize,
+): Promise<T> {
   const copied = new Map<string, readonly string[]>();
   write((statement, fragments, warn) => {
     copied.set(statement, fragments);
@@ -161,9 +173,9 @@ export async function checkedScript(
   const closed = await closedFragments([...copied.values()].flat(), tokenize);
   const held = new Set<string>();
   for (;;) {
-    const entries = write(checking(closed, held));
-    const stray = await strayStatement(entries, tokenize);
-    if (stray === undefined) return entries.join('\n');
+    const made = write(checking(closed, held));
+    const stray = await strayStatement(made.entries, tokenize);
+    if (stray === undefined) return made;
     // Text built from quoted names and literals splits as written: only a statement with catalog text can go wrong.
     const owner = [...copied.keys()].find((statement) => !held.has(statement) && statement.includes(stray));
     if (owner === undefined) {

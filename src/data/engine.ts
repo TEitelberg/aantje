@@ -10,6 +10,7 @@ import {
   newestSnapshotQuery,
   nextSnapshotQuery,
   previewQuery,
+  relationName,
   setupStatements,
 } from './attach';
 import { rowKindOf, summariseChanges, summaryLine } from './changes';
@@ -155,12 +156,28 @@ export function checkRelation(access: DataAccess, table: TableRef, signal?: Abor
   return withLake(access, table, signal, () => Promise.resolve());
 }
 
+/**
+ * Runs `use` on all rows of a table or view at the snapshot of `access`, after the checks of a read and in the same
+ * transaction: for work on the whole relation, such as Export, which writes it to a file. `relation` is its quoted name
+ * in the engine. `access.timeoutMs` covers the attach only, so the work runs until it ends or `signal` fires.
+ */
+export function withWholeRelation<T>(
+  access: DataAccess,
+  table: TableRef,
+  signal: AbortSignal | undefined,
+  use: (connection: Duckdb.DuckDBConnection, relation: string) => Promise<T>,
+): Promise<T> {
+  return withLake(access, table, signal, (connection) => use(connection, relationName(table)), {
+    limitSetupOnly: true,
+  });
+}
+
 async function withLake<T>(
   access: DataAccess,
   table: TableRef,
   signal: AbortSignal | undefined,
   query: (connection: Duckdb.DuckDBConnection) => Promise<T>,
-  guard: Pick<GuardOptions, 'range'> = {},
+  options: Pick<GuardOptions, 'range'> & { readonly limitSetupOnly?: boolean } = {},
 ): Promise<T> {
   const subject = `"${table.schema}.${table.table}"`;
   return withOpenLake({
@@ -168,6 +185,7 @@ async function withLake<T>(
     access,
     signal,
     setup: setupStatements(access),
+    limitSetupOnly: options.limitSetupOnly ?? false,
     cancelledText: `Reading ${subject} was cancelled.`,
     activity: `Reading ${subject}`,
     use: async ({ connection }) => {
@@ -179,7 +197,7 @@ async function withLake<T>(
         // is an address. Trust follows what is read at this snapshot; an untrusted view is refused for the caller to ask.
         await guardRelation(connection, table, access.snapshot, {
           trusted: access.viewsTrusted,
-          range: guard.range,
+          range: options.range,
           storage: access.storage?.config,
         });
         return await query(connection);

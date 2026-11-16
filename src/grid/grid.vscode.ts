@@ -94,6 +94,7 @@ export class GridPanels {
         break;
       case 'reveal':
       case 'openQuery':
+      case 'openTipScript':
         // Only the results panel has statements to go to or to open.
         break;
     }

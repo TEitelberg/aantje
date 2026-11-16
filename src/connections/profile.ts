@@ -1,8 +1,10 @@
 import { AantjeError, isAantjeError } from '../errors';
 import { isObject } from '../guards';
+import { isRdsHost } from './rds-ca';
 import {
   parseStorage,
   storageSettingEntry,
+  validateAwsProfile,
   validateStorageAccountName,
   validateTenantId,
 } from '../storage/config';
@@ -35,8 +37,17 @@ export interface PostgresProfile extends ProfileBase {
   readonly azureTenant?: string;
   /** How an Azure lake signs in to PostgreSQL: `entra` uses a token of the Microsoft account as the password, none stored. Absent means a password. */
   readonly azureAuth?: AzureAuthMode;
+  /**
+   * `iam`: a token that `awsProfile` signs is the password (IAM database authentication of Amazon RDS); none stored.
+   * Never together with `azureAuth: "entra"`.
+   */
+  readonly awsAuth?: 'iam';
+  /** The profile of the AWS configuration that signs the token of `awsAuth`; without it the profile of the storage. */
+  readonly awsProfile?: string;
   /** Where the data files live and how to sign in there. Never together with `azureAccount`. */
   readonly storage?: StorageConfig;
+  /** The roots of the Files folder, on the storage of the lake; without them the root follows from the data path. */
+  readonly fileRoots?: readonly string[];
 }
 
 /** SQLite or DuckDB database file holding the `ducklake_*` tables. */
@@ -45,6 +56,8 @@ export interface FileProfile extends ProfileBase {
   readonly path: string;
   /** Where the data files live and how to sign in there. */
   readonly storage?: StorageConfig;
+  /** The roots of the Files folder, on the storage of the lake; without them the root follows from the data path. */
+  readonly fileRoots?: readonly string[];
 }
 
 /**
@@ -110,9 +123,26 @@ export function isAzureLake(profile: ConnectionProfile): boolean {
   return profile.kind === 'postgres' && effectiveStorage(profile)?.kind === 'azure';
 }
 
+/** Whether the profile is an AWS DuckLake: PostgreSQL on Amazon RDS with its data files in S3 (`storage.kind: aws`). */
+export function isAwsLake(profile: ConnectionProfile): boolean {
+  return profile.kind === 'postgres' && isRdsHost(profile.host) && effectiveStorage(profile)?.kind === 'aws';
+}
+
 /** Whether the profile signs in to PostgreSQL with an Entra token instead of a password; it then owns no secret. */
 export function signsInWithEntra(profile: ConnectionProfile): profile is EntraProfile {
   return profile.kind === 'postgres' && profile.azureAuth === 'entra';
+}
+
+/** A PostgreSQL profile that signs in with a token of AWS IAM database authentication instead of a password. */
+export type AwsIamProfile = PostgresProfile & { readonly awsAuth: 'iam' };
+
+export function signsInWithAwsIam(profile: ConnectionProfile): profile is AwsIamProfile {
+  return profile.kind === 'postgres' && profile.awsAuth === 'iam';
+}
+
+/** Whether the profile signs in with a token for every connection (Entra or AWS IAM); it then owns no password. */
+export function signsInWithToken(profile: ConnectionProfile): profile is PostgresProfile {
+  return signsInWithEntra(profile) || signsInWithAwsIam(profile);
 }
 
 /** What the secret of the profile is called in the user interface. */
@@ -270,8 +300,9 @@ export function toSettingEntry(profile: ConnectionProfile): Record<string, unkno
     };
   }
   const storage = profile.storage === undefined ? {} : { storage: storageSettingEntry(profile.storage) };
+  const fileRoots = profile.fileRoots === undefined ? {} : { fileRoots: [...profile.fileRoots] };
   if (profile.kind !== 'postgres') {
-    return { id, name, kind, path: profile.path, ...storage, ...readOnly };
+    return { id, name, kind, path: profile.path, ...storage, ...fileRoots, ...readOnly };
   }
   return {
     id,
@@ -285,7 +316,10 @@ export function toSettingEntry(profile: ConnectionProfile): Record<string, unkno
     ...(profile.azureAccount === undefined ? {} : { azureAccount: profile.azureAccount }),
     ...(profile.azureTenant === undefined ? {} : { azureTenant: profile.azureTenant }),
     ...(profile.azureAuth === undefined ? {} : { azureAuth: profile.azureAuth }),
+    ...(profile.awsAuth === undefined ? {} : { awsAuth: profile.awsAuth }),
+    ...(profile.awsProfile === undefined ? {} : { awsProfile: profile.awsProfile }),
     ...storage,
+    ...fileRoots,
     ssl: profile.ssl ?? false,
     ...readOnly,
   };
@@ -376,11 +410,15 @@ function parseDetails(entry: Record<string, unknown>): Details {
       kind,
       path: text(entry, 'path', validatePath),
       ...(entry.storage === undefined ? {} : { storage: parseStorage(entry.storage) }),
+      ...fileRootsOf(entry),
     };
   }
   if (kind === 'quack') {
     if (entry.storage !== undefined) {
       throw invalid('"storage" does not apply to "quack": the Quack server reads the data files.');
+    }
+    if (entry.fileRoots !== undefined) {
+      throw invalid('"fileRoots" does not apply to "quack": the Quack server reads the files, not aantje.');
     }
     return parseQuack(entry);
   }
@@ -408,8 +446,27 @@ function parseDetails(entry: Record<string, unknown>): Details {
       ? {}
       : { azureTenant: text(entry, 'azureTenant', validateRequired('Azure tenant')) }),
     ...(entry.azureAuth === undefined ? {} : { azureAuth: parseAzureAuth(entry.azureAuth) }),
+    ...parseAwsAuth(entry),
     ...(entry.storage === undefined ? {} : { storage: parseStorage(entry.storage) }),
+    ...fileRootsOf(entry),
   };
+}
+
+// A root is a path of the storage; a control character in it is never one. An empty list means the default root.
+function fileRootsOf(entry: Record<string, unknown>): { fileRoots?: readonly string[] } {
+  const raw = entry.fileRoots;
+  if (raw === undefined) {
+    return {};
+  }
+  if (!Array.isArray(raw) || raw.some((root) => typeof root !== 'string')) {
+    throw invalid('"fileRoots" must be a list of paths.');
+  }
+  const roots = (raw as string[]).map((root) => root.trim());
+  // oxlint-disable-next-line no-control-regex -- a path of a storage holds no control character
+  if (roots.some((root) => root === '' || /[\x00-\x1f\x7f]/.test(root))) {
+    throw invalid('"fileRoots" must hold paths that are not empty and contain no control characters.');
+  }
+  return roots.length === 0 ? {} : { fileRoots: roots };
 }
 
 function parseQuack(entry: Record<string, unknown>): Omit<QuackProfile, 'id' | 'name'> {
@@ -458,6 +515,19 @@ function parseAzureAuth(value: unknown): AzureAuthMode {
     throw invalid('"azureAuth" must be "password" or "entra".');
   }
   return value;
+}
+
+function parseAwsAuth(entry: Record<string, unknown>): { awsAuth?: 'iam'; awsProfile?: string } {
+  if (entry.awsAuth !== undefined && entry.awsAuth !== 'iam') {
+    throw invalid('"awsAuth" must be "iam" (or absent for a password).');
+  }
+  if (entry.awsAuth === 'iam' && entry.azureAuth === 'entra') {
+    throw invalid('"awsAuth" and "azureAuth": "entra" exclude each other: a connection signs in one way.');
+  }
+  return {
+    ...(entry.awsAuth === 'iam' ? { awsAuth: 'iam' as const } : {}),
+    ...(entry.awsProfile === undefined ? {} : { awsProfile: text(entry, 'awsProfile', validateAwsProfile) }),
+  };
 }
 
 function parseReadOnly(value: unknown): boolean {

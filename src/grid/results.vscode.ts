@@ -17,8 +17,11 @@ import { GRID_CSS } from './style';
 interface ResultsHost {
   /** "Go to statement": the editor of the key shows the range of the script. */
   revealStatement(key: string, offset: number, length: number): void;
-  /** "Open as New Query" of a statement that aantje built: a new editor on the same connection gets its text. */
-  openQuery?(key: string): void;
+  /**
+   * A new, unsaved editor on the connection of the editor of the key gets a text: the statement that aantje built
+   * ("Open as New Query") without `text`, the script of a tip ("Open script") with it.
+   */
+  openQuery?(key: string, text?: string): void;
   /** Sets a window context key for `when` clauses. */
   setContext?(key: string, value: boolean): void;
 }
@@ -435,6 +438,14 @@ export class ResultsPanels implements ResultsView {
       case 'openQuery':
         this.host.openQuery?.(key);
         break;
+      case 'openTipScript': {
+        // The script comes from the extension's own state of the run, never from the page.
+        const script = run.state?.resultSets[message.set]?.tips?.[message.tip]?.script;
+        if (script !== undefined) {
+          this.host.openQuery?.(key, script);
+        }
+        break;
+      }
       case 'copy':
       case 'export':
         await transfer(this.deps, message);

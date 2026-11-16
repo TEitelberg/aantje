@@ -342,12 +342,13 @@ LEFT JOIN ducklake_schema s ON s.schema_id = t.schema_id
 
 /**
  * Every data and delete file with the stored paths that locate it, its format and the newest table and schema names
- * (NULL if missing).
+ * (NULL if missing); with `current`, only those that the newest snapshot still uses.
  */
-export function storedFiles(scope: HealthScopeRef, limit: number): Query {
+export function storedFiles(scope: HealthScopeRef, limit: number, current = false): Query {
   const only = inScope('x.table_id', scope);
+  const conditions = [...(only ? [only.sql] : []), ...(current ? ['x.end_snapshot IS NULL'] : [])];
   return {
-    sql: `${STORED_FILES}${only ? `\nWHERE ${only.sql}` : ''}
+    sql: `${STORED_FILES}${conditions.length > 0 ? `\nWHERE ${conditions.join(' AND ')}` : ''}
 ORDER BY x.kind, x.file_id
 LIMIT ${limit}`,
     params: only?.params ?? [],
@@ -389,6 +390,16 @@ LEFT JOIN ducklake_schema s ON s.schema_id = t.schema_id
   AND s.begin_snapshot = (SELECT MAX(w.begin_snapshot) FROM ducklake_schema w WHERE w.schema_id = t.schema_id)
 WHERE t.table_id = ? AND t.begin_snapshot = (SELECT MAX(v.begin_snapshot) FROM ducklake_table v WHERE v.table_id = t.table_id)`,
     params: [tableId],
+  };
+}
+
+/** The stored paths of every schema version, each with those of every version of its tables (none for a schema without one). */
+export function storedDirectories(): Query {
+  return {
+    sql: `SELECT DISTINCT s.path AS schema_path, s.path_is_relative AS schema_relative, t.path AS table_path, t.path_is_relative AS table_relative
+FROM ducklake_schema s
+LEFT JOIN ducklake_table t ON t.schema_id = s.schema_id`,
+    params: [],
   };
 }
 

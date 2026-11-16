@@ -11,6 +11,9 @@
 #   OOG_GITEA_DB           Gitea database                             (default gitea)
 #   OOG_GITEA_DB_USER      Gitea role                                 (default gitea)
 #   OOG_GITEA_DB_PASSWORD  Gitea role password                        (required, secret)
+#   OOG_POLARIS_DB         Polaris database                           (default polaris)
+#   OOG_POLARIS_DB_USER    Polaris role                               (default polaris)
+#   OOG_POLARIS_DB_PASSWORD Polaris role password                     (required, secret)
 # Optional tuning:
 #   OOG_BOOTSTRAP_TIMEOUT   give up waiting for Postgres after this many seconds  (default 120)
 #   OOG_BOOTSTRAP_INTERVAL  pause between attempts in seconds                     (default 2)
@@ -260,7 +263,22 @@ ensure_database() {
   log "database '$db' is ready for role '$role' (login ok, may create tables in schema public)"
 }
 
+# ensure_schema <database> <role> <password> <schema>: the role creates a schema it owns (Polaris wants its own).
+ensure_schema() {
+  valid_name "$4" || die 2 "invalid schema name '$4'"
+  rc=0
+  out=$(
+    PGUSER=$2 PGPASSWORD=$3 PGDATABASE=$1
+    export PGUSER PGPASSWORD PGDATABASE
+    psql_run -t -A -c "CREATE SCHEMA IF NOT EXISTS \"$4\"" 2>&1
+  ) || rc=$?
+  [ "$rc" -eq 0 ] || { warn "ERROR: could not create schema '$4' in database '$1'"; relay warn "$out"; exit 1; }
+  log "schema '$4' is ready in database '$1'"
+}
+
 # One line per tool: ensure_database <database> <role> <password>
 ensure_database "${OOG_GITEA_DB:-gitea}" "${OOG_GITEA_DB_USER:-gitea}" "${OOG_GITEA_DB_PASSWORD:-}"
+ensure_database "${OOG_POLARIS_DB:-polaris}" "${OOG_POLARIS_DB_USER:-polaris}" "${OOG_POLARIS_DB_PASSWORD:-}"
+ensure_schema "${OOG_POLARIS_DB:-polaris}" "${OOG_POLARIS_DB_USER:-polaris}" "${OOG_POLARIS_DB_PASSWORD:-}" polaris_schema
 
 log "done"

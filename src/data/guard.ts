@@ -1,6 +1,6 @@
 import { AantjeError } from '../errors';
 import type { StorageConfig } from '../storage/config';
-import { newestSnapshotQuery } from './attach';
+import { LAKE, newestSnapshotQuery } from './attach';
 import { foreignOrigins, listOrigins, storedDataPath } from './guard/file-origins';
 import { sameIdentifier } from '../catalog/ddl';
 import { relationsQuery, tablesQuery } from './guard/queries';
@@ -73,8 +73,18 @@ async function assertFilesStayHome(
   at: string,
   range: { readonly from: number; readonly to: number } | undefined,
   storage: StorageConfig | undefined,
+  alias: string | undefined,
 ): Promise<void> {
-  const foreign = await foreignOrigins(rows, table, snapshot, at, range, await storedDataPath(rows), storage);
+  const foreign = await foreignOrigins(
+    rows,
+    table,
+    snapshot,
+    at,
+    range,
+    await storedDataPath(rows, alias),
+    storage,
+    alias,
+  );
   if (foreign.length > 0) {
     throw new AantjeError(
       'QUERY_FAILED',
@@ -98,6 +108,8 @@ export interface GuardOptions {
   readonly range?: { readonly from: number; readonly to: number };
   /** The storage of the connection: its service is where files are at home besides the data path. */
   readonly storage?: StorageConfig;
+  /** The lake's name in an engine with several lakes (`lakesSetup`); such an engine reads tables only. */
+  readonly alias?: string;
 }
 
 /**
@@ -118,9 +130,10 @@ export async function guardRelation(
   // Show Changes attaches the newest snapshot, but `table_changes` binds the table name at the end of the range, where
   // a table renamed or dropped later still resolves, so the relation is judged at `to` and the files come from the
   // whole range.
-  const newest = Number((await rows(newestSnapshotQuery()))[0]?.[0] ?? 0);
+  const { alias } = options;
+  const newest = Number((await rows(newestSnapshotQuery(alias)))[0]?.[0] ?? 0);
   const at = String(options.range?.to ?? snapshot ?? newest);
-  const found = (await rows(relationsQuery(table, at))).map(([kind]) => String(kind));
+  const found = (await rows(relationsQuery(table, at, alias))).map(([kind]) => String(kind));
   if (found.length > 1) {
     throw new AantjeError(
       'QUERY_FAILED',
@@ -129,6 +142,14 @@ export async function guardRelation(
     );
   }
   if (found[0] === 'view') {
+    // The closure of a view follows the metadata of `lake` only.
+    if (alias !== undefined && alias !== LAKE) {
+      throw new AantjeError(
+        'QUERY_FAILED',
+        `"${table.schema}.${table.table}" is a view at this snapshot; only tables are read here.`,
+        { table, cause: new Error('view in an engine with several lakes refused') },
+      );
+    }
     if (!options.trusted) {
       throw new AantjeError(
         'VIEW_UNTRUSTED',
@@ -138,6 +159,6 @@ export async function guardRelation(
     }
     await assertViewIsReadOnly(rows, table, snapshot, at, options.storage);
   } else if (found[0] === 'table') {
-    await assertFilesStayHome(rows, table, snapshot, at, options.range, options.storage);
+    await assertFilesStayHome(rows, table, snapshot, at, options.range, options.storage, alias);
   }
 }

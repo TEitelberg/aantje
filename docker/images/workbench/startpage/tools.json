@@ -20,20 +20,47 @@
             "requires": "aantje"
         },
         {
+            "id": "mcp",
+            "name": "MCP server",
+            "description": "Lets Claude Code in the workbench read the DuckLake catalog through aantje; it never writes. Run \"aantje: Add MCP Server to Claude Code\", then ask Claude Code. A re-created container needs the sign-in to Claude Code and the command again.",
+            "hint": "Installed in the workbench",
+            "icon": "catalog",
+            "logo": "icons/mcp.svg",
+            "requires": "aantje"
+        },
+        {
+            "id": "postgresql",
+            "name": "PostgreSQL",
+            "description": "Holds the DuckLake catalog. The PostgreSQL extension has the connection \"Oog PostgreSQL\"; it asks for the password from .env on the first connect. From the host: 127.0.0.1:5433.",
+            "hint": "Installed in the workbench",
+            "icon": "database",
+            "requires": "pgsql",
+            "logo": "icons/postgresql.png"
+        },
+        {
+            "id": "rustfs",
+            "name": "RustFS console",
+            "description": "S3 object storage: bucket oog-lake holds the DuckLake data files and the raw test data, oog-iceberg the Iceberg tables of Polaris, oog-gitea the Git objects.",
+            "url": "http://localhost:9001/rustfs/console/",
+            "icon": "storage",
+            "logo": "icons/rustfs.svg"
+        },
+        {
+            "id": "polaris",
+            "name": "Polaris",
+            "description": "Iceberg REST catalog (Apache Polaris). Use it from aantje: Sync to Iceberg... on a connection writes the lake to the catalog oog_iceberg (sign-in root, secret OOG_POLARIS_CLIENT_SECRET from .env).",
+            "hint": "Installed in the workbench",
+            "icon": "catalog",
+            "requires": "aantje",
+            "logo": "icons/polaris.png"
+        },
+        {
             "id": "gitea",
             "name": "Gitea",
             "description": "Git server with LFS. The oog-workspace repository holds the notebooks; sign in with the Gitea admin account from .env.",
             "url": "http://localhost:3000/",
             "icon": "git",
             "logo": "icons/gitea.svg"
-        },
-        {
-            "id": "rustfs",
-            "name": "RustFS console",
-            "description": "S3 object storage: bucket oog-lake holds the DuckLake data files and the raw test data, oog-gitea the Git objects.",
-            "url": "http://localhost:9001/rustfs/console/",
-            "icon": "storage",
-            "logo": "icons/rustfs.svg"
         }
     ]
 }

@@ -10,6 +10,8 @@ import type { ViewTrustStore } from '../data/trust';
 import { userMessageOf } from '../errors';
 import type { Logger } from '../log';
 import type { QueryHistory } from '../sql/history';
+import { whenShown } from '../tree/shown';
+import type { ShownView } from '../tree/shown';
 import { ArmClient } from './arm';
 import { allowMyIpFlow } from './allow-ip';
 import { attachNewLake } from './attach-lake';
@@ -26,6 +28,8 @@ import { importLakeFlow } from './import-flow';
 
 interface AzureCommandEnv {
   readonly store: ConnectionStore;
+  /** The view of aantje: the notices of an interrupted run wait until the user sees it. */
+  readonly view: ShownView;
   readonly registry: LakeRegistry;
   readonly pending: PendingLakes;
   readonly auth: AzureAuth;
@@ -55,43 +59,54 @@ export function registerAzureCommands(env: AzureCommandEnv): vscode.Disposable[]
   ): Promise<void> =>
     attachNewLake(await env.dataAccess(profile, undefined), dataPath, { sleep, report, log });
 
-  // A deployment that was interrupted by closing the editor or reloading the window waits for Finish Creating.
-  const notice = pendingNotice(pending.list());
-  if (notice !== undefined) {
-    const finish = 'Finish';
-    void vscode.window.showWarningMessage(notice, finish).then((answer) => {
-      if (answer === finish) {
-        void vscode.commands.executeCommand('aantje.finishAzureLake');
-      }
-    });
-  }
-
-  // A lake that was saved as a connection but whose first attach never finished: the mark is set before the attach and
-  // cleared after it, so it also catches a failed attach whose message is long gone.
-  for (const { connectionId, dataPath } of registry.unattached()) {
-    const profile = store.get(connectionId);
-    if (profile?.kind !== 'postgres') {
-      void registry.markAttached(connectionId);
-      continue;
+  // aantje activates in every window once it has started (for its MCP server), but it speaks of an interrupted run only
+  // when the user looks at aantje, as before: of what was pending when this window started and still is. A run that
+  // this window starts later is not interrupted.
+  const pendingAtStart = new Set(pending.list().map(({ deployment }) => deployment));
+  const unattachedAtStart = new Set(registry.unattached().map(({ connectionId }) => connectionId));
+  const notices = whenShown(env.view, () => {
+    // A deployment that was interrupted by closing the editor or reloading the window waits for Finish Creating.
+    const notice = pendingNotice(pending.list().filter(({ deployment }) => pendingAtStart.has(deployment)));
+    if (notice !== undefined) {
+      const finish = 'Finish';
+      void vscode.window.showWarningMessage(notice, finish).then((answer) => {
+        if (answer === finish) {
+          void vscode.commands.executeCommand('aantje.finishAzureLake');
+        }
+      });
     }
-    const attachNow = 'Attach now';
-    void vscode.window.showWarningMessage(unattachedNotice(profile.name), attachNow).then(async (answer) => {
-      if (answer !== attachNow) {
-        return;
+
+    // A lake that was saved as a connection but whose first attach never finished: the mark is set before the attach and
+    // cleared after it, so it also catches a failed attach whose message is long gone.
+    const unattached = registry.unattached().filter((lake) => unattachedAtStart.has(lake.connectionId));
+    for (const { connectionId, dataPath } of unattached) {
+      const profile = store.get(connectionId);
+      if (profile?.kind !== 'postgres') {
+        void registry.markAttached(connectionId);
+        continue;
       }
-      try {
-        await ui.withProgress(`Attaching the Azure DuckLake "${profile.name}"...`, async (report) => {
-          await attach(profile, dataPath, report);
+      const attachNow = 'Attach now';
+      void vscode.window
+        .showWarningMessage(unattachedNotice(profile.name), attachNow)
+        .then(async (answer) => {
+          if (answer !== attachNow) {
+            return;
+          }
+          try {
+            await ui.withProgress(`Attaching the Azure DuckLake "${profile.name}"...`, async (report) => {
+              await attach(profile, dataPath, report);
+            });
+            await registry.markAttached(connectionId);
+            ui.info(`Attached the Azure DuckLake "${profile.name}".`);
+          } catch (error) {
+            ui.error(`Attaching "${profile.name}" failed: ${userMessageOf(error)}`);
+          }
         });
-        await registry.markAttached(connectionId);
-        ui.info(`Attached the Azure DuckLake "${profile.name}".`);
-      } catch (error) {
-        ui.error(`Attaching "${profile.name}" failed: ${userMessageOf(error)}`);
-      }
-    });
-  }
+    }
+  });
 
   return [
+    notices,
     register('aantje.createAzureLake', async () => {
       await createLakeFlow(ui, {
         arm,

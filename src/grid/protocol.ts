@@ -14,6 +14,7 @@ import {
 import type { Test } from '../guards';
 import type { GridData, RowKind } from '../data/types';
 import type { SqlEvent } from '../sql/session';
+import { TIP_KINDS } from '../tips/model';
 import { PROFILE_VIEWS } from './results-model';
 import type { ResultsRunState, ResultsRunSummary } from './results-model';
 
@@ -27,7 +28,9 @@ export type WebviewMessage =
   /** Results page only: "Go to statement", the index is the one of the events. */
   | { readonly type: 'reveal'; readonly index: number }
   /** Results page only: "Open as New Query" of a statement that aantje built. */
-  | { readonly type: 'openQuery' };
+  | { readonly type: 'openQuery' }
+  /** Results page only: "Open script" of a tip; the indexes name the result set and the tip, never the script. */
+  | { readonly type: 'openTipScript'; readonly set: number; readonly tip: number };
 
 /** A new run, each event of it, its end, and the whole run again for a page that loads later. */
 export type ResultsMessage =
@@ -109,6 +112,8 @@ export function isWebviewMessage(value: unknown): value is WebviewMessage {
       return isCount(own(value, 'index'));
     case 'openQuery':
       return true;
+    case 'openTipScript':
+      return isCount(own(value, 'set')) && isCount(own(value, 'tip'));
     default:
       return false;
   }
@@ -128,6 +133,14 @@ const isRange = isShape({ offset: isCount, length: isCount });
 
 const isError = isShape({ message: isString, position: isOptional(isRange) });
 
+const isTip = isShape({
+  kind: isOneOf(...TIP_KINDS),
+  title: isString,
+  facts: isArrayOf(isString),
+  advice: isString,
+  script: isOptional(isString),
+});
+
 const isSqlEvent = (value: unknown): value is SqlEvent => {
   if (!isShape({ index: isCount })(value)) {
     return false;
@@ -145,7 +158,9 @@ const isSqlEvent = (value: unknown): value is SqlEvent => {
     case 'error':
       return isError(event);
     case 'profile':
-      return isShape({ json: isString })(event);
+      return isShape({ json: isString, tips: isOptional(isArrayOf(isTip)) })(event);
+    case 'tips':
+      return isShape({ tips: isArrayOf(isTip) })(event);
     default:
       return false;
   }
@@ -176,7 +191,8 @@ const isResultSet: Test = (value) =>
     text: isOptional(isString),
     label: isOptional(isString),
     profile: isOptional(isString),
-    view: isOptional(isOneOf(...PROFILE_VIEWS.map(([view]) => view))),
+    view: isOptional(isOneOf(...PROFILE_VIEWS.map(([view]) => view), 'tips')),
+    tips: isOptional(isArrayOf(isTip)),
   })(value) && hasRows(value);
 
 const isRunState = isShape({
@@ -196,6 +212,7 @@ export const isGridData = (value: unknown): value is GridData =>
     elapsedMs: isFiniteNumber,
     rowKinds: isOptional(isArrayOf(isString)),
     summary: isOptional(isString),
+    rowMode: isOptional(isOneOf('compare')),
   })(value) && hasRows(value);
 
 /** The results page checks what it is sent as the extension checks what comes out of the webview. */

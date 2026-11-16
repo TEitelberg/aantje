@@ -77,6 +77,8 @@ export async function readBelow(source: LevelSource, node: TreeNode): Promise<Tr
     case 'detail':
     case 'query':
     case 'message':
+    case 'fileFolder':
+    case 'file':
       return [];
   }
 }
@@ -169,6 +171,8 @@ async function readFolder(
     case 'statistics':
     case 'history':
     case 'queryHistory':
+    case 'files':
+    case 'iceberg':
       return [];
     case 'tags':
       return details('k', [

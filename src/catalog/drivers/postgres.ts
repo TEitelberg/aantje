@@ -1,4 +1,6 @@
 import { Client, DatabaseError, TypeOverrides, escapeIdentifier, types as pgTypes } from 'pg';
+import { readFileSync } from 'node:fs';
+import { rdsCaPathFor } from '../../connections/rds-ca';
 import type { ClientConfig } from 'pg';
 import { AantjeError, isErrnoException, messageOf, networkReason } from '../../errors';
 import type { Driver, QueryOptions, Row, Value } from './driver';
@@ -156,8 +158,9 @@ function clientConfig(options: PostgresOptions): ClientConfig {
       }
       return options.password;
     },
-    // Explicit, so PGSSLMODE and NODE_TLS_REJECT_UNAUTHORIZED cannot weaken it.
-    ssl: options.ssl ? { rejectUnauthorized: true } : false,
+    // Explicit, so PGSSLMODE and NODE_TLS_REJECT_UNAUTHORIZED cannot weaken it. An RDS server is checked against the
+    // certificate authorities of RDS, which the system trust store lacks.
+    ssl: options.ssl ? { rejectUnauthorized: true, ...rdsCa(options.host) } : false,
     application_name: 'aantje',
     options: startup.join(' '),
     statement_timeout: options.statementTimeoutMs,
@@ -218,4 +221,18 @@ function queryError(cause: unknown, options: PostgresOptions, signal?: AbortSign
     }
   }
   return new AantjeError('CONNECTION_FAILED', `The connection to ${endpoint(options)} was lost.`, { cause });
+}
+
+const caTexts = new Map<string, string>();
+
+/** The RDS certificate authorities for an RDS host, read once per file; nothing for any other host. */
+function rdsCa(host: string): { ca: string } | Record<string, never> {
+  const path = rdsCaPathFor(host);
+  if (path === undefined) return {};
+  let ca = caTexts.get(path);
+  if (ca === undefined) {
+    ca = readFileSync(path, 'utf8');
+    caTexts.set(path, ca);
+  }
+  return { ca };
 }

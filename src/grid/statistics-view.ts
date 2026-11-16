@@ -77,19 +77,14 @@ function statisticsTable(plan: Plan): HTMLElement {
   return scroll;
 }
 
-/** A chart of a profile (Flame Graph, Treemap & Top Operators); without plan-client.js the table stands in for it. */
-function chartTab(
-  view: HTMLElement,
-  plan: Plan,
-  draw: 'drawFlame' | 'drawOperators',
-  copy: HTMLElement,
-): ResultTab {
-  const host = el('div', draw === 'drawFlame' ? 'profile-chart flame' : 'profile-chart operators');
+/** The Flame Graph of a profile; without plan-client.js the table stands in for it. */
+function flameTab(view: HTMLElement, plan: Plan, copy: HTMLElement): ResultTab {
+  const host = el('div', 'profile-chart flame');
   view.append(copy, host);
   return lazyChartTab(
     view,
     host,
-    (target) => window.aantjePlan?.[draw](target, plan),
+    (target) => window.aantjePlan?.drawFlame(target, plan),
     () => [statisticsTable(plan)],
   );
 }
@@ -112,8 +107,7 @@ export function profileView(
     return { elements: [view], placed: () => undefined };
   }
   const copy = copyBar(statisticsTsv(plan));
-  if (shown === 'flame') return chartTab(view, plan, 'drawFlame', copy);
-  if (shown === 'operators') return chartTab(view, plan, 'drawOperators', copy);
+  if (shown === 'flame') return flameTab(view, plan, copy);
   view.append(el('div', 'summary', profileSummary(plan)), copy, statisticsTable(plan));
   return { elements: [view], placed: () => undefined };
 }

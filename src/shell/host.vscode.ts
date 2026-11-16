@@ -143,6 +143,8 @@ export interface ReportSpec<Data, Action, View, Plan, Params extends object> {
 interface OpenedReport<Params extends object> {
   /** Reads the report under a cancellable progress and shows it in its panel. */
   show(profile: ConnectionProfile, params: Params): Promise<void>;
+  /** Reads the panel of these parameters again, as its Refresh does, if it is open; a closed report stays closed. */
+  refreshOpen(profile: ConnectionProfile, params: Params): void;
   /**
    * Registers the command of the report on a node of the explorer. `paramsOf` maps the node to the parameters of the
    * report, undefined for a node that has no such report; a connection that is gone asks to connect first.
@@ -195,16 +197,21 @@ export function openReport<Data, Action, View, Plan, Params extends object>(
     }
   }
 
+  function refresh(key: string): void {
+    const panel = opened.get(key);
+    const profile = panel && profileOf(store, panel.connectionId, spec.noun);
+    if (panel && profile) {
+      const params = spec.refreshParams?.(panel.params) ?? panel.params;
+      void guarded(logger, spec.command, () => show(profile, params));
+    }
+  }
+
+  const keysOf = (connectionId: string): string[] =>
+    [...opened].filter(([, panel]) => panel.connectionId === connectionId).map(([key]) => key);
+
   const panels = reportPanels(env, spec.kind, {
     onClose: (key) => opened.delete(key),
-    onRefresh: (key) => {
-      const panel = opened.get(key);
-      const profile = panel && profileOf(store, panel.connectionId, spec.noun);
-      if (panel && profile) {
-        const params = spec.refreshParams?.(panel.params) ?? panel.params;
-        void guarded(logger, spec.command, () => show(profile, params));
-      }
-    },
+    onRefresh: refresh,
     onAction: (message, data, key) => {
       const profile = profileOf(store, opened.get(key)?.connectionId ?? '', spec.noun);
       if (!profile) {
@@ -219,12 +226,14 @@ export function openReport<Data, Action, View, Plan, Params extends object>(
     },
   });
 
-  const refreshed = markStaleOnRefresh(env.tree, panels, (connectionId) =>
-    [...opened].filter(([, panel]) => panel.connectionId === connectionId).map(([key]) => key),
-  );
+  const refreshed = markStaleOnRefresh(env.tree, panels, keysOf);
 
   return {
     show,
+    refreshOpen: (profile, params) => {
+      const key = spec.keyOf(profile, params);
+      if (opened.has(key)) refresh(key);
+    },
     command: (register, paramsOf) =>
       register(spec.command, async (node) => {
         const params = node && paramsOf(node.ref);

@@ -1,6 +1,6 @@
 # Data access
 
-The explorer reads the metadata of a DuckLake catalog. `src/data` reads the data: the first rows of a table or of a view of a trusted connection ("Select Top 1000 Rows"), the columns of views and the row changes between two snapshots. It uses a private in-memory DuckDB that attaches the DuckLake read-only. The notebook builds the same statements in Python ([Notebooks](notebooks.md)), the grid shows the rows ([Data grid](grid.md)). The SQL editor does not use this read-only path; it has its own writable session ([SQL session](sql-session.md)) that reuses `setupStatements` with a `session` argument.
+The explorer reads the metadata of a DuckLake catalog. `src/data` reads the data: the first rows of a table or of a view of a trusted connection ("Select Top 1000 Rows"), all its rows into a file ("Export...") or into a script ("Script as INSERT with Data...", [DDL generation](ddl.md#script-as-insert-with-data)), the columns of views and the row changes between two snapshots. It uses a private in-memory DuckDB that attaches the DuckLake read-only. The notebook builds the same statements in Python ([Notebooks](notebooks.md)), the grid shows the rows ([Data grid](grid.md)). The SQL editor does not use this read-only path; it has its own writable session ([SQL session](sql-session.md)) that reuses `setupStatements` with a `session` argument.
 
 ## How a read runs
 
@@ -12,8 +12,8 @@ Every read opens a fresh DuckDB instance. Nothing survives between two reads, an
    - `INSTALL` and `LOAD` of `ducklake` and of `postgres`, `sqlite` or `quack` (a DuckDB-file catalog needs none).
    - The extensions of the storage of the connection ([below](#storage-of-a-connection)): `httpfs` for S3 and R2, `aws` only for the AWS credential chain, `azure` for Azure and OneLake (on Linux `azure_transport_option_type` is `curl`). A local lake loads none of them. A Quack catalog always loads `httpfs`, because the quack extension sends its requests through it.
    - The storage secret, one `CREATE OR REPLACE SECRET` per connection (`aantje_storage`; a connection without `storage` keeps the names `aantje_s3` and `aantje_azure`). An Entra token is fetched first, and a session replaces the secret every ten minutes ([Azure DuckLake](azure-lake.md)).
-   - With `azureAuth: "entra"` the secret `aantje_pg` carries a token of the Microsoft account as `PASSWORD`, and a session replaces it every ten minutes too.
-   - For PostgreSQL the secret `aantje_pg` with the password. The password is never in the `ATTACH` string. TLS on means `SSLMODE 'verify-full'` with the system roots, TLS off means `SSLMODE 'disable'`, so DuckDB never falls back to cleartext on its own.
+   - With `azureAuth: "entra"` the secret `aantje_pg` carries a token of the Microsoft account as `PASSWORD`, and a session replaces it every ten minutes too. With `awsAuth: "iam"` it carries a token of IAM database authentication (valid 15 minutes), which a session replaces in the same way.
+   - For PostgreSQL the secret `aantje_pg` with the password. The password is never in the `ATTACH` string. TLS on means `SSLMODE 'verify-full'` with the system roots (with the certificate authorities of RDS that aantje ships for a host on `*.rds.amazonaws.com`, [AWS DuckLake](aws-lake.md#signing-in)), TLS off means `SSLMODE 'disable'`, so DuckDB never falls back to cleartext on its own.
    - For Quack the secret `aantje_quack` (`TYPE quack`, `SCOPE 'quack:<host>:<port>'`) with the token, and the target `ducklake:quack:<host>:<port>` with `META_DISABLE_SSL` from the TLS flag and, for a pinned certificate with TLS on, `META_SSL_FINGERPRINT`. A Quack attach never has `READ_ONLY`; a read uses `CREATE_IF_NOT_EXISTS false` instead, so that the attach cannot create a lake. No `ca_cert_file` is set, because it would replace the trust store for every HTTPS request of the engine ([Security](security.md#tls-for-quack)).
    - `ATTACH ... AS lake (READ_ONLY ...)`, with `SNAPSHOT_VERSION n` when a snapshot is pinned (`access.snapshot`; unset means the newest).
    - `SET autoinstall_known_extensions = false` and `SET autoload_known_extensions = false` (after the `ATTACH`, which may load `httpfs` itself for an `s3://` lake), then `SET lock_configuration = true`.
@@ -25,7 +25,7 @@ Values arrive JSON-safe. `BIGINT`, `HUGEINT`, `UBIGINT` and `DECIMAL` are text s
 ### Time limits and cancel
 
 - Installing and loading the extensions has its own limit of 5 minutes (about 40 MB on first use). No setting changes it.
-- `aantje.queryTimeoutSeconds` starts after that and covers secrets, attach and query. Without it there is no limit.
+- `aantje.queryTimeoutSeconds` starts after that and covers secrets, attach and query. Without it there is no limit. Export is limited only up to the attach ([Export](#export)).
 - `TIMEOUT` and `ABORTED` release the caller at once and interrupt the statement. A statement blocked in the network (unreachable S3 endpoint) cannot be interrupted: the call ends on time, but the engine stays open until DuckDB's own network timeout (about 90 seconds) and closes then.
 
 ## Changes between snapshots
@@ -40,6 +40,27 @@ Values arrive JSON-safe. `BIGINT`, `HUGEINT`, `UBIGINT` and `DECIMAL` are text s
 - A snapshot that does not exist, or a table that does not exist at `to`, gets a readable `QUERY_FAILED` message. DuckLake refuses a view.
 
 The range itself has no limit. A range over millions of changes is read twice (rows, counts) until the time limit or the user ends it.
+
+## Export
+
+**Export...** in the context menu of a table or a view, next to Select Top 1000 Rows, writes the whole relation to a CSV or Parquet file, without the 1000 rows of the grid (`src/data/export.ts`, `src/data/export.vscode.ts`).
+
+1. A save dialog with the filters CSV and Parquet proposes `<schema>.<table>.csv` (made safe for a file name) in the first workspace folder, else in the home folder. The extension of the chosen file decides the format. For CSV the pick **For Excel (formulas neutralised)** or **Unchanged (for loading elsewhere)** follows. The file is the same as with Run to File in the SQL editor ([SQL editor](sql-editor.md#run-to-file)).
+2. The relation is read at the snapshot that the tree shows: the engine attaches the lake with `SNAPSHOT_VERSION n`, as the preview does, which reads the same rows as `AT (VERSION => n)`.
+3. It runs in the one-shot engine of the preview, with its `READ_ONLY` attach, the locked configuration and the guard in the same transaction (`withWholeRelation` in `src/data/engine.ts`): a view needs the trust confirmation, its stored SQL must not call the maintenance functions, and the data files must be at home. Then it runs `COPY (SELECT * FROM lake."schema"."table") TO '<file>' (...)`; for Excel it binds the relation first (`LIMIT 0`) to find the text columns.
+4. A notification with Cancel shows the progress; at the end a message names the rows written and the file.
+
+What DuckDB 2.0 does with the `COPY`:
+
+- **The read-only engine writes the file.** `READ_ONLY` protects the lake, and `lock_configuration` only stops settings from changing; neither stops `COPY ... TO` a local file, and external access stays on in this engine anyway (the preview needs it for S3 and for views). So Export needs no engine of its own. With `enable_external_access = false` DuckDB would refuse the file ("file system operations are disabled by configuration"). The `COPY` is built by aantje from quoted names and the path literal; it writes only the file chosen in the dialog, and the lake stays as it was.
+- **Time limit.** `aantje.queryTimeoutSeconds` covers the secrets and the attach, not the export itself, which runs until it ends or you cancel it.
+- **Cancel** interrupts the statement and releases the command at once. DuckDB deletes the file it was writing; aantje deletes it too, with a few retries while the engine closes, but only when there was no file before. DuckDB writes over an existing file through a temporary file, so a cancelled export keeps the old file.
+- **Quack.** The `COPY` runs in the DuckDB of aantje on this machine; the Quack server only serves the catalog. The file is written locally.
+- **A file that cannot be written** (access denied, open in another program, folder gone) fails with a message that names the file, not with the advice for a data file of the lake.
+
+## Two lakes in one engine
+
+Data Compare reads two tables of two connections in one engine (`withLakes`, `src/data/lakes.ts`): every lake is attached read-only under its own name at its snapshot (`lakesSetup` in `src/data/attach.ts`), its secrets have names of their own, and its storage secret is limited to the data path of its lake (`SCOPE`), so that neither lake's credentials reach the other's storage. The extensions of both lakes load first, the configuration lock comes after the last attach. The checks of a read run for every table, with the name of its lake; a view is refused. A message of the engine is masked with the secrets of every lake. A SQL session can attach further lakes the same way (`setupStatements(..., also)`), which Script as Update of Data Compare uses ([Data Compare](compare.md#data-compare)).
 
 ## Views and trust
 

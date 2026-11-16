@@ -202,6 +202,7 @@ type MaintenanceReads = Pick<
   | 'deletedSmallFiles'
   | 'deleteHeavyTables'
   | 'fileLocations'
+  | 'storedDirectories'
 >;
 
 /**
@@ -287,9 +288,25 @@ export function maintenanceReads(run: Run, attempt: Attempt): MaintenanceReads {
       }));
     },
 
-    async fileLocations(scope, dataPath, limit, signal): Promise<FileLocations> {
+    async storedDirectories(dataPath, signal): Promise<string[]> {
+      // A catalog that cannot answer (no path columns) hides only its data path.
+      const rows = (await attempt(queries.storedDirectories(), signal)) ?? [];
+      const base = dataPath ?? '';
+      const found = new Set<string>();
+      for (const row of rows) {
+        if (row.schema_path === null || row.schema_path === undefined) continue;
+        const schema = stored(row.schema_path, row.schema_relative);
+        found.add(schemaDirectory(base, schema));
+        if (row.table_path !== null && row.table_path !== undefined) {
+          found.add(tableDirectory(base, schema, stored(row.table_path, row.table_relative)));
+        }
+      }
+      return [...found];
+    },
+
+    async fileLocations(scope, dataPath, limit, signal, current): Promise<FileLocations> {
       const [rows, scheduled, table, shared, schema] = await Promise.all([
-        run(queries.storedFiles(scope, limit + 1), signal),
+        run(queries.storedFiles(scope, limit + 1, current), signal),
         attempt(queries.scheduledFiles(limit + 1), signal),
         scope.tableId === undefined ? undefined : run(queries.tableLocation(scope.tableId), signal),
         scope.tableId === undefined ? [] : run(queries.sharedFiles(scope.tableId, limit), signal),

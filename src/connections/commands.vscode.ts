@@ -3,7 +3,7 @@ import { dirname } from 'node:path';
 import * as vscode from 'vscode';
 import type { ActiveConnection } from '../active-connection.vscode';
 import { attachNewLake } from '../azure/attach-lake';
-import { looksLikeBlockedIp } from '../azure/blocked-ip';
+import { allowIpCommandFor } from '../azure/blocked-ip';
 import type { Register } from '../command.vscode';
 import type { ViewTrustStore } from '../data/trust';
 import type { DataAccess } from '../data/types';
@@ -22,6 +22,7 @@ import { certificateFingerprint } from './fingerprint';
 import { createWizardUi } from './ports.vscode';
 import type { ConnectionProfile } from './profile';
 import { setStorageSignInFlow } from './storage-sign-in';
+import type { IcebergCopies } from '../iceberg/records';
 import type { ConnectionStore } from './store';
 import { successText, testCatalogAndStorage } from './test';
 import { addConnectionFlow, editConnectionFlow, removeConnectionFlow } from './wizard';
@@ -46,6 +47,8 @@ interface ConnectionCommandEnv {
   readonly trust: ViewTrustStore;
   /** A removed connection takes its Query History with it. */
   readonly history: Pick<QueryHistory, 'clear'>;
+  /** A removed connection takes its records of the copies to Iceberg with it. */
+  readonly icebergCopies: Pick<IcebergCopies, 'forget'>;
   readonly active: ActiveConnection;
   /** Ids of the connections that Edit Connection is saving; the change of the setting must not reopen them. */
   readonly editing: Set<string>;
@@ -128,6 +131,7 @@ export function registerConnectionCommands(env: ConnectionCommandEnv): vscode.Di
         // A removed connection must not leave its permission to resolve views, or the SQL it ran, behind.
         await env.trust.revoke(profile);
         await env.history.clear(profile.id);
+        await env.icebergCopies.forget({ connectionId: profile.id });
       }
     }),
 
@@ -176,16 +180,15 @@ export function registerConnectionCommands(env: ConnectionCommandEnv): vscode.Di
       if (status === 'error') {
         const message = `Cannot connect to "${node.label}": ${error ?? 'unknown error'}`;
         const profile = store.get(node.ref.connectionId);
-        if (profile && looksLikeBlockedIp(profile, error ?? '')) {
+        const allowIp = profile && allowIpCommandFor(profile, error ?? '');
+        if (allowIp !== undefined) {
           const allow = 'Allow my IP';
           void Promise.resolve(
             vscode.window.showErrorMessage(
               `${message} Your IP address may be blocked by the firewall of the server.`,
               allow,
             ),
-          ).then((choice) =>
-            choice === allow ? vscode.commands.executeCommand('aantje.allowMyIp', node) : undefined,
-          );
+          ).then((choice) => (choice === allow ? vscode.commands.executeCommand(allowIp, node) : undefined));
           return;
         }
         void vscode.window.showErrorMessage(message);

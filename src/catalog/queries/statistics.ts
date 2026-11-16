@@ -126,6 +126,35 @@ export function tableColumnRanges(tableId: number): Query {
   };
 }
 
+/** The bytes of each column over the visible data files, as DuckLake recorded them when it wrote the files. */
+export function columnBytes(tableId: number, snapshot: number): Query {
+  return {
+    sql: `${WITH_SNAPSHOT}
+SELECT s.column_id, CAST(SUM(s.column_size_bytes) AS BIGINT) AS size_bytes
+FROM snap
+CROSS JOIN ducklake_data_file f
+JOIN ducklake_file_column_stats s ON s.data_file_id = f.data_file_id AND s.table_id = f.table_id
+WHERE f.table_id = ? AND ${visible('f')}
+GROUP BY s.column_id`,
+    params: [snapshot, tableId],
+  };
+}
+
+/** Minimum and maximum of one column in each visible data file; the caller compares them by type. */
+export function columnFileRanges(tableId: number, columnId: number, snapshot: number, limit: number): Query {
+  return {
+    sql: `${WITH_SNAPSHOT}
+SELECT s.min_value, s.max_value
+FROM snap
+CROSS JOIN ducklake_data_file f
+JOIN ducklake_file_column_stats s ON s.data_file_id = f.data_file_id AND s.table_id = f.table_id
+WHERE f.table_id = ? AND s.column_id = ? AND ${visible('f')}
+ORDER BY f.data_file_id
+LIMIT ${limit}`,
+    params: [snapshot, tableId, columnId],
+  };
+}
+
 /** Minimum and maximum of every column per visible data file; the caller compares them by type. */
 export function fileColumnRanges(tableId: number, snapshot: number, limit: number): Query {
   return {

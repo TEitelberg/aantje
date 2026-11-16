@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.2.6] - 2026-11-16
+
+AWS DuckLake, Sync to Apache Iceberg, an MCP server for AI assistants, Data Compare, and the files of a lake in the explorer.
+
+- Create AWS DuckLake... deploys a lake with one CloudFormation stack: RDS for PostgreSQL as the catalog (TLS, reachable from your IPv4 address only), an S3 bucket for the data files and a VPC of its own, in the sizes Small and Medium. Names, quotas and permissions are checked, and a change set shows the resources and a cost note before anything is created; Finish Creating AWS DuckLake... completes an interrupted one. Delete AWS DuckLake... (with or without a final snapshot of the catalog), Allow My IP and Import AWS DuckLake... complete it. The catalog takes a password or AWS IAM database authentication. AWS credentials come from a profile in `~/.aws` or the environment; aantje stores none.
+- A delete of an AWS lake that stops, for example when the network drops, is noted on the connection: a red icon, "delete unfinished" and a tooltip. Delete AWS DuckLake... again goes on where it stopped and does not ask for a snapshot of a database that is gone. Short outages during a delete are asked again.
+- Sync to Iceberg... writes a lake, a schema or a table to an Apache Iceberg REST catalog (Polaris, for example), with the partitioning, the types Iceberg can hold and the origin of each table. A later sync brings the Iceberg tables up to date by appending, replacing or recreating them. Iceberg targets are defined once (Add Iceberg Target..., Remove Iceberg Target...). A row per target in the tree is green when every synced table has the state of the lake, its report lists every table, and a table that is behind says so.
+- MCP server: an AI assistant in VS Code (GitHub Copilot, Claude Code) can list and describe the objects of the connected lakes with their dependencies, read table statistics and the Maintenance Advisor, explain, analyze and profile a statement that only reads, open SQL in an editor, read the state of the Iceberg syncs and ask you for a sync. It never writes by itself, and it returns sample rows only when `aantje.mcp.maxRows` allows them. **aantje: Add MCP Server to Claude Code** sets up Claude Code.
+- Data Compare... compares the rows of two tables, in one schema, across schemas or across connections, at the snapshot each side shows, and writes Script as Update to make the target like the source.
+- The folder Files below a connection browses the storage of the lake (S3, S3-compatible stores, Azure ADLS Gen2 or Blob, OneLake, a local disk) and writes scripts that import a CSV, Parquet, JSON or Excel file or a folder.
+- Run to File... writes the result of a statement that only reads to a CSV or Parquet file; Export... does the same for a whole table or view; Script as INSERT with Data... writes a table or view with its rows as a script.
+- After Statistics and Analysis, the tab Tips lists what would make a statement faster (sort order, storage and cache, memory, maintenance), with a script where one applies. The tab Treemap & Top Operators is gone.
+- New Query is on every node below a connected lake: empty, or with the SELECT of a table or view. A connection that fails to connect has a red icon.
+- Oog Docker stack: Polaris as an Iceberg REST catalog with the target "Oog Polaris", and the PostgreSQL extension, Claude Code and the AWS CLI in the workbench. The medallion notebooks also create the 13 views on views in `gold`.
+- SQLite catalogs are read with sql.js 1.16.0. Built with TypeScript 7 and checked with oxlint.
+
 ## [0.2.5] - 2026-11-14
 
 Storage per connection: where the data files of a lake live, and how aantje signs in there, is now part of the connection.
@@ -32,5 +48,6 @@ The first release from this repository. Open VSX had 0.1.0 to 0.1.21 and 0.2.0 b
 - DuckDB + Quack as a fourth catalog kind: a catalog served by a DuckDB server over Quack, with the token in the secret storage and the server certificate pinned after you confirm its fingerprint. The explorer stays connected while a SQL editor session writes; there is no read-only switch, because the server decides what the token may do. Quack is experimental in DuckDB 2.0.0.
 - DuckLake specification 1.x, VS Code 1.140 or newer, desktop VS Code and code-server, Windows x64 and Linux x64. No telemetry.
 
+[0.2.6]: https://github.com/TEitelberg/aantje/releases/tag/v0.2.6
 [0.2.5]: https://github.com/TEitelberg/aantje/releases/tag/v0.2.5
 [0.2.1]: https://github.com/TEitelberg/aantje/releases/tag/v0.2.1

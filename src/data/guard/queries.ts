@@ -8,8 +8,9 @@ import type { TableRef } from '../types';
 
 export type Rows = (sql: string) => Promise<unknown[][]>;
 
-// The catalog database the DuckLake extension attaches next to the lake; it holds `ducklake_view` and `ducklake_macro`.
-export const METADATA = `__ducklake_metadata_${LAKE}`;
+// The catalog database the DuckLake extension attaches next to a lake; it holds `ducklake_view` and `ducklake_macro`.
+const metadataOf = (alias: string): string => `__ducklake_metadata_${alias}`;
+export const METADATA = metadataOf(LAKE);
 
 // DuckDB folds the case of ASCII letters only when it looks a name up (`T` finds `t`, `É` does not find `é`): in SQL as
 // `foldIdentifier` does it in text; `lower()` would also fold other letters and report names as equal that DuckDB tells
@@ -36,9 +37,10 @@ const inNames = (expression: string, names: ReadonlySet<string>): string =>
 // The tables and views that DuckDB resolves a request to: it folds the case of ASCII letters in schema and name, so
 // these are all the relations of that name. More than one is a lake DuckDB itself cannot create; only a hand-written
 // catalog has it.
-export function relationsQuery(table: TableRef, snapshot: string): string {
+export function relationsQuery(table: TableRef, snapshot: string, alias: string = LAKE): string {
+  const metadata = metadataOf(alias);
   const found = (kind: string, relation: string, column: string): string =>
-    `SELECT '${kind}' FROM ${METADATA}.${relation} r JOIN ${METADATA}.ducklake_schema s ON s.schema_id = r.schema_id WHERE ${foldSql('s.schema_name')} = ${quoteLiteral(foldIdentifier(table.schema))} AND ${foldSql(`r.${column}`)} = ${quoteLiteral(foldIdentifier(table.table))} AND ${visible('r', snapshot)} AND ${visible('s', snapshot)}`;
+    `SELECT '${kind}' FROM ${metadata}.${relation} r JOIN ${metadata}.ducklake_schema s ON s.schema_id = r.schema_id WHERE ${foldSql('s.schema_name')} = ${quoteLiteral(foldIdentifier(table.schema))} AND ${foldSql(`r.${column}`)} = ${quoteLiteral(foldIdentifier(table.table))} AND ${visible('r', snapshot)} AND ${visible('s', snapshot)}`;
   return `${found('view', 'ducklake_view', 'view_name')} UNION ALL ${found('table', 'ducklake_table', 'table_name')}`;
 }
 
@@ -63,8 +65,12 @@ export function tablesQuery(snapshot: string, names: ReadonlySet<string>): strin
 const hasOrigin = String.raw`^${LEADING_BLANKS}(?:[a-z][a-z0-9+.-]*://|${NETWORK_HOST})`;
 
 // The resolved paths of the table's data and delete files visible at the snapshot that could leave this machine.
-export function snapshotFilesQuery(table: TableRef, snapshot: number | undefined): string {
-  const list = `ducklake_list_files('${LAKE}', ${quoteLiteral(table.table)}, schema => ${quoteLiteral(table.schema)}${snapshot === undefined ? '' : `, snapshot_version => ${snapshot}`})`;
+export function snapshotFilesQuery(
+  table: TableRef,
+  snapshot: number | undefined,
+  alias: string = LAKE,
+): string {
+  const list = `ducklake_list_files('${alias}', ${quoteLiteral(table.table)}, schema => ${quoteLiteral(table.schema)}${snapshot === undefined ? '' : `, snapshot_version => ${snapshot}`})`;
   return `SELECT DISTINCT f FROM (SELECT data_file AS f FROM ${list} UNION ALL SELECT delete_file FROM ${list}) WHERE f IS NOT NULL AND regexp_matches(${foldSql('replace(f, chr(92), chr(47))')}, ${quoteLiteral(hasOrigin)})`;
 }
 
