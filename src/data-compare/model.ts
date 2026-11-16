@@ -61,9 +61,10 @@ export type ColumnMatch = ReturnType<typeof matchColumns>;
 
 /**
  * Whether the SQL type of a column can go into a statement: words, numbers, spaces, `,()[]` and quoted names. The type
- * comes from the catalog, which may be hostile; a text with `;`, a comment or a string is never used in a cast.
+ * comes from the catalog, which may be hostile; a text with `;`, a comment or a string is never used in a cast. A doubled
+ * quote inside a quoted name matches as two quoted parts in a row, so the pattern never backtracks.
  */
-export const isSafeType = (type: string): boolean => /^(?:[\w ,()[\]]|"(?:[^"]|"")*")+$/.test(type);
+export const isSafeType = (type: string): boolean => /^(?:[\w ,()[\]]|"[^"]*")+$/.test(type);
 
 /** Whether the target's column is read through a cast to the type of the source. */
 export const isCast = (column: MatchedColumn): boolean => column.sourceType !== column.targetType;
