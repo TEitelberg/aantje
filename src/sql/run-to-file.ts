@@ -1,8 +1,8 @@
-import { copyStatement, describeQuery, fileWriteFailure, needsColumns, queryOffset } from '../export/copy';
+import { copyStatement, countQuery, describeQuery, fileWriteFailure, queryOffset } from '../export/copy';
 import type { BoundColumn, ExportTarget } from '../export/copy';
 import { pendingFile } from '../export/file';
 import { groupedPlural } from '../shell/numbers';
-import type { EditorRef, QueryEditors, QuietRun, RunAround, RunScript } from './editor';
+import type { EditorRef, QueryEditors, RunAround, RunScript } from './editor';
 import type { RunSummary } from './results';
 
 /** The statement that Run to File writes: its text, where it starts in the document, and whether it only reads. */
@@ -25,38 +25,51 @@ export function fileRunRefusal(statement: Pick<FileStatement, 'readsOnly'>): str
 /**
  * Run to File: the statement runs in the session of its editor as `COPY (<statement>) TO '<file>' (...)`, so it sees the
  * transaction, the temporary tables and the settings of that session; progress, Cancel and the results are those of a
- * run. CSV for Excel binds the statement first (`DESCRIBE`) to find its text columns. The Messages tab gets one line with
- * the rows written and the file, the Query History records the COPY statement as a run, and the explorer is not
- * refreshed, because writing the file changes no catalog. A failed or cancelled run leaves no partial file. The summary
- * of the run, or undefined when nothing ran (no connection chosen, a run already active).
+ * run. A CSV file holds every value as DuckDB writes it. The Messages tab gets one line with the rows written and the
+ * file, the Query History records the COPY statement as a run, and the explorer is not refreshed, because writing the
+ * file changes no catalog. A failed or cancelled run leaves no partial file.
+ *
+ * For Markdown the session binds the statement (`DESCRIBE`) and counts the rows first, hidden from the results, and
+ * `confirmRows` decides about a long table (`MARKDOWN_ASK_ROWS`). The summary of the run, or undefined when nothing ran
+ * (no connection chosen, a run already active, a long Markdown table declined).
  */
 export async function runToFile(
-  editors: Pick<QueryEditors, 'run'>,
+  editors: Pick<QueryEditors, 'run' | 'quiet' | 'ensureConnection'>,
   editor: EditorRef,
   statement: FileStatement,
   target: ExportTarget,
+  confirmRows: (rows: number) => Promise<boolean> = () => Promise.resolve(true),
 ): Promise<RunSummary | undefined> {
+  // Markdown binds and counts first, so that it can ask about a long table before anything is written.
+  let bound: readonly BoundColumn[] | undefined;
+  if (target.format === 'markdown') {
+    if (!(await editors.ensureConnection(editor))) return undefined;
+    const { columns, rows } = await editors.quiet(
+      editor.key,
+      async (run) => ({
+        columns: boundColumns((await run(describeQuery(statement.text))).rows),
+        rows: Number((await run(countQuery(statement.text))).rows[0]?.[0] ?? 0),
+      }),
+      { progress: 'Counting the rows of the result...' },
+    );
+    if (!(await confirmRows(rows))) return undefined;
+    bound = columns;
+  }
   const file = await pendingFile(target.path);
   const script: RunScript = {
-    // The results show this at the start; for Excel the SELECT around the statement follows once it is bound.
-    text: copyStatement(statement.text, target.format === 'csv' ? { ...target, text: 'exact' } : target),
+    text: copyStatement(statement.text, target, bound),
     base: statement.base - queryOffset(target),
     record: true,
+    toFile: true,
   };
-  const summary = await editors.run(editor, script, fileAround(statement.text, target));
+  const summary = await editors.run(editor, script, fileAround(target));
   if (!summary || summary.cancelled || summary.failed) await file.discard();
   return summary;
 }
 
-function fileAround(query: string, target: ExportTarget): RunAround {
+function fileAround(target: ExportTarget): RunAround {
   return {
     before: () => Promise.resolve(),
-    ...(needsColumns(target)
-      ? {
-          script: async (run: QuietRun) =>
-            copyStatement(query, target, boundColumns(await run(describeQuery(query)))),
-        }
-      : {}),
     event: (event) => {
       if (event.kind === 'start') return { ...event, changesCatalog: false };
       if (event.kind === 'error') {

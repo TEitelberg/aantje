@@ -4,6 +4,7 @@ import type { IcebergCopies } from '../iceberg/records';
 import type { IcebergStatuses } from '../iceberg/service';
 import type { IcebergTargetStore } from '../iceberg/store';
 import { openReport } from '../shell/host.vscode';
+import { reportHeading } from '../shell/report-heading';
 import type { ReportHostEnv } from '../shell/host.vscode';
 import { icebergKind } from './kind';
 import { buildIcebergData, ICEBERG_ACTIONS } from './model';
@@ -13,7 +14,7 @@ const COMMAND = 'aantje.showIcebergReport';
 
 interface IcebergReportEnv extends ReportHostEnv {
   readonly targets: Pick<IcebergTargetStore, 'get'>;
-  readonly copies: Pick<IcebergCopies, 'list'>;
+  readonly copies: Pick<IcebergCopies, 'list' | 'failures'>;
   readonly statuses: Pick<IcebergStatuses, 'checkOne'>;
   /** What the buttons of the page do; the page shows only the buttons that have an entry. */
   readonly actions: Readonly<
@@ -50,9 +51,10 @@ export function registerIcebergReport(env: IcebergReportEnv): {
                   records,
                   check,
                   actions: ICEBERG_ACTIONS,
+                  failures: env.copies.failures(profile.id, targetId),
                 });
           },
-          title: () => `Iceberg · ${target.name} · ${profile.name}`,
+          title: () => `${reportHeading('Iceberg Report', target.name)} · ${profile.name}`,
           absent: `"${profile.name}" has no copy in ${target.name}.`,
         }
       );

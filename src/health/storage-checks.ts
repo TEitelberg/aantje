@@ -55,6 +55,8 @@ interface StorageInput {
   readonly cutAfter?: string;
   readonly names: TableNames;
   readonly latest: number;
+  /** The snapshot whose state is checked when it is not the newest. */
+  readonly at?: number;
   readonly now: Date;
   /** Most findings reported per check. */
   readonly limit: number;
@@ -85,6 +87,7 @@ export function compareStorage(input: StorageInput): StorageResult {
     cutAfter,
     names,
     latest,
+    at: checkedAt,
     now,
     limit,
     caseInsensitive,
@@ -141,10 +144,12 @@ export function compareStorage(input: StorageInput): StorageResult {
     findings.push(...capped.shown.map(make));
     omitted += capped.omitted;
   };
-  report(missing, ({ file }) => missingFinding(file, names, latest));
-  report(resized, ({ file, at }) => resizedFinding(file, names, latest, stored.get(at)?.size ?? 0));
+  report(missing, ({ file }) => missingFinding(file, names, latest, checkedAt));
+  report(resized, ({ file, at }) =>
+    resizedFinding(file, names, latest, stored.get(at)?.size ?? 0, checkedAt),
+  );
   report(orphans, (file) => orphanFinding(file, now, scope.kind === 'schema' ? scope : { kind: 'lake' }));
-  if (listing.length === 0 && compared.some(({ file }) => file.endSnapshot === null)) {
+  if (listing.length === 0 && compared.some(({ file }) => neededBy(file, checkedAt))) {
     findings.push(nothingFound(directory, compared.length, scope, storage));
   }
   return {
@@ -154,6 +159,20 @@ export function compareStorage(input: StorageInput): StorageResult {
     missing: new Set(missing.map(({ file }) => fileKey(file))),
   };
 }
+
+/** Whether the state that is checked needs the file: the newest (the file has no end), or the snapshot `at`. */
+export function neededBy(
+  file: Pick<StoredFile, 'beginSnapshot' | 'endSnapshot'>,
+  at: number | undefined,
+): boolean {
+  return at === undefined
+    ? file.endSnapshot === null
+    : file.beginSnapshot <= at && (file.endSnapshot === null || at < file.endSnapshot);
+}
+
+// Who needs the file: the newest snapshot, or the one that is checked.
+const neederText = (at: number | undefined): string =>
+  at === undefined ? 'the newest snapshot' : `snapshot @${at}`;
 
 function inspect(file: StoredFile): string {
   return file.kind === 'data'
@@ -173,17 +192,22 @@ function serves(file: StoredFile, latest: number): string {
     : `the snapshots @${file.beginSnapshot} to @${last}`;
 }
 
-export function missingFinding(file: StoredFile, names: TableNames, latest: number): HealthFinding {
+export function missingFinding(
+  file: StoredFile,
+  names: TableNames,
+  latest: number,
+  at?: number,
+): HealthFinding {
   const scope = fileScope(file, names);
-  const current = file.endSnapshot === null;
+  const current = neededBy(file, at);
   const where = file.location ?? '';
   return finding('storage.file-missing', {
     severity: current ? 'error' : 'warning',
     scope,
     object: fileKey(file),
     title: current
-      ? `A ${kindText(file)} that the newest snapshot needs is missing from the object store`
-      : `A ${kindText(file)} that only older snapshots need is missing from the object store`,
+      ? `A ${kindText(file)} that ${neederText(at)} needs is missing from the object store`
+      : `A ${kindText(file)} that only ${at === undefined ? 'older' : 'other'} snapshots need is missing from the object store`,
     detail: `${where} is the ${kindText(file)} #${file.id} of ${qualified(scope)}. The catalog lists it for ${serves(file, latest)}, but the store has no such key. ${
       current
         ? `Reading ${qualified(scope)} at those snapshots fails with HTTP 404.`
@@ -199,9 +223,15 @@ export function missingFinding(file: StoredFile, names: TableNames, latest: numb
   });
 }
 
-function resizedFinding(file: StoredFile, names: TableNames, latest: number, actual: number): HealthFinding {
+function resizedFinding(
+  file: StoredFile,
+  names: TableNames,
+  latest: number,
+  actual: number,
+  at: number | undefined,
+): HealthFinding {
   const scope = fileScope(file, names);
-  const current = file.endSnapshot === null;
+  const current = neededBy(file, at);
   const where = file.location ?? '';
   return finding('storage.file-size-mismatch', {
     severity: current ? 'error' : 'warning',

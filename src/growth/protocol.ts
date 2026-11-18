@@ -38,7 +38,6 @@ const isChange = isShape({
 const isData = isShape({
   ...SCOPED_WINDOW_FIELDS,
   focus: isNullOr(isCount),
-  expired: isOptional(isBoolean),
   tables: isArrayOf(isShape({ id: isCount, schema: isString, name: isString })),
   changes: isArrayOf(isChange),
   inlinedMore: isBoolean,

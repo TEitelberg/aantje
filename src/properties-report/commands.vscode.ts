@@ -1,4 +1,5 @@
 import { openReport } from '../shell/host.vscode';
+import { reportHeading } from '../shell/report-heading';
 import type { ReportHostEnv } from '../shell/host.vscode';
 import { propertiesKind } from './kind';
 import type { PropertiesActionId, PropertiesReport } from './model';
@@ -26,7 +27,7 @@ export function createPropertiesReport(env: PropertiesReportEnv): PropertiesRepo
         properties: await reader.properties(),
         actions: Object.keys(actions) as PropertiesActionId[],
       }),
-      title: () => `Properties · ${profile.name}`,
+      title: () => `${reportHeading('Properties')} · ${profile.name}`,
     }),
     planAction: (data, { action }) => (data.actions.includes(action) ? actions[action] : undefined),
     perform: (run, profile) => run(profile.id),

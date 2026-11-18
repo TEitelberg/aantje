@@ -44,6 +44,21 @@ export const icebergRefOf = (record: IcebergCopyRecord): { schema: string; table
 });
 
 const KEY = 'aantje.icebergCopies';
+const FAILURES = 'aantje.icebergFailures';
+
+/**
+ * A table that a sync could not write, with the first line of the reason. The report shows it as an error until a
+ * later sync writes it, the lake drops it, or the sync is forgotten.
+ */
+export interface IcebergFailureRecord {
+  readonly connectionId: string;
+  readonly targetId: string;
+  readonly schema: string;
+  readonly table: string;
+  readonly error: string;
+  readonly snapshot: number;
+  readonly failedAt: string;
+}
 const keyOf = (r: Pick<IcebergCopyRecord, 'connectionId' | 'targetId' | 'schema' | 'table'>): string =>
   JSON.stringify([r.connectionId, r.targetId, r.schema, r.table]);
 
@@ -94,24 +109,64 @@ export class IcebergCopies {
     await this.state.update(KEY, all);
   }
 
-  /** A removed connection or target takes its records with it. */
+  /** A removed connection or target takes its records with it, and the failures of its syncs. */
   async forget(match: { connectionId?: string; targetId?: string }): Promise<void> {
+    const matches = (value: { connectionId: string; targetId: string }): boolean =>
+      (match.connectionId === undefined || value.connectionId === match.connectionId) &&
+      (match.targetId === undefined || value.targetId === match.targetId);
     const kept = Object.fromEntries(
-      Object.entries(this.all()).filter(([, value]) => {
-        if (!isRecord(value)) return true;
-        return !(
-          (match.connectionId === undefined || value.connectionId === match.connectionId) &&
-          (match.targetId === undefined || value.targetId === match.targetId)
-        );
-      }),
+      Object.entries(this.all()).filter(([, value]) => !isRecord(value) || !matches(value)),
     );
     await this.state.update(KEY, kept);
+    await this.state.update(
+      FAILURES,
+      Object.fromEntries(
+        Object.entries(this.all(FAILURES)).filter(([, value]) => !isFailure(value) || !matches(value)),
+      ),
+    );
   }
 
-  private all(): Record<string, unknown> {
-    const value = this.state.get(KEY);
+  /** The tables that syncs of the connection (to the target) could not write. */
+  failures(connectionId: string, targetId?: string): IcebergFailureRecord[] {
+    return Object.values(this.all(FAILURES))
+      .filter(isFailure)
+      .filter((r) => r.connectionId === connectionId && (targetId === undefined || r.targetId === targetId));
+  }
+
+  /** After a sync: the tables it could not write are remembered with their reason, the ones it wrote are not any more. */
+  async rememberFailures(
+    connectionId: string,
+    targetId: string,
+    outcome: {
+      readonly failed: readonly Omit<IcebergFailureRecord, 'connectionId' | 'targetId'>[];
+      readonly written: readonly { readonly schema: string; readonly table: string }[];
+    },
+  ): Promise<void> {
+    const all = this.all(FAILURES);
+    for (const table of outcome.written) delete all[keyOf({ connectionId, targetId, ...table })];
+    for (const failure of outcome.failed) {
+      all[keyOf({ connectionId, targetId, ...failure })] = { connectionId, targetId, ...failure };
+    }
+    await this.state.update(FAILURES, all);
+  }
+
+  private all(key: string = KEY): Record<string, unknown> {
+    const value = this.state.get(key);
     return isObject(value) ? { ...value } : {};
   }
+}
+
+function isFailure(value: unknown): value is IcebergFailureRecord {
+  return (
+    isObject(value) &&
+    typeof value.connectionId === 'string' &&
+    typeof value.targetId === 'string' &&
+    typeof value.schema === 'string' &&
+    typeof value.table === 'string' &&
+    typeof value.error === 'string' &&
+    typeof value.snapshot === 'number' &&
+    typeof value.failedAt === 'string'
+  );
 }
 
 function isRecord(value: unknown): value is IcebergCopyRecord {

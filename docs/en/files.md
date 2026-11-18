@@ -17,7 +17,7 @@ The folder **Files** below a connected connection browses the storage of the lak
 | `src/files/azure-chain.ts`                                 | The Azure credential chain: environment, workload identity, managed identity, Azure CLI.                                   |
 | `src/files/http.ts`                                        | One request with a time limit and no redirect; the error of the storage as one line.                                       |
 | `src/files/kinds.ts`, `src/files/scripts.ts`               | The file kinds DuckDB reads and their readers; the import scripts.                                                         |
-| `src/files/import-flow.ts`, `src/files/commands.vscode.ts` | The questions of the import commands; Copy Path, Refresh and the import commands.                                          |
+| `src/files/import-flow.ts`, `src/files/commands.vscode.ts` | The questions of the import commands and the walk down the subfolders; Copy Path, Refresh and the import commands.         |
 | `src/tree/files.ts`                                        | The levels below the folder Files in the tree.                                                                             |
 
 ## In the tree
@@ -27,7 +27,6 @@ Lake                               duckdb · DuckLake 1.1 · @56
   main
   sales
   Snapshots
-  Query History
   Files
     abfss://lake@account.dfs.core.windows.net/
       exports
@@ -35,11 +34,12 @@ Lake                               duckdb · DuckLake 1.1 · @56
         customers.parquet          3.1 MB · 2026-11-09 17:40
       raw
       readme.txt                   2 KB · 2026-10-01 09:00
+  Query History
 ```
 
-- **Files** follows **Snapshots** and **Query History**. A Quack connection has no Files folder: the Quack server reads the files there, not aantje.
+- **Files** follows **Snapshots**, and **Query History** comes after it. A Quack connection has no Files folder: the Quack server reads the files there, not aantje.
 - One node per root, labelled with its path. Below it folders first, then files, each sorted by name like the rest of the tree. A file shows its size and the time of its last change (local time); the tooltip has the full path, the size in bytes and the time in UTC.
-- Lazy: a folder lists its own level when you expand it, never the levels below.
+- Lazy: a folder lists its own level when you expand it, never the levels below. Only the import commands go further, down one path of subfolders ([Files in subfolders](#files-in-subfolders)).
 - A folder shows at most 1000 entries. A message node after them says how many more there are. aantje counts up to 10,000 entries of a level; beyond, the message says "more than".
 - **Refresh** on Files, a root or a folder lists that part again, without opening the catalog again. The folder does not follow the snapshot that the tree shows: it lists the storage as it is now.
 
@@ -102,8 +102,9 @@ DuckDB's `glob()` lists files, not folders, and on S3 even `glob('s3://bucket/*'
 | **Copy Path**                               | a root, a folder, a file                 |
 | **Script as Import into New Table...**      | a root, a folder, a file of a kind below |
 | **Script as Insert into Existing Table...** | a root, a folder, a file of a kind below |
+| **Inspect Parquet File**                    | a `.parquet` file                        |
 
-The kinds of file that get the import entries (the letter case of the name does not matter); other files get Copy Path only:
+The kinds of file that get the import entries (the letter case of the name does not matter); other files get Copy Path only. A Parquet file also gets **Inspect Parquet File**, which opens its footer in the [Parquet inspector](parquet-inspector.md):
 
 | Kind     | Ends with                                     | Reader                                                           |
 | -------- | --------------------------------------------- | ---------------------------------------------------------------- |
@@ -137,6 +138,48 @@ SELECT * FROM read_parquet('s3://bucket/exports/*.parquet', union_by_name = true
 
 Excel files are imported one file at a time: `read_xlsx` reads a single file, and given a glob it reads only the first match.
 
+### Files in subfolders
+
+Lakes and exports often keep their files in subfolders, mostly as Hive partitions with the value in the name: `sales/year=2026/month=09/part-0.parquet`, `loads/load_date=2026-09-01/data.parquet`. When the level of a folder holds no CSV, Parquet or JSON file but subfolders (files of no kind beside them, such as `_SUCCESS`, do not count), both commands look below it:
+
+- aantje goes down the first subfolder of each level, in the order of the tree, until a level holds such files; at most 8 levels of subfolders. It lists that one path with the tree's listing, not every folder of the lake, and judges a level by the entries the tree shows (at most 1000).
+- It never goes into a folder whose name starts with `_` or `.`: by the convention of Spark and Hadoop such a folder holds metadata or a write in progress (`_delta_log`, `_temporary`, `.spark-staging`). These folders count for nothing, so a level that holds only them has no subfolders.
+- A level whose other listed subfolders are all named `key=value` with the same key is a Hive level, also with a `_delta_log` beside them; any other level is a plain one.
+- A listing that the storage refuses stops the command with its error. Without such files within the 8 levels a message says so, and nothing opens.
+
+Then it asks, in the command palette:
+
+1. Whether to import all files below the folder; the question names the levels by the folders it went into (`year=2026 / month=09`). Escape cancels.
+2. The kind, when the files of that level are of several kinds.
+3. For each level, the column that keeps its folder names: proposed are the key of a Hive level (`year`, `load_date`) and `folder` for a plain level (`folder_1`, `folder_2` when there are several). Escape or an empty name cancels; the column of an earlier level is refused.
+4. The schema and name of the new table (proposed: the name of the folder), or the table to insert into, as above.
+
+The script reads all files of the kind at that depth through one glob with one part per level, so that it takes in the other subfolders of the same depth too, and keeps `union_by_name = true`. The part of a Hive level names its key, `year=*/` (the key escaped like a path), so it reads the folders of that key and no other folder of the level. The part of a plain level is `[!_.]*/`: `[!_.]` is one character that is neither `_` nor `.`, as in DuckDB's GLOB, so it reads every folder but those of metadata. When every level is a Hive level, each with a key of its own, DuckDB reads the folder names itself (`hive_partitioning = true`): it adds the keys as columns after the columns of the files, in the order of their names, and types the values (`hive_types_autocast`: `2026` becomes a `BIGINT`, `2026-09-01` a `DATE`, `09` stays text). A column named other than its key is renamed:
+
+```sql
+-- Reads all files of the pattern in the subfolders 2 levels down, but no folder whose name starts with _ or a dot.
+-- DuckDB makes the key of each level a column and types its values (hive_partitioning).
+CREATE TABLE "main"."sales" AS
+SELECT * RENAME ("month" AS "sales_month") FROM read_parquet('s3://bucket/sales/year=*/month=*/*.parquet', union_by_name = true, hive_partitioning = true);
+```
+
+With a plain level among them, or two levels with the same key, each column takes its value from the path of the file, counted from its end (`filename = true`, and `hive_partitioning = false`, so that DuckDB adds no column of its own). A Hive level among plain ones gives the value without its key, decoded as DuckDB decodes a Hive folder. These values are text; cast them in the script where you want another type:
+
+```sql
+-- Reads all files of the pattern in the subfolders 2 levels down, but no folder whose name starts with _ or a dot.
+-- The column of each level takes the folder names from the path of the file, as text.
+CREATE TABLE "main"."exports" AS
+SELECT
+  * EXCLUDE (filename),
+  url_decode(regexp_replace(parse_path(filename)[-3], '^[^=]*=', '')) AS "region",
+  parse_path(filename)[-2] AS "folder"
+FROM read_csv('s3://bucket/exports/region=*/[!_.]*/*.csv', union_by_name = true, hive_partitioning = false, filename = true);
+```
+
+- A file with a column `filename` of its own needs another name for the path: DuckDB says so; write `filename = '<name>'` and that name in place of `filename` in the `SELECT`.
+- **Script as Insert into Existing Table...** adds the rows by column name, as above, so the table needs the columns of the levels.
+- A subfolder of a Hive level with another key, or with a plain name, is not read: the walk saw only the subfolders of one folder per level.
+
 Every script opens as a new, unsaved SQL document bound to the connection. Nothing runs: you check, edit and run it. The import copies the rows; the source file stays as it is. The SQL editor's session may install and load `excel` itself (`INSTALL` needs the network once, or an extension directory that holds it), on a local file as on S3 or Azure.
 
 ## Safety
@@ -144,8 +187,8 @@ Every script opens as a new, unsaved SQL document bound to the connection. Nothi
 File and folder names are data of whoever writes to the storage.
 
 - A label shows the name as text (`visibleLine`: no control or format character, white space on one line); pickers show names through `pickerLabel`, the status bar through `withoutIcons`; tooltips put the path in a code span.
-- In a script a path is only a quoted literal (`quoteLiteral`). In a single-file script the glob characters of the path are escaped (`escapeGlob`: `*`, `?` and `[` become `[*]`, `[?]` and `[[]`), so `a*b.csv` reads exactly that file and not `axb.csv`. A folder pattern escapes the folder the same way.
-- The proposed table name is a quoted identifier; no name of a file or folder appears in a comment of a script.
+- In a script a path is only a quoted literal (`quoteLiteral`). In a single-file script the glob characters of the path are escaped (`escapeGlob`: `*`, `?` and `[` become `[*]`, `[?]` and `[[]`), so `a*b.csv` reads exactly that file and not `axb.csv`. A folder pattern escapes the folder the same way, and the key of a Hive level in it.
+- The proposed table name is a quoted identifier, and so are the key of a Hive folder and the column of a level (`quoteIdentifier`); no name of a file or folder appears in a comment of a script.
 - A local root lists only below itself: the folder and each link in it are resolved, and a folder or link that resolves outside the root is not listed.
 
 ## Not in this feature

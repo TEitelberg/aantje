@@ -1,5 +1,5 @@
 import { CLEANUP_OVERDUE_DAYS, SMALL_FILES } from '../catalog/thresholds';
-import { capRows, code, markdownTable, reportTitle } from '../markdown';
+import { capRows, code, markdownTable, reportHeadingLine } from '../markdown';
 import { GROWTH_MERGED_NOTE, growthLabel, growthTime } from '../shell/file-growth';
 import { approximateCount, count, files, formatBytes, plural, tableLabel } from '../shell/model';
 import { expirableLine, expirableNote, scheduledLine, scheduledNote } from '../shell/scheduled-text';
@@ -50,7 +50,7 @@ export function storageMarkdown(data: StorageData, view?: StorageView): string {
   const leftOut = data.tableCount - data.tables.length;
   const candidates = capRows(mergeCandidates(matching), MARKDOWN_TABLES);
   return [
-    reportTitle('Storage of', data.connection, scopeSchema(data.scope)),
+    reportHeadingLine('Storage Report', data.connection, scopeSchema(data.scope)),
     '',
     data.scope.kind === 'schema'
       ? `The tables of the schema ${code(data.scope.name)}: the files, rows and growth are the schema's. ${LAKE_WIDE_NOTE} Files that are visible at the shown snapshot; the figures of a table cover its data files and delete files.`

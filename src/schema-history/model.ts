@@ -1,7 +1,7 @@
 import type { ColumnInfo, SchemaHistory, SchemaVersion, SnapshotId } from '../catalog/model';
 import { diffColumns } from '../catalog/schema-diff';
 import type { ColumnChange } from '../catalog/schema-diff';
-import { formatUtc, tableLabel } from '../shell/model';
+import { shortUtcMinutes, tableLabel } from '../shell/model';
 
 /** The kinds of `diffColumns`; `removed` is labelled Dropped. */
 export type CellKind = ColumnChange['change'];
@@ -28,7 +28,7 @@ export const SCHEMA_HISTORY_KIND_LABEL: Readonly<Record<CellKind, string>> = {
   moved: 'Moved',
 };
 
-// A sign in front of the cell text, so that the kind of change does not depend on colour.
+// A sign in front of the text of a change, so that the kind of change does not depend on colour.
 const KIND_SYMBOL: Readonly<Record<CellKind, string>> = {
   added: '+',
   removed: '−',
@@ -82,6 +82,24 @@ interface HistorySnapshot {
   readonly exists: boolean;
 }
 
+/** A column as a version of the table has it: names, type, nullability, default, comment and place among its siblings. */
+export interface ColumnState {
+  readonly name: string;
+  readonly type: string;
+  readonly nullable: boolean;
+  readonly defaultValue: string | null;
+  readonly comment: string | null;
+  readonly parent: number | null;
+  /** Among the fields of the same parent, from 0. */
+  readonly index: number;
+}
+
+interface StateChange {
+  readonly snapshot: SnapshotId;
+  /** Null when the column is gone after the snapshot. */
+  readonly state: ColumnState | null;
+}
+
 // A renamed column is one row.
 interface HistoryColumn {
   readonly id: number;
@@ -93,6 +111,8 @@ interface HistoryColumn {
   /** Null when the column or the table is dropped. */
   readonly now: string | null;
   readonly cells: readonly HistoryCell[];
+  /** Oldest first: the state after the first version read and after every version that changed it. */
+  readonly states: readonly StateChange[];
 }
 
 /** What the extension reads and posts to the page; the page computes everything else. */
@@ -106,6 +126,8 @@ export interface SchemaHistoryData {
   readonly exists: boolean;
   /** The table has older versions that were not read. */
   readonly more: boolean;
+  /** With `more`: the oldest version read, which shows no change of its own but can be compared from. */
+  readonly start: { readonly id: SnapshotId; readonly time: string | null; readonly exists: boolean } | null;
   /** Oldest first. */
   readonly snapshots: readonly HistorySnapshot[];
   /** Table order of the newest version; nested fields follow their parent, dropped columns keep their place. */
@@ -168,6 +190,29 @@ function tableEvent(
     : [];
 }
 
+/** Every column of a version by id, with its state. */
+function statesOf(
+  columns: readonly ColumnInfo[],
+  parent: number | null = null,
+  into = new Map<number, ColumnState>(),
+): Map<number, ColumnState> {
+  columns.forEach((column, index) => {
+    const { name, type, nullable, defaultValue, comment } = column;
+    into.set(column.id, { name, type, nullable, defaultValue, comment, parent, index });
+    statesOf(column.children, column.id, into);
+  });
+  return into;
+}
+
+const sameState = (a: ColumnState, b: ColumnState): boolean =>
+  a.name === b.name &&
+  a.type === b.type &&
+  a.nullable === b.nullable &&
+  a.defaultValue === b.defaultValue &&
+  a.comment === b.comment &&
+  a.parent === b.parent &&
+  a.index === b.index;
+
 /** Diffs schema versions by column id, so a rename stays one row; with `more`, the oldest version shows no change. */
 export function buildHistory(
   connection: string,
@@ -180,12 +225,14 @@ export function buildHistory(
   const types = new Map<number, string>();
   const order = new Map<number | null, number[]>();
   const cells = new Map<number, HistoryCell[]>();
+  const states = new Map<number, StateChange[]>();
   const snapshots: HistorySnapshot[] = [];
   let before: { columns: readonly ColumnInfo[]; table: SchemaVersion['table']; snapshot: SnapshotId } = {
     columns: [],
     table: null,
     snapshot: -1,
   };
+  let beforeStates = new Map<number, ColumnState>();
 
   const note = (columns: readonly ColumnInfo[], parent: number | null): void => {
     const siblings = order.get(parent) ?? [];
@@ -205,8 +252,28 @@ export function buildHistory(
     }
   };
 
+  // The state of a column changes only where a version changes it: those are the points to keep.
+  const noteStates = (snapshot: SnapshotId, now: Map<number, ColumnState>): void => {
+    const keep = (id: number, state: ColumnState | null): void => {
+      states.set(id, [...(states.get(id) ?? []), { snapshot, state }]);
+    };
+    for (const [id, state] of now) {
+      const was = beforeStates.get(id);
+      if (!was || !sameState(was, state)) {
+        keep(id, state);
+      }
+    }
+    for (const id of beforeStates.keys()) {
+      if (!now.has(id)) {
+        keep(id, null);
+      }
+    }
+    beforeStates = now;
+  };
+
   history.versions.forEach((version, index) => {
     note(version.columns, null);
+    noteStates(version.snapshot, statesOf(version.columns));
     if (!(index === 0 && history.more)) {
       const events = tableEvent(before.table, version.table);
       const changes = version.table ? diffColumns(before.columns, version.columns) : [];
@@ -231,16 +298,10 @@ export function buildHistory(
     before = { columns: version.columns, table: version.table, snapshot: version.snapshot };
   });
 
+  const first = history.versions[0];
   const newest = history.versions.at(-1)?.table ?? null;
   const lastName = history.versions.findLast((version) => version.table)?.table ?? null;
-  const present = new Set<number>();
-  const collect = (columns: readonly ColumnInfo[]): void => {
-    for (const column of columns) {
-      present.add(column.id);
-      collect(column.children);
-    }
-  };
-  collect(history.versions.at(-1)?.columns ?? []);
+  const present = new Set(statesOf(history.versions.at(-1)?.columns ?? []).keys());
 
   const rows: HistoryColumn[] = [];
   const walk = (parent: number | null, path: readonly string[]): void => {
@@ -257,6 +318,7 @@ export function buildHistory(
         formerNames: [...new Set(all)].filter((candidate) => candidate !== name),
         now: present.has(id) ? (types.get(id) ?? null) : null,
         cells: cells.get(id) ?? [],
+        states: states.get(id) ?? [],
       });
       walk(id, [...path, name]);
     }
@@ -271,66 +333,10 @@ export function buildHistory(
     latest,
     exists: newest !== null,
     more: history.more,
+    start:
+      history.more && first ? { id: first.snapshot, time: first.time, exists: first.table !== null } : null,
     snapshots,
     columns: rows,
-  };
-}
-
-interface Filter {
-  readonly kinds: readonly CellKind[];
-  /** Part of any name the column had, case-insensitive; empty for all. */
-  readonly text: string;
-  /** Both ends included; undefined for all. */
-  readonly range?: { readonly from: SnapshotId; readonly to: SnapshotId };
-}
-
-interface ViewRow {
-  readonly column: HistoryColumn;
-  readonly cells: readonly HistoryCell[];
-}
-
-export interface SchemaHistoryView {
-  /** Oldest first. */
-  readonly snapshots: readonly HistorySnapshot[];
-  readonly rows: readonly ViewRow[];
-  readonly omittedRows: number;
-}
-
-/** Rows that match the text and keep a change, with their parents, and snapshots with a cell or table event. */
-export function schemaHistoryViewOf(data: SchemaHistoryData, filter: Filter): SchemaHistoryView {
-  const kinds = new Set(filter.kinds);
-  const { range } = filter;
-  const inRange = (id: SnapshotId): boolean => !range || (id >= range.from && id <= range.to);
-  const narrowed = kinds.size < CELL_KINDS.length || data.snapshots.some(({ id }) => !inRange(id));
-  const text = filter.text.trim().toLowerCase();
-  const leftIn = (column: HistoryColumn): HistoryCell[] =>
-    column.cells.filter((cell) => kinds.has(cell.kind) && inRange(cell.snapshot));
-  const wanted = data.columns.filter(
-    (column) =>
-      (text === '' ||
-        [column.path.at(-1) ?? '', ...column.formerNames].some((name) =>
-          name.toLowerCase().includes(text),
-        )) &&
-      (!narrowed || leftIn(column).length > 0),
-  );
-  const included = new Set<number>();
-  const byId = new Map(data.columns.map((column) => [column.id, column]));
-  for (const column of wanted) {
-    let at: HistoryColumn | undefined = column;
-    while (at && !included.has(at.id)) {
-      included.add(at.id);
-      at = at.parent === null ? undefined : byId.get(at.parent);
-    }
-  }
-  const inOrder = data.columns.filter((column) => included.has(column.id));
-  const rows = inOrder.slice(0, MAX_ROWS).map((column): ViewRow => ({ column, cells: leftIn(column) }));
-  const withCells = new Set(rows.flatMap((row) => row.cells.map((cell) => cell.snapshot)));
-  return {
-    snapshots: data.snapshots.filter(
-      ({ id, events }) => inRange(id) && (withCells.has(id) || events.length > 0),
-    ),
-    rows,
-    omittedRows: inOrder.length - rows.length,
   };
 }
 
@@ -351,41 +357,172 @@ export function columnLabel(column: HistoryColumn): string {
     : `${column.path.join('.')} (formerly ${column.formerNames.join(', ')})`;
 }
 
-export interface SchemaHistoryDetail {
-  readonly snapshot: HistorySnapshot;
-  readonly timeText: string;
-  readonly changes: readonly {
-    readonly columnId: number;
-    readonly column: string;
-    readonly kind: CellKind;
-    readonly text: string;
-  }[];
-  readonly previous: SnapshotId | null;
-  readonly hasLatest: boolean;
+/** A snapshot that a comparison can start or end at. */
+export interface ComparePoint {
+  readonly id: SnapshotId;
+  /** ISO 8601 in UTC; null for an expired snapshot and for the newest snapshot of the catalog, whose time is not read. */
+  readonly time: string | null;
+  /** Whether the table exists after the snapshot. */
+  readonly exists: boolean;
+  /** The newest snapshot of the catalog, newer than every change of the table. */
+  readonly latest: boolean;
 }
 
-export function schemaHistoryDetailOf(
-  data: SchemaHistoryData,
-  id: SnapshotId,
-): SchemaHistoryDetail | undefined {
-  const snapshot = data.snapshots.find((candidate) => candidate.id === id);
-  if (!snapshot) {
-    return undefined;
-  }
-  return {
-    snapshot,
-    timeText: snapshot.time === null ? 'expired' : formatUtc(snapshot.time),
-    changes: data.columns.flatMap((column) =>
-      column.cells
-        .filter((cell) => cell.snapshot === id)
-        .map((cell) => ({
-          columnId: column.id,
-          column: column.path.join('.'),
-          kind: cell.kind,
-          text: cell.text,
-        })),
-    ),
-    previous: snapshot.exists ? snapshot.previous : null,
-    hasLatest: snapshot.exists && data.exists && id < data.latest,
-  };
+/**
+ * The snapshots a comparison can start and end at, oldest first: the oldest version read when older ones were not read,
+ * every snapshot that changed the schema, and the newest snapshot of the catalog when it is newer and the table exists.
+ */
+export function comparePoints(data: SchemaHistoryData): ComparePoint[] {
+  const newest = data.snapshots.at(-1)?.id ?? data.start?.id ?? -1;
+  return [
+    ...(data.start ? [{ ...data.start, latest: false }] : []),
+    ...data.snapshots.map(({ id, time, exists }) => ({ id, time, exists, latest: false })),
+    ...(data.exists && data.latest > newest
+      ? [{ id: data.latest, time: null, exists: true, latest: true }]
+      : []),
+  ];
 }
+
+/** `@30 · 2026-10-30 12:43 UTC`, `@30 · expired`, `@56 · latest`: a snapshot with the time it was made. */
+export const pointText = (point: ComparePoint): string =>
+  `@${point.id} · ${point.time !== null ? `${shortUtcMinutes(point.time)} UTC` : point.latest ? 'latest' : 'expired'}`;
+
+/** The state of a column at a snapshot: undefined before it was added, null after it was dropped. */
+export function stateAt(column: HistoryColumn, snapshot: SnapshotId): ColumnState | null | undefined {
+  return column.states.findLast((change) => change.snapshot <= snapshot)?.state;
+}
+
+/** The columns of the table at a snapshot, as a version has them: nested, in the order of their places. */
+function columnsAt(data: SchemaHistoryData, snapshot: SnapshotId): ColumnInfo[] {
+  const present = data.columns.flatMap((column) => {
+    const state = stateAt(column, snapshot);
+    return state ? [{ id: column.id, state }] : [];
+  });
+  const build = (parent: number | null): ColumnInfo[] =>
+    present
+      .filter(({ state }) => state.parent === parent)
+      .toSorted((a, b) => a.state.index - b.state.index)
+      .map(({ id, state }) => ({
+        id,
+        name: state.name,
+        type: state.type,
+        nullable: state.nullable,
+        defaultValue: state.defaultValue,
+        comment: state.comment,
+        children: build(id),
+      }));
+  return build(null);
+}
+
+interface CompareFilter {
+  readonly from: SnapshotId;
+  readonly to: SnapshotId;
+  readonly kinds: readonly CellKind[];
+  /** Part of any name the column had, regardless of case; empty for all. */
+  readonly text: string;
+}
+
+export interface CompareRow {
+  readonly column: HistoryColumn;
+  /** Undefined or null where the column was not there. */
+  readonly from: ColumnState | null | undefined;
+  readonly to: ColumnState | null | undefined;
+  /** What changed from the one snapshot to the other, as the cells of a change say it. */
+  readonly changes: readonly { readonly kind: CellKind; readonly text: string }[];
+}
+
+export interface CompareView {
+  readonly rows: readonly CompareRow[];
+  readonly omittedRows: number;
+}
+
+/**
+ * The columns that the table had at one of the two snapshots, each with its state at both and what changed between
+ * them, as Compare Table at Two Snapshots reads it. While a kind is switched off, only the columns with a change of a
+ * chosen kind are left; a field that the text names brings its parents.
+ */
+export function compareViewOf(data: SchemaHistoryData, filter: CompareFilter): CompareView {
+  const kinds = new Set(filter.kinds);
+  const narrowed = kinds.size < CELL_KINDS.length;
+  const text = filter.text.trim().toLowerCase();
+  const changes = new Map<number, { kind: CellKind; text: string }[]>();
+  for (const change of diffColumns(columnsAt(data, filter.from), columnsAt(data, filter.to))) {
+    changes.set(change.id, [
+      ...(changes.get(change.id) ?? []),
+      { kind: change.change, text: cellText(change) },
+    ]);
+  }
+  const rowOf = (column: HistoryColumn): CompareRow => ({
+    column,
+    from: stateAt(column, filter.from),
+    to: stateAt(column, filter.to),
+    changes: (changes.get(column.id) ?? []).filter((change) => kinds.has(change.kind)),
+  });
+  const wanted = data.columns.filter((column) => {
+    const row = rowOf(column);
+    return (
+      Boolean(row.from ?? row.to) &&
+      (text === '' ||
+        [column.path.at(-1) ?? '', ...column.formerNames].some((name) =>
+          name.toLowerCase().includes(text),
+        )) &&
+      (!narrowed || row.changes.length > 0)
+    );
+  });
+  const included = new Set<number>();
+  const byId = new Map(data.columns.map((column) => [column.id, column]));
+  for (const column of wanted) {
+    let at: HistoryColumn | undefined = column;
+    while (at && !included.has(at.id)) {
+      included.add(at.id);
+      at = at.parent === null ? undefined : byId.get(at.parent);
+    }
+  }
+  const inOrder = data.columns.filter((column) => included.has(column.id));
+  return { rows: inOrder.slice(0, MAX_ROWS).map(rowOf), omittedRows: Math.max(inOrder.length - MAX_ROWS, 0) };
+}
+
+/** `varchar NOT NULL DEFAULT 'x' · comment: y`, with the name in front where it is not the name of the row. */
+export function stateText(state: ColumnState, rowName: string): string {
+  return [
+    state.name === rowName ? '' : `${state.name}: `,
+    state.type,
+    state.nullable ? '' : ' NOT NULL',
+    state.defaultValue === null ? '' : ` DEFAULT ${state.defaultValue}`,
+    state.comment === null ? '' : ` · comment: ${state.comment}`,
+  ].join('');
+}
+
+/** A column of Search Changes: every column the table had, once each, named as it is now or was last. */
+export interface ColumnChoice {
+  readonly id: number;
+  readonly label: string;
+}
+
+export const columnChoices = (data: SchemaHistoryData): ColumnChoice[] =>
+  data.columns.map((column) => ({
+    id: column.id,
+    label: column.now === null && data.exists ? `${columnLabel(column)} (dropped)` : columnLabel(column),
+  }));
+
+export interface ColumnHistoryRow {
+  readonly snapshot: HistorySnapshot;
+  readonly kind: CellKind;
+  readonly text: string;
+}
+
+/** Every change of one column, newest first; only the snapshots that changed it. */
+export function columnHistoryOf(data: SchemaHistoryData, columnId: number): ColumnHistoryRow[] {
+  const cells = data.columns.find((column) => column.id === columnId)?.cells ?? [];
+  // Newest snapshot first; the changes of one snapshot keep their order.
+  return cells
+    .flatMap((cell) => {
+      const snapshot = data.snapshots.find((candidate) => candidate.id === cell.snapshot);
+      return snapshot ? [{ snapshot, kind: cell.kind, text: cell.text }] : [];
+    })
+    .toSorted((a, b) => b.snapshot.id - a.snapshot.id);
+}
+
+/** The snapshots between two snapshots that changed the schema, newest first: the later one included, the earlier not. */
+export const snapshotsBetween = (data: SchemaHistoryData, a: SnapshotId, b: SnapshotId): HistorySnapshot[] =>
+  data.snapshots.filter(({ id }) => id > Math.min(a, b) && id <= Math.max(a, b)).toReversed();

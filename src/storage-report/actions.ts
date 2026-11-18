@@ -3,6 +3,7 @@ import type { StorageAction } from './protocol';
 
 type StoragePlan =
   | { readonly action: 'showStatistics' | 'revealTable'; readonly table: StorageTable }
+  | { readonly action: 'inspectFiles'; readonly table: StorageTable }
   | { readonly action: 'script'; readonly kind: 'merge' | 'rewrite'; readonly table: StorageTable }
   | { readonly action: 'script'; readonly kind: 'cleanup' | 'expire' }
   | { readonly action: 'showProperties' };
@@ -21,11 +22,16 @@ export function planStorageAction(data: StorageData, message: StorageAction): St
       if (!table) {
         return undefined;
       }
-      return message.action === 'scriptMerge'
-        ? { action: 'script', kind: 'merge', table }
-        : message.action === 'scriptRewrite'
-          ? { action: 'script', kind: 'rewrite', table }
-          : { action: message.action, table };
+      switch (message.action) {
+        case 'scriptMerge':
+          return { action: 'script', kind: 'merge', table };
+        case 'scriptRewrite':
+          return { action: 'script', kind: 'rewrite', table };
+        case 'inspectFiles':
+          return { action: 'inspectFiles', table };
+        default:
+          return { action: message.action, table };
+      }
     }
   }
 }

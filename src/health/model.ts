@@ -38,6 +38,11 @@ export interface HealthRequest {
   readonly depth: 'quick' | 'deep';
   /** The snapshot the user looks at. It only names the table of a table scope (a schema is named at the newest snapshot); checks read the newest snapshot. */
   readonly snapshot: SnapshotId;
+  /**
+   * The snapshot whose state is checked instead of the newest: its files in the store and their footers, and the
+   * catalog rows it uses. Maintenance debts are those of the newest state and are left out.
+   */
+  readonly at?: SnapshotId;
   readonly limits?: Partial<HealthLimits>;
 }
 
@@ -63,6 +68,8 @@ export const CHECKS = {
   'catalog.files-without-size': { group: 'catalog', severities: ['warning'] },
   'catalog.snapshot-range-invalid': { group: 'catalog', severities: ['error'] },
   'catalog.row-ids-overlap': { group: 'catalog', severities: ['error'] },
+  'catalog.ids-never-allocated': { group: 'catalog', severities: ['error'] },
+  'catalog.rows-without-table': { group: 'catalog', severities: ['error'] },
   'catalog.cleanup-overdue': { group: 'catalog', severities: ['warning'] },
   'catalog.cleanup-pending': { group: 'catalog', severities: ['info'] },
   'catalog.small-files': { group: 'catalog', severities: ['info', 'warning'] },

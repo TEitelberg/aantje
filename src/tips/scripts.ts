@@ -1,6 +1,7 @@
 // The script of the sort-order tip. Names are quoted identifiers and never appear in a comment.
 import { quoteIdentifier } from '../catalog/ddl';
 import { LAKE } from '../data/attach';
+import { commitMessageLine } from '../sql/commit-message';
 import { HEADER, tableScript } from '../maintenance/scripts';
 import type { DeletedFiles } from '../catalog/model';
 import { count, formatBytes } from '../shell/model';
@@ -28,6 +29,7 @@ export function sortScript(
     `-- Run it in a read/write SQL session.`,
     `ALTER TABLE ${name} SET SORTED BY (${quoteIdentifier(column)});`,
     'BEGIN TRANSACTION;',
+    commitMessageLine(`Sort order of ${name} by ${quoteIdentifier(column)}`),
     `SET VARIABLE aantje_snapshot = (SELECT id FROM ${LAKE}.current_snapshot());`,
     `DELETE FROM ${name};`,
     `INSERT INTO ${name} SELECT * FROM ${name} AT (VERSION => getvariable('aantje_snapshot'));`,

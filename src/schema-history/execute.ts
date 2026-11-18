@@ -6,7 +6,7 @@ import type { SchemaHistoryPlan } from './actions';
 
 const GOAL = 'use the schema history';
 
-/** The actions on a snapshot are those of the reports of snapshots; the ALTER template opens in a SQL editor without running. */
+/** Compare Schema is that of the reports of snapshots; the ALTER template opens in a SQL editor without running. */
 export async function performSchemaHistoryAction(plan: SchemaHistoryPlan, port: ReportPort): Promise<void> {
   if (plan.action !== 'scriptAlter') {
     await performSnapshotAction(plan, port, GOAL);

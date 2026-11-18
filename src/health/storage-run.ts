@@ -85,6 +85,7 @@ function compareListing(
     ...(cut ? { cutAfter: kept.at(-1)?.key ?? '' } : {}),
     names: catalog.names,
     latest: catalog.latest,
+    ...(ctx.request.at === undefined ? {} : { at: ctx.request.at }),
     now: ctx.now(),
     limit: ctx.limits.findingsPerCheck,
     caseInsensitive:

@@ -7,23 +7,53 @@ const KIND_CSS = Object.entries(KIND_VARIABLES)
   .map(([kind, [variable, fallback]]) => `.kind-${kind} { background: var(${variable}, ${fallback}); }`)
   .join('\n');
 
-/** The only stylesheet of the grid. It is inlined into the page (with the CSP nonce) and uses the theme variables of VS Code. */
+/** The width of every data column of a grid; a longer text is cut with an ellipsis and has a tooltip. */
+const COLUMN_PX = 200;
+
+/**
+ * The only stylesheet of the grid. It is inlined into the page (with the CSP nonce) and uses the theme variables of VS
+ * Code and, for the statistics of the columns and a pressed button, the colours of aantje of the shell (LAYOUT_CSS).
+ */
 export const GRID_CSS = `${LAYOUT_CSS}
 .app { height: 100%; }
-.toolbar { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-bottom: 1px solid var(--vscode-panel-border); }
-.toolbar button, .err button { padding: 2px 10px; color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); border: 1px solid var(--vscode-button-border, transparent); border-radius: 2px; cursor: pointer; font: inherit; }
-.toolbar button:hover, .err button:hover { background: var(--vscode-button-secondaryHoverBackground); }
-.toolbar button:focus-visible, .err button:focus-visible, .tab:focus-visible, input:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
-.status { margin-left: auto; color: var(--vscode-descriptionForeground); }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; padding: 4px 8px; border-bottom: 1px solid var(--vscode-panel-border); }
+.tool-group { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.toolbar button { white-space: nowrap; }
+.toolbar button:not(.icon), .err button, .chart-choices button, .chart-note button, .stats-line button { padding: 2px 10px; color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); border: 1px solid var(--vscode-button-border, transparent); border-radius: 2px; cursor: pointer; font: inherit; }
+.toolbar button:not(.icon):hover, .err button:hover, .chart-choices button:hover, .chart-note button:hover, .stats-line button:hover { background: var(--vscode-button-secondaryHoverBackground); }
+.toolbar button:focus-visible, .err button:focus-visible, .tab:focus-visible, input:focus-visible, select:focus-visible, summary:focus-visible, .chart-choices button:focus-visible, .chart-note button:focus-visible, .stats-line button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+button:disabled { opacity: 0.5; cursor: default; }
+.status { margin-left: auto; color: var(--vscode-descriptionForeground); white-space: nowrap; }
+.toolbar button.tool-icon { display: inline-flex; align-items: center; justify-content: center; padding: 3px 6px; line-height: 0; }
+.toolbar button.tool-icon svg { display: block; flex: none; }
+.toolbar button.tool-icon[aria-pressed="true"], .toolbar button.tool-icon[aria-pressed="true"]:hover { color: var(--aantje-on-selected); background: var(--aantje-selected); border-color: var(--aantje-selected); }
+.stats-line { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; padding: 3px 8px; color: var(--vscode-descriptionForeground); border-bottom: 1px solid var(--vscode-panel-border); }
+.stats-line[hidden] { display: none; }
+.stats-line button { padding: 1px 8px; }
 .scroll { flex: 1; min-height: 0; overflow: auto; scroll-padding-top: 4.5em; }
 table { border-collapse: separate; border-spacing: 0; font-family: var(--vscode-editor-font-family); font-size: var(--vscode-editor-font-size); }
 th, td { padding: 2px 8px; border-right: 1px solid var(--vscode-panel-border); border-bottom: 1px solid var(--vscode-panel-border); white-space: nowrap; }
 thead th { position: sticky; top: 0; z-index: 1; padding-top: 4px; text-align: left; font-weight: normal; background: var(--vscode-editorGroupHeader-tabsBackground, var(--vscode-editor-background)); user-select: none; }
+table.grid thead { position: sticky; top: 0; z-index: 1; }
+table.grid thead th { position: static; }
+table.grid thead th, table.grid thead td { background: var(--vscode-editorGroupHeader-tabsBackground, var(--vscode-editor-background)); }
+table.grid th, table.grid td { box-sizing: border-box; width: ${COLUMN_PX}px; min-width: ${COLUMN_PX}px; max-width: ${COLUMN_PX}px; overflow: hidden; text-overflow: ellipsis; }
+table.grid .rn { box-sizing: content-box; width: auto; min-width: 0; max-width: none; }
+table.grid .mk { box-sizing: content-box; width: 1.5em; min-width: 1.5em; max-width: 1.5em; }
 thead th button { display: block; width: 100%; padding: 0; color: inherit; background: none; border: 0; font: inherit; text-align: left; cursor: pointer; }
-.name { font-weight: bold; }
-.type { margin-left: 6px; color: var(--vscode-descriptionForeground); }
-.mark { margin-left: 6px; }
+.head { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+thead th button.head { display: flex; }
+.head .name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: bold; }
+.head .type { flex: 0 1000 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--vscode-descriptionForeground); }
+.head .mark { flex: none; }
 thead input { display: block; box-sizing: border-box; width: 100%; min-width: 6em; margin: 4px 0; padding: 1px 4px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, transparent); font: inherit; }
+tr.stats td { vertical-align: top; padding-top: 4px; padding-bottom: 4px; font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); white-space: normal; }
+tr.stats[hidden] { display: none; }
+svg.spark, div.spark { display: block; width: 100%; height: 28px; margin-bottom: 4px; }
+svg.spark rect { fill: var(--aantje-navy); }
+dl.facts { display: grid; grid-template-columns: 4.5em minmax(0, 1fr); column-gap: 8px; row-gap: 1px; margin: 0; }
+dl.facts dt { color: var(--vscode-descriptionForeground); white-space: nowrap; }
+dl.facts dd { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 td { max-width: 40em; overflow: hidden; text-overflow: ellipsis; }
 td.rn, th.rn { text-align: right; color: var(--vscode-descriptionForeground); }
 td.num { text-align: right; }
@@ -52,7 +82,6 @@ body.vscode-high-contrast tr[class^="chg-update"] td, body.vscode-high-contrast-
 .tabbar .open:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
 .tabbar .open[hidden] { display: none; }
 .pane, .result { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.result > .sql { padding: 4px 8px; border-bottom: 1px solid var(--vscode-panel-border); font-family: var(--vscode-editor-font-family); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .banner { padding: 4px 8px; color: var(--vscode-editorWarning-foreground); border-bottom: 1px solid var(--vscode-panel-border); }
 .plan { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .plan-tools { display: flex; align-items: center; gap: 6px; padding: 3px 8px; border-bottom: 1px solid var(--vscode-panel-border); }
@@ -72,6 +101,19 @@ ${KIND_CSS}
 .profile-chart.flame .chart { width: 100%; min-height: 160px; }
 pre.text { flex: 1; min-height: 0; margin: 0; padding: 6px 8px; overflow: auto; font-family: var(--vscode-editor-font-family), "Cascadia Mono", Consolas, Menlo, "DejaVu Sans Mono", FreeMono, monospace; font-size: var(--vscode-editor-font-size); line-height: 1.2; white-space: pre; user-select: text; tab-size: 4; }
 .messages-view { flex: 1; min-height: 0; overflow: auto; }
+.chart-view { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.chart-choices { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 4px 8px; border-bottom: 1px solid var(--vscode-panel-border); }
+.chart-choices .choice { display: inline-flex; align-items: center; gap: 4px; }
+.chart-choices select, .y-pick summary { padding: 1px 4px; color: var(--vscode-dropdown-foreground); background: var(--vscode-dropdown-background); border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border)); font: inherit; }
+.chart-choices select:disabled { opacity: 0.5; }
+.y-pick { position: relative; }
+.y-pick summary { max-width: 18em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; list-style: none; }
+.y-list { position: absolute; z-index: 2; top: 100%; left: 0; min-width: 12em; max-height: 20em; overflow: auto; padding: 4px; color: var(--vscode-dropdown-foreground); background: var(--vscode-dropdown-background); border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border)); }
+.y-list label { display: flex; align-items: center; gap: 6px; padding: 1px 2px; white-space: nowrap; }
+.chart-note { display: flex; align-items: center; gap: 8px; padding: 4px 8px; color: var(--vscode-descriptionForeground); border-bottom: 1px solid var(--vscode-panel-border); }
+.chart-note[hidden] { display: none; }
+.chart-box { display: flex; flex: 1; min-height: 0; overflow: auto; padding: 4px 8px; }
+.chart-box .result-chart { flex: 1; min-width: 0; }
 ${ICON_BUTTON_CSS}
 div.tips { flex: 1; min-height: 0; overflow: auto; }
 div.tips:focus { outline: none; }

@@ -103,6 +103,7 @@ const isData: Test = isShape({
   depth: isOneOf('quick', 'deep'),
   deepFiles: isDeepFiles,
   status: isOneOf('idle', 'running', 'done', 'cancelled', 'failed'),
+  at: isOptional(isCount),
   snapshot: isOptional(isCount),
   groups: isArrayOf(isStatus),
   progress: isOptional(isShape({ group: isOneOf(...HEALTH_GROUPS), done: isCount, total: isCount })),

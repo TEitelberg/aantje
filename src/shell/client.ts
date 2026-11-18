@@ -16,6 +16,8 @@ declare function acquireVsCodeApi(): {
 
 const vscode = acquireVsCodeApi();
 const app = createApp();
+// The extension writes the webview address of the logo of aantje on the body (`webviewHtml`); the header shows it.
+const logo = document.body.getAttribute('data-logo') ?? undefined;
 
 // The page of this panel: the kind the first usable message named; later messages must match it.
 let shown: { readonly kind: PageKind<unknown>; readonly page: Page<unknown> } | undefined;
@@ -54,6 +56,7 @@ window.addEventListener('message', (event: MessageEvent<unknown>) => {
         post: (request) => vscode.postMessage(request),
         state: { get: () => vscode.getState(), set: (state) => vscode.setState(state) },
         refreshAsked: false,
+        ...(logo === undefined ? {} : { logo }),
       }),
     };
     staleNote.hidden = true;

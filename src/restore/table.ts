@@ -9,6 +9,7 @@ import type { TableState } from '../ddl-script/table-state';
 import { tableSteps, WARNINGS } from '../ddl-script/table-update';
 import type { Step } from '../ddl-script/table-update';
 import { atVersion, newestComment } from '../script';
+import { commitMessageLine } from '../sql/commit-message';
 import { deleteWarning, NOTHING_RUN, snapshotText } from './text';
 
 // Restore Table to Snapshot: DELETE and INSERT ... AT (VERSION => n) in one transaction, so the table keeps its id.
@@ -212,7 +213,10 @@ function transactionLines(input: TableRestore, pairing: Pairing): string[] {
           commented(remove),
           commented(insert),
         ];
-  return ['BEGIN TRANSACTION;', ...body, 'COMMIT;'];
+  const message = commitMessageLine(
+    `Restore of ${commentName(input.now.schemaName, input.now.name)} to snapshot ${input.snapshot.id}`,
+  );
+  return ['BEGIN TRANSACTION;', message, ...body, 'COMMIT;'];
 }
 
 // Renames come after the restore: the INSERT names the columns as they are now.

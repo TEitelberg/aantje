@@ -22,10 +22,6 @@ export function scopeOfNode(ref: NodeRef): ReportScope | undefined {
 export const scopeKey = (connectionId: string, scope: ReportScope): string =>
   JSON.stringify([connectionId, scope.kind === 'schema' ? scope.id : 'lake']);
 
-/** ` · schema shop` after a title; nothing for the lake. */
-export const scopeSuffix = (scope: ReportScope): string =>
-  scope.kind === 'schema' ? ` · schema ${scope.name}` : '';
-
 /** The schema's name for a Markdown title; undefined for the lake. */
 export const scopeSchema = (scope: ReportScope): string | undefined =>
   scope.kind === 'schema' ? scope.name : undefined;

@@ -1,7 +1,10 @@
 import { isMaintenanceAction } from '../catalog/changes';
 import type { CatalogReader, SchemaInfo, SnapshotId, ViewInfo } from '../catalog/model';
 import type { RelationColumn } from '../data/types';
+import { visibleLine as shown } from '../markdown';
 import { byName } from '../order';
+import { filterDescription, folderFilter, ownFilter } from './filter';
+import type { FilteredFolder, Filters } from './filter';
 import { changeDetail, columnTagDetail, partitionDetail, sortDetail, tableTagDetail } from './format';
 import type { TreeDetail } from './format';
 import {
@@ -36,7 +39,12 @@ export interface LevelSource {
   readonly columnsOfView: ViewReader | undefined;
   /** The connection is an Azure DuckLake: its tables and views get context values of their own. */
   readonly azure: boolean;
+  /** The filters of the connection by name; none when empty. */
+  readonly filters: Filters;
 }
+
+/** The command of the message that a filter matches nothing: it clears the filter. */
+export const CLEAR_FILTER = { id: 'aantje.clearTreeFilter', title: 'Clear Filter' } as const;
 
 /** The children of a node below the connection level. */
 export async function readBelow(source: LevelSource, node: TreeNode): Promise<TreeNode[]> {
@@ -55,7 +63,7 @@ export async function readBelow(source: LevelSource, node: TreeNode): Promise<Tr
         folderNode(node, { folder: 'tables', schema, tables: tables.toSorted(byName) }),
         folderNode(node, { folder: 'views', schema, views: views.toSorted(byName) }),
         folderNode(node, { folder: 'macros', schema, macros: macros.toSorted(byName) }),
-      ];
+      ].map((folder) => withFilter(folder, ownFilter(source.filters, folder.ref)));
     }
     case 'folder':
       return readFolder(source, node, ref);
@@ -129,26 +137,68 @@ async function readSnapshot(
   });
 }
 
+/** A node with a filter of its own shows it in its description and with a filter icon. */
+export function withFilter(node: TreeNode, filter: string | undefined): TreeNode {
+  return filter === undefined
+    ? node
+    : { ...node, description: shown(filterDescription(filter)), icon: 'filter' };
+}
+
+/** The objects of a folder that its filter lets through, or the message that there are none or none match. */
+function objectsOf<T extends { readonly name: string }>(
+  { filters }: LevelSource,
+  node: TreeNode,
+  {
+    schemaId,
+    folder,
+    objects,
+    none,
+  }: {
+    readonly schemaId: number;
+    readonly folder: FilteredFolder;
+    readonly objects: readonly T[];
+    readonly none: string;
+  },
+  toNode: (object: T) => TreeNode,
+): TreeNode[] {
+  if (objects.length === 0) return [messageNode(node, none, 'info')];
+  const filter = folderFilter(filters, schemaId, folder);
+  const shownObjects = filter ? objects.filter(({ name }) => filter.matches(name)) : objects;
+  return shownObjects.length > 0
+    ? shownObjects.map(toNode)
+    : [messageNode(node, `No objects match "${filter?.text ?? ''}".`, 'info', CLEAR_FILTER)];
+}
+
 async function readFolder(
-  { reader, snapshot, columnsOfView, azure }: LevelSource,
+  source: LevelSource,
   node: TreeNode,
   ref: Extract<NodeRef, { kind: 'folder' }>,
 ): Promise<TreeNode[]> {
+  const { reader, snapshot, columnsOfView, azure } = source;
   const details = (prefix: string, list: readonly TreeDetail[]): TreeNode[] =>
     list.map((detail, index) => detailNode(node, `${prefix}${index}`, detail));
   switch (ref.folder) {
     case 'tables':
-      return ref.tables.length > 0
-        ? ref.tables.map((table) => tableNode(node, ref.schema, table, azure))
-        : [messageNode(node, 'No tables.', 'info')];
+      return objectsOf(
+        source,
+        node,
+        { schemaId: ref.schema.id, folder: 'tables', objects: ref.tables, none: 'No tables.' },
+        (table) => tableNode(node, ref.schema, table, azure),
+      );
     case 'views':
-      return ref.views.length > 0
-        ? ref.views.map((view) => viewNode(node, ref.schema, view, columnsOfView !== undefined, azure))
-        : [messageNode(node, 'No views.', 'info')];
+      return objectsOf(
+        source,
+        node,
+        { schemaId: ref.schema.id, folder: 'views', objects: ref.views, none: 'No views.' },
+        (view) => viewNode(node, ref.schema, view, columnsOfView !== undefined, azure),
+      );
     case 'macros':
-      return ref.macros.length > 0
-        ? ref.macros.map((macro) => macroNode(node, ref.schema, macro))
-        : [messageNode(node, 'No macros.', 'info')];
+      return objectsOf(
+        source,
+        node,
+        { schemaId: ref.schema.id, folder: 'macros', objects: ref.macros, none: 'No macros.' },
+        (macro) => macroNode(node, ref.schema, macro),
+      );
     case 'columns':
       return ref.columns.map((column) => columnNode(node, ref.schema, ref.table, column, [column.name]));
     case 'viewColumns': {
@@ -171,6 +221,7 @@ async function readFolder(
     case 'statistics':
     case 'history':
     case 'queryHistory':
+    case 'favorites':
     case 'files':
     case 'iceberg':
       return [];

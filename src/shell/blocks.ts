@@ -64,7 +64,7 @@ export function choiceSelect(
 
 interface HeaderSpec {
   readonly title: string;
-  /** Before the title, e.g. the logo of the product that the report is about. */
+  /** In the title before its text, e.g. the logo of the product that the report is about; the logo of aantje comes first. */
   readonly logo?: Element;
   readonly subtitle: string;
   /** Adds Refresh; the text is the screen reader description. */
@@ -83,7 +83,11 @@ export interface Header {
   settle(): void;
 }
 
-/** Title, one-line summary, and the Refresh (if the report can be re-read) and Open as Markdown (if it has one) buttons. */
+/**
+ * The logo of aantje (when the page has its address), the title and the one-line summary below it, and the Refresh
+ * (if the report can be re-read) and Open as Markdown (if it has one) buttons. The logo is decoration: the title next
+ * to it is the heading of the page.
+ */
 export function pageHeader(context: PageContext, spec: HeaderSpec): Header {
   const actions = el('div', 'actions');
   actions.append(...(spec.actions ?? []));
@@ -111,10 +115,21 @@ export function pageHeader(context: PageContext, spec: HeaderSpec): Header {
       ),
     );
   }
-  const element = el('header');
   const title = el('h1', undefined, spec.title);
   if (spec.logo) title.prepend(spec.logo);
-  element.append(title, el('p', 'subtitle', spec.subtitle), actions);
+  const titles = el('div', 'titles');
+  titles.append(title, el('p', 'subtitle', spec.subtitle));
+  const heading = el('div', 'heading');
+  if (context.logo !== undefined) {
+    const logo = el('img', 'aantje-logo');
+    logo.alt = '';
+    logo.setAttribute('aria-hidden', 'true');
+    logo.src = context.logo;
+    heading.append(logo);
+  }
+  heading.append(titles);
+  const element = el('header');
+  element.append(heading, actions);
   return {
     element,
     settle() {
@@ -126,7 +141,11 @@ export function pageHeader(context: PageContext, spec: HeaderSpec): Header {
   };
 }
 
-/** Key figures; a severity colours the border. `columns` fixes the column count, else as many as fit. */
+/**
+ * Key figures; a severity colours the border. `colorOf` gives the colour of the page, fitted to the background of the
+ * theme; an empty one leaves the warning or error colour of the stylesheet. `columns` fixes the column count, else as
+ * many as fit.
+ */
 export function cardGrid(
   cards: readonly Card[],
   colorOf: (severity: Severity) => string,
@@ -137,7 +156,7 @@ export function cardGrid(
     const box = el('div', card.severity === 'ok' ? 'card' : `card ${card.severity}`);
     box.title = card.hint ?? '';
     if (card.severity !== 'ok') {
-      // The stylesheet cannot know the palette (it has its own contrast check); the sign after the figure is the text marker.
+      // The sign after the figure is the text marker, so the colour is never the only one.
       box.style.borderColor = colorOf(card.severity);
     }
     box.append(el('div', 'card-label', card.label), el('div', 'card-value', card.value));

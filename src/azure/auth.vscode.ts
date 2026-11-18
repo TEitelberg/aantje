@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import type { StorageTokenSource } from '../storage/resolve';
 import { AantjeError } from '../errors';
-import { ARM_SCOPE, POSTGRES_SCOPE, STORAGE_SCOPE } from './arm';
+import { ARM_SCOPE, FABRIC_SCOPE, POSTGRES_SCOPE, STORAGE_SCOPE } from './arm';
 import { requireUserName } from './jwt';
 
 /** Tokens of the Microsoft account that VS Code is signed in with; the editor keeps and renews them, aantje stores none. */
@@ -15,6 +15,8 @@ export interface AzureAuth {
   entraUser(tenantId: string | undefined): Promise<string>;
   /** Storage access for a lake; the token is fetched now, `refresh` gets another one without asking the user. */
   storageAccess: StorageTokenSource['storageAccess'];
+  /** A token for the Fabric REST API (workspaces, lakehouses). `silent` never asks the user. */
+  fabricToken(tenantId: string | undefined, silent?: boolean): Promise<string>;
 }
 
 export function createAzureAuth(registerSecret: (value: string) => void): AzureAuth {
@@ -47,5 +49,6 @@ export function createAzureAuth(registerSecret: (value: string) => void): AzureA
       accessToken: await token(STORAGE_SCOPE, tenantId, silent),
       refresh: () => token(STORAGE_SCOPE, tenantId, true),
     }),
+    fabricToken: (tenantId, silent = false) => token(FABRIC_SCOPE, tenantId, silent),
   };
 }

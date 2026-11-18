@@ -14,7 +14,7 @@ import type { SyncStep } from './sync-plan';
 import type { IcebergTarget } from './target';
 
 export interface SyncFlowDeps {
-  readonly copies: Pick<IcebergCopies, 'list' | 'save'>;
+  readonly copies: Pick<IcebergCopies, 'list' | 'save'> & Partial<Pick<IcebergCopies, 'rememberFailures'>>;
   /** A fresh check of the copy of the target: the state of each table and the tables new in the lake. */
   readonly check: (targetId: string) => Promise<IcebergCheck | undefined>;
   /** The lake's tables and changes since the oldest of the records. */
@@ -163,6 +163,24 @@ export async function syncIcebergFlow(
     result,
     steps.filter((step) => step.mode === 'none'),
   );
+  // The tables it could not write: the report shows them as errors until a later sync writes them.
+  await deps.copies.rememberFailures?.(lake.id, target.id, {
+    failed: result.tables
+      .filter((table) => table.status === 'failed')
+      .map(({ step, error }) => ({
+        schema: step.lake?.schema ?? step.record.schema,
+        table: step.lake?.table ?? step.record.table,
+        error: error ?? 'failed',
+        snapshot: result.snapshot,
+        failedAt: (deps.now?.() ?? new Date()).toISOString(),
+      })),
+    written: result.tables
+      .filter((table) => table.status === 'synced')
+      .map(({ step }) => ({
+        schema: step.lake?.schema ?? step.record.schema,
+        table: step.lake?.table ?? step.record.table,
+      })),
+  });
   const synced = result.tables.filter((table) => table.status === 'synced');
   const failed = result.tables.filter((table) => table.status === 'failed');
   const summary = `Synced ${synced.length} of ${writing.length} ${writing.length === 1 ? 'table' : 'tables'} of "${lake.name}" to ${target.name} at snapshot ${result.snapshot}.`;

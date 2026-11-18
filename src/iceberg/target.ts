@@ -1,10 +1,33 @@
 import { isObject } from '../guards';
+import { isGuid } from '../storage/config';
 
-/** How aantje signs in to an Iceberg REST catalog. */
-export type IcebergSignIn = 'oauth2' | 'token' | 'none';
+/**
+ * How aantje signs in to an Iceberg REST catalog. `entra` is the Microsoft account of VS Code, for a Fabric lakehouse:
+ * aantje stores no secret for it.
+ */
+export type IcebergSignIn = 'oauth2' | 'token' | 'none' | 'entra';
+
+/** The Iceberg catalog of OneLake, which serves the lakehouses of Microsoft Fabric. */
+export const FABRIC_ICEBERG_ENDPOINT = 'https://onelake.table.fabric.microsoft.com/iceberg';
+
+/** A lakehouse of Microsoft Fabric, written through the Iceberg catalog of OneLake with the Microsoft account of VS Code. */
+export interface FabricLakehouse {
+  /** The ids (GUIDs) of the workspace and the lakehouse: they stay when either is renamed. */
+  readonly workspace: string;
+  readonly lakehouse: string;
+  /** The names when the target was made, for messages. */
+  readonly workspaceName?: string;
+  readonly lakehouseName?: string;
+  /** The Entra tenant of the sign-in; undefined: the tenant of the Microsoft account. */
+  readonly tenant?: string;
+  /** Whether the lakehouse has schemas; one without has only `dbo`. */
+  readonly schemas: boolean;
+}
 
 /** An Iceberg REST catalog that a lake can be copied to. The secret (client secret or token) is never part of it. */
 export interface IcebergTarget {
+  /** Set for a Fabric lakehouse: then the endpoint is the one of OneLake and the sign-in is `entra`. */
+  readonly fabric?: FabricLakehouse;
   readonly id: string;
   readonly name: string;
   /** The REST endpoint, for example `http://polaris:8181/api/catalog`. */
@@ -46,6 +69,8 @@ function problemOf(entry: Record<string, unknown>): string | undefined {
     return typeof value === 'string' && value.trim() !== '' ? value.trim() : undefined;
   };
   if (!text('name')) return '"name" is required.';
+  if (entry.kind === 'fabric') return fabricProblemOf(entry, text);
+  if (entry.kind !== undefined && entry.kind !== 'rest') return '"kind" must be "rest" or "fabric".';
   const endpoint = text('endpoint');
   if (!endpoint || validateEndpoint(endpoint)) return '"endpoint" must be an http:// or https:// URL.';
   if (!text('warehouse')) return '"warehouse" is required.';
@@ -61,6 +86,19 @@ function problemOf(entry: Record<string, unknown>): string | undefined {
   if (entry.vendedCredentials !== undefined && typeof entry.vendedCredentials !== 'boolean') {
     return '"vendedCredentials" must be true or false.';
   }
+  return undefined;
+}
+
+/** The first problem of a Fabric lakehouse entry: the ids are GUIDs, the tenant too when it is set. */
+function fabricProblemOf(
+  entry: Record<string, unknown>,
+  text: (key: string) => string | undefined,
+): string | undefined {
+  if (!isGuid(text('workspace') ?? '')) return '"workspace" must be the id (a GUID) of the Fabric workspace.';
+  if (!isGuid(text('lakehouse') ?? '')) return '"lakehouse" must be the id (a GUID) of the lakehouse.';
+  if (entry.tenant !== undefined && !isGuid(text('tenant') ?? '')) return '"tenant" must be a GUID.';
+  if (entry.schemas !== undefined && typeof entry.schemas !== 'boolean')
+    return '"schemas" must be true or false.';
   return undefined;
 }
 
@@ -87,6 +125,19 @@ export function parseTargets(raw: unknown): { targets: IcebergTarget[]; problems
       const value = str(key);
       return value ? { [key]: value } : {};
     };
+    if (entry.kind === 'fabric') {
+      targets.push(
+        fabricTarget(id, name, {
+          workspace: (str('workspace') ?? '').toLowerCase(),
+          lakehouse: (str('lakehouse') ?? '').toLowerCase(),
+          ...optional('workspaceName'),
+          ...optional('lakehouseName'),
+          ...optional('tenant'),
+          schemas: entry.schemas !== false,
+        }),
+      );
+      return;
+    }
     targets.push({
       id,
       name,
@@ -105,6 +156,37 @@ export function parseTargets(raw: unknown): { targets: IcebergTarget[]; problems
 
 const nonEmpty = (value: string | undefined): string | undefined => (value === '' ? undefined : value);
 
+/**
+ * The target of a Fabric lakehouse: the Iceberg catalog of OneLake, where the warehouse is `<workspace>/<lakehouse>`.
+ * The storage is OneLake itself, which aantje signs in to with the same Microsoft account (no vended credentials).
+ */
+export function fabricTarget(id: string, name: string, fabric: FabricLakehouse): IcebergTarget {
+  return {
+    id,
+    name,
+    fabric,
+    endpoint: FABRIC_ICEBERG_ENDPOINT,
+    warehouse: `${fabric.workspace}/${fabric.lakehouse}`,
+    signIn: 'entra',
+    region: DEFAULT_REGION,
+    vendedCredentials: false,
+  };
+}
+
+/**
+ * Where the target writes, in words: `warehouse at endpoint`, or the lakehouse and the workspace of Fabric with its ID,
+ * so that the user finds it among workspaces of the same name.
+ */
+export function targetPlace(target: IcebergTarget): string {
+  const { fabric } = target;
+  if (!fabric) return `${target.warehouse} at ${target.endpoint}`;
+  const workspace =
+    fabric.workspaceName === undefined
+      ? `WorkspaceID "${fabric.workspace}"`
+      : `Workspace "${fabric.workspaceName}" with WorkspaceID "${fabric.workspace}"`;
+  return `Fabric lakehouse "${fabric.lakehouseName ?? fabric.lakehouse}" in ${workspace}`;
+}
+
 /** The id of a new target: the name as a slug, with a number when it is taken. */
 export function idOf(name: string, taken: readonly Pick<IcebergTarget, 'id'>[]): string {
   const slug =
@@ -119,6 +201,20 @@ export function idOf(name: string, taken: readonly Pick<IcebergTarget, 'id'>[]):
 
 /** An explicit field list: nothing else that the object carries may reach the setting. */
 export function toSettingEntry(target: IcebergTarget): Record<string, unknown> {
+  if (target.fabric) {
+    const { workspace, lakehouse, workspaceName, lakehouseName, tenant, schemas } = target.fabric;
+    return {
+      id: target.id,
+      name: target.name,
+      kind: 'fabric',
+      workspace,
+      lakehouse,
+      ...(workspaceName === undefined ? {} : { workspaceName }),
+      ...(lakehouseName === undefined ? {} : { lakehouseName }),
+      ...(tenant === undefined ? {} : { tenant }),
+      schemas,
+    };
+  }
   const {
     id,
     name,
@@ -145,5 +241,9 @@ export function toSettingEntry(target: IcebergTarget): Record<string, unknown> {
   };
 }
 
-/** The secret of a target is a client secret (oauth2) or a token; `none` has no secret. */
-export const usesSecret = (target: Pick<IcebergTarget, 'signIn'>): boolean => target.signIn !== 'none';
+/**
+ * Whether aantje stores a secret for the target: a client secret (oauth2) or a token. `none` has none, and `entra` signs
+ * in with the Microsoft account of VS Code each time.
+ */
+export const usesSecret = (target: Pick<IcebergTarget, 'signIn'>): boolean =>
+  target.signIn !== 'none' && target.signIn !== 'entra';

@@ -40,11 +40,12 @@ const isRow = isShape({
   converted: isArrayOf(isString),
   checkError: isNullOr(isString),
   iceberg: isOptional(isString),
+  failed: isOptional(isString),
 });
 
 const isData = isShape({
   connection: isString,
-  target: isShape({ id: isString, name: isString, warehouse: isString, endpoint: isString }),
+  target: isShape({ id: isString, name: isString, warehouse: isString, endpoint: isString, place: isString }),
   inSync: isBoolean,
   newest: isFiniteNumber,
   checkedAt: isString,

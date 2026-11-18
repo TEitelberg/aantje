@@ -4,8 +4,10 @@
 import * as z from 'zod';
 import { sqlType } from '../catalog/ddl';
 import type { ColumnInfo, MacroInfo, SchemaInfo, TableInfo, TagsInfo, ViewInfo } from '../catalog/model';
+import { columnsOf, sourcesOf } from '../dependencies/columns';
 import { macroNodeKind, NODE_KINDS } from '../dependencies/graph';
 import type { DependencyGraph } from '../dependencies/graph';
+import { COLUMN_USES } from '../dependencies/lineage-scope';
 import { traverse } from '../dependencies/model';
 import type { SqlParser } from '../dependencies/parser';
 import { readGraph } from '../dependencies/read';
@@ -96,6 +98,36 @@ const RELATED = z.object({
 });
 const PATH = z.array(text);
 
+// A view has at most this many columns listed, each with at most this many sources and unknown parts, and this many
+// sources in all; the rest is counted.
+const LINEAGE_COLUMNS = 300;
+const LINEAGE_SOURCES = 50;
+const LINEAGE_TOTAL = 2000;
+
+const LINEAGE = z.object({
+  columns: z.array(
+    z.object({
+      name: text,
+      sources: z.array(
+        z.object({
+          kind: KIND,
+          schema: text,
+          name: text,
+          column: text,
+          use: z.enum(COLUMN_USES),
+          /** 1 for a column of what the view reads itself. */
+          depth: z.number(),
+        }),
+      ),
+      unknown: z.array(text),
+      omitted: z.number(),
+    }),
+  ),
+  /** Why the columns of the view cannot be told; null when they can. */
+  opaque: note,
+  omitted: z.number(),
+});
+
 export const DESCRIPTION = z.object({
   connection: text,
   snapshot: z.number(),
@@ -122,6 +154,7 @@ export const DESCRIPTION = z.object({
   sql: text.optional(),
   dialect: text.optional(),
   columnAliases: z.array(text).optional(),
+  lineage: LINEAGE.optional(),
   implementations: z
     .array(
       z.object({
@@ -271,6 +304,43 @@ function dependenciesOf(graph: DependencyGraph, start: number): Description['dep
   };
 }
 
+const USE_ORDER = new Map(COLUMN_USES.map((use, rank) => [use, rank]));
+
+/** Where each column of a view comes from through any depth of views, as the Dependencies report shows it; bounded. */
+function lineageOf(graph: DependencyGraph, start: number): Description['lineage'] {
+  const { lineage } = graph;
+  if (!lineage) return undefined;
+  const opaque = lineage.opaque.find(({ node }) => node === start);
+  if (opaque) return { columns: [], opaque: opaque.detail, omitted: 0 };
+  const own = columnsOf(lineage, start);
+  let budget = LINEAGE_TOTAL;
+  const columns = own.slice(0, LINEAGE_COLUMNS).map((column) => {
+    const reached = sourcesOf(lineage, column).toSorted(
+      (a, b) => a.level - b.level || (USE_ORDER.get(a.use) ?? 0) - (USE_ORDER.get(b.use) ?? 0),
+    );
+    const sources = reached.flatMap(({ column: source, use, level }) => {
+      const found = lineage.columns[source];
+      const node = found && graph.nodes[found.node];
+      return found && node
+        ? [{ kind: node.kind, schema: node.schema, name: node.name, column: found.name, use, depth: level }]
+        : [];
+    });
+    const parts = new Set([column, ...reached.map((reach) => reach.column)]);
+    const unknown = [
+      ...new Set(lineage.unknown.filter((part) => parts.has(part.column)).map(({ detail }) => detail)),
+    ];
+    const listed = sources.slice(0, Math.min(LINEAGE_SOURCES, budget));
+    budget -= listed.length;
+    return {
+      name: lineage.columns[column]?.name ?? '',
+      sources: listed,
+      unknown: unknown.slice(0, LINEAGE_SOURCES),
+      omitted: sources.length - listed.length + Math.max(unknown.length - LINEAGE_SOURCES, 0),
+    };
+  });
+  return { columns, opaque: null, omitted: Math.max(own.length - LINEAGE_COLUMNS, 0) };
+}
+
 const NO_DEPENDENCIES: Description['dependencies'] = {
   uses: [],
   usedBy: [],
@@ -307,6 +377,7 @@ export async function describeObject(
     name: found.item.name,
     comment: found.kind === 'macro' ? null : found.item.comment,
     ...details,
+    ...(found.kind === 'view' && start >= 0 ? { lineage: lineageOf(graph, start) } : {}),
     dependencies: start < 0 ? NO_DEPENDENCIES : dependenciesOf(graph, start),
   };
 }

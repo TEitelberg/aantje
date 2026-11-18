@@ -13,7 +13,7 @@ import type {
 import type { RelationColumn, TableRef } from '../data/types';
 import type { FileEntry } from '../files/listing';
 import type { FilesContext } from '../files/source';
-import type { HistoryEntry } from '../sql/history';
+import type { Favorite, HistoryEntry } from '../sql/history';
 
 /** Payload of a node: everything the commands need to act on it. */
 export type NodeRef =
@@ -59,8 +59,13 @@ export type NodeRef =
   | { readonly kind: 'snapshot'; readonly connectionId: string; readonly snapshot: SnapshotInfo }
   /** A leaf that shows a fact; only a table change (`change`) has a command. */
   | { readonly kind: 'detail'; readonly connectionId: string; readonly change?: ChangedTable }
-  /** A statement of the Query History. */
-  | { readonly kind: 'query'; readonly connectionId: string; readonly entry: HistoryEntry }
+  /** A statement of the Query History; a favourite has `favorite`, which is also its `entry`. */
+  | {
+      readonly kind: 'query';
+      readonly connectionId: string;
+      readonly entry: HistoryEntry;
+      readonly favorite?: Favorite;
+    }
   /** A root of the Files folder or a folder below it. */
   | { readonly kind: 'fileFolder'; readonly connectionId: string; readonly place: FilePlace }
   /** A file below a root of the Files folder. */
@@ -90,8 +95,8 @@ export interface ChangedTable {
 
 /**
  * What a folder groups; it carries what was read to show it, so only `snapshots` needs a query on expansion.
- * `queryHistory` reads aantje's own record of the statements it ran, not the catalog; `files` lists the storage of the
- * lake.
+ * `queryHistory` and its `favorites` read aantje's own record of the statements it ran, not the catalog; `files` lists
+ * the storage of the lake.
  */
 export type FolderRef =
   | { readonly folder: 'tables'; readonly schema: SchemaInfo; readonly tables: readonly TableInfo[] }
@@ -126,6 +131,8 @@ export type FolderRef =
     }
   | { readonly folder: 'snapshots'; readonly total?: number }
   | { readonly folder: 'queryHistory' }
+  /** The favourites of the Query History, its first child while there are any. */
+  | { readonly folder: 'favorites' }
   /** A target that the lake was copied to: the row shows whether the copy has the state of the lake; a click opens its report. */
   | { readonly folder: 'iceberg'; readonly targetId: string }
   | { readonly folder: 'files' };

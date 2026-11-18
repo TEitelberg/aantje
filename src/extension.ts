@@ -35,19 +35,20 @@ import { createDataActions, registerDataCommands } from './data/commands.vscode'
 import { S3CredentialStore } from './data/credentials';
 import { describeRelation } from './data/engine';
 import { resolveViewColumns } from './data/resolve';
-import { maxRowsOf, timeoutMsOf } from './data/settings';
+import { timeoutMsOf } from './data/settings';
 import { confirmViews, createTrustStore } from './data/trust.vscode';
 import { registerDependenciesCommand } from './dependencies/commands.vscode';
+import { registerDetailsCommand } from './details/commands.vscode';
 import { resolveChainKeys } from './files/aws-chain';
 import { registerFilesCommands } from './files/commands.vscode';
 import { createFilesSource } from './files/source';
 import { openSqlParser } from './dependencies/parser';
 import { registerGenerateScripts } from './generate-scripts/commands.vscode';
-import { createGridDeps, GridPanels } from './grid/grid.vscode';
-import type { GridDeps } from './grid/grid.vscode';
+import { createGridDeps, GridPanels, registerGridCommands } from './grid/grid.vscode';
 import { ResultsPanels } from './grid/results.vscode';
 import { registerGrowthCommand } from './growth/commands.vscode';
 import { registerHealthCommands } from './health-report/commands.vscode';
+import { registerInsights } from './insights.vscode';
 import { SecretRegistry } from './log';
 import type { Logger } from './log';
 import { createOutputChannelLogger } from './log.vscode';
@@ -64,9 +65,13 @@ import { registerScriptCommands } from './script-commands.vscode';
 import { disposeAll } from './shutdown';
 import { registerSnapshotReportCommand } from './snapshot-report/commands.vscode';
 import { catalogCache, trustedViewColumns } from './sql/catalog-cache';
-import { QueryEditors } from './sql/editor';
-import type { ExplorerPort } from './sql/editor';
-import { createQueryUi, openForConnection, registerQueryEditor, revealStatement } from './sql/editor.vscode';
+import type { QueryEditors } from './sql/editor';
+import {
+  createQueryEditors,
+  openForConnection,
+  registerQueryEditor,
+  revealStatement,
+} from './sql/editor.vscode';
 import { documentKey, documentOfKey, editorOf } from './sql/glue.vscode';
 import { registerLenses } from './sql/lens.vscode';
 import { registerRunToFile } from './sql/run-to-file.vscode';
@@ -76,13 +81,14 @@ import { createQueryHistory, registerQueryHistory } from './sql/history.vscode';
 import { registerSqlFormatting } from './sql/format.vscode';
 import { registerSqlLanguage } from './sql/language.vscode';
 import type { ResultsView } from './sql/results';
-import { openEditorSession } from './sql/session';
 import { registerStatisticsCommand, showStatistics } from './stats/commands.vscode';
 import { resolveStorage } from './storage/resolve';
 import { statisticsKind } from './stats/kind';
 import { registerTimeTravelCommands } from './time-travel.vscode';
 import { performanceTips } from './tips/connection';
 import { registerMcpServer } from './mcp/mcp.vscode';
+import { createTreeFilters } from './tree/filter.vscode';
+import { registerTemplates } from './templates/commands.vscode';
 import { CatalogTree } from './tree/model';
 import { CatalogTreeProvider } from './tree/provider.vscode';
 import type { TreeNode } from './tree/refs';
@@ -120,19 +126,14 @@ export function activate(context: vscode.ExtensionContext): ExtensionApi | undef
   const logger = createOutputChannelLogger(secrets);
   context.subscriptions.push(logger);
   const core = createCore(context, secrets, logger);
-  const shared: Shared = { logger, register: commandRegistrar(logger), gridDeps: createGridDeps(logger) };
+  const gridDeps = createGridDeps(logger, context.globalState);
+  context.subscriptions.push(...registerGridCommands(logger, gridDeps.pages));
+  const shared: Shared = { logger, register: commandRegistrar(logger), gridDeps };
   const sql = createSqlEditors(context, core, shared);
   const explorer = createExplorer(context, core, sql.editors, logger);
-  context.subscriptions.push(
-    ...registerQueryHistory({
-      history: core.history,
-      tree: core.catalogTree,
-      editors: sql.editors,
-      register: shared.register,
-    }),
-  );
   const env = createCommandEnv(context, core, explorer, sql.editors, shared);
   registerSqlEditing(context, core, sql, shared);
+  context.subscriptions.push(...registerTemplates({ ...shared, ...sql, context }));
   registerExplorerCommands(context, core, explorer, env, shared);
   context.subscriptions.push(
     ...registerMcpServer(context, core, { ...shared, ...env, ...explorer, secrets }),
@@ -170,7 +171,7 @@ export async function deactivate(): Promise<void> {
 interface Shared {
   readonly logger: Logger;
   readonly register: Register;
-  readonly gridDeps: GridDeps;
+  readonly gridDeps: ReturnType<typeof createGridDeps>;
 }
 
 type Core = ReturnType<typeof createCore>;
@@ -204,18 +205,23 @@ function createSqlEditors(context: vscode.ExtensionContext, core: Core, { logger
         }
       },
       setContext,
+      quiet: (key, work, signal) => {
+        if (!editors) throw new Error('The SQL editors are not there yet.');
+        return editors.quiet(key, work, { signal });
+      },
     },
     gridDeps,
   );
   context.subscriptions.push({ dispose: () => panels.dispose() });
   const results = { current: panels as ResultsView };
-  editors = createQueryEditors(core, results, {
+  const service = openLanguageService();
+  editors = createQueryEditors(core, results, service, {
     status: (id) => tree.state(id).status,
     disconnect: (id) => tree.disconnect(id),
     connect: (id) => void tree.connect(id),
     refresh: core.refreshRoot,
   });
-  return { editors, results, panels, service: openLanguageService(), contextKeys, setContext };
+  return { editors, results, panels, service, contextKeys, setContext };
 }
 
 /** The tree view, the connection that commands without a node act on, and the watch on `aantje.connections`. */
@@ -351,6 +357,7 @@ function registerSqlEditing(
     ...registerLenses({ editors, service, logger, editorOf, connectionOf, tipsFor }),
     registerRunToFile({ editors, service, logger, editorOf }),
     ...registerSqlFormatting({ service, logger, connectionOf }),
+    ...registerQueryHistory({ history: core.history, tree, editors, register }),
   );
 }
 
@@ -374,7 +381,7 @@ function registerExplorerCommands(
       editors,
       entraUser: (tenant) => core.azureAuth.entraUser(tenant),
       trust,
-      history: core.history,
+      history: core.records,
       icebergCopies: core.iceberg.copies,
       active: connection.active,
       editing: profiles.editing,
@@ -383,6 +390,7 @@ function registerExplorerCommands(
     ...registerCommands({
       tree,
       store,
+      filters: core.filters,
       view,
       properties: env.properties,
       storage: env.storage,
@@ -416,7 +424,7 @@ function registerExplorerCommands(
       dataAccess: core.dataAccess,
       connect: core.connect,
       trust,
-      history: core.history,
+      history: core.records,
       register,
       logger,
     }),
@@ -429,12 +437,12 @@ function registerExplorerCommands(
       dataAccess: core.dataAccess,
       connect: core.connect,
       trust,
-      history: core.history,
+      history: core.records,
       register,
       logger,
     }),
     ...registerStatisticsCommand({ ...env.statistics, register }),
-    ...registerReportCommands(core, view, env),
+    ...registerReportCommands(core, { view, connection }, env, context.globalState),
     ...registerSchemaCompare({
       tree,
       store,
@@ -452,6 +460,7 @@ function registerExplorerCommands(
       logger,
       register,
       parser: env.parser,
+      iceberg: core.iceberg,
     }),
     ...registerRestoreCommands({ tree, openSql: env.dataActions.openSql, register, parser: env.parser }),
     ...registerScriptCommands({ tree, openSql: env.dataActions.openSql, register }),
@@ -463,25 +472,25 @@ function registerExplorerCommands(
   );
 }
 
+/** The commands of the reports; `choices` is the global state, which keeps a choice of a report for the next one. */
 function registerReportCommands(
   core: Core,
-  view: vscode.TreeView<TreeNode>,
+  { view, connection }: Pick<Explorer, 'view' | 'connection'>,
   env: CommandEnv,
+  choices: vscode.Memento,
 ): vscode.Disposable[] {
-  const { reports, tableActions, storage } = env;
+  const { reports, tableActions, storage, parser } = env;
   const { dataAccess, credentials } = core;
+  const insight = { ...reports, ...tableActions, dataAccess, history: core.history, parser: env.parser };
   return [
     ...registerSnapshotReportCommand(reports),
     ...registerActivityCommand(reports),
+    ...registerInsights({ ...insight, choices }),
     ...registerSchemaHistoryCommand(reports),
     ...registerGrowthCommand(reports),
-    ...registerDependenciesCommand({
-      ...reports,
-      view,
-      showStatistics: env.showTableStatistics,
-      parser: env.parser,
-    }),
-    ...registerHealthCommands({ ...reports, ...tableActions, env: process.env, dataAccess, credentials }),
+    ...registerDependenciesCommand({ ...reports, view, showStatistics: env.showTableStatistics, parser }),
+    ...registerHealthCommands({ ...insight, env: process.env, credentials }),
+    ...registerDetailsCommand({ ...reports, ...tableActions, view, active: connection.active, parser }),
     ...registerAdvisorCommand({
       ...reports,
       ...tableActions,
@@ -544,8 +553,9 @@ function createCore(context: vscode.ExtensionContext, secrets: SecretRegistry, l
       password,
       values,
     );
-  const iceberg = createIcebergStores(context, secrets, (id) => catalogTree.reader(id), logger);
+  const iceberg = createIcebergStores(context, secrets, (id) => catalogTree.reader(id), logger, azureAuth);
   const history = createQueryHistory(context.globalState, logger, secrets);
+  const filters = createTreeFilters(context.workspaceState, logger);
   const pendingLakes = new PendingLakes(context.globalState, createSecretsPort(context.secrets), (value) =>
     secrets.add(value),
   );
@@ -561,6 +571,7 @@ function createCore(context: vscode.ExtensionContext, secrets: SecretRegistry, l
       describe: describeRelation,
     }),
     queryHistory: history,
+    filters,
     iceberg: iceberg.statuses,
     // The Files folder lists with the storage of the connection, signed in as the engine is (#20).
     files: createFilesSource({
@@ -612,29 +623,11 @@ function createCore(context: vscode.ExtensionContext, secrets: SecretRegistry, l
       secrets.add(value),
     ),
     history,
+    filters,
+    // What aantje keeps of a connection besides its profile: a removed connection takes it along.
+    records: { clear: (id: string) => history.clear(id).then(() => filters.forget(id)) },
     iceberg,
   };
-}
-
-function createQueryEditors(
-  { store, dataAccess, history }: Pick<Core, 'store' | 'dataAccess' | 'history'>,
-  results: { current: ResultsView },
-  explorer: ExplorerPort,
-): QueryEditors {
-  return new QueryEditors({
-    profiles: { list: () => store.list(), get: (id) => store.get(id) },
-    openSession: (...args) => openEditorSession(dataAccess, ...args),
-    results: {
-      begin: (target, script) => results.current.begin(target, script),
-      event: (target, event) => results.current.event(target, event),
-      end: (target, summary) => results.current.end(target, summary),
-      reveal: (target) => results.current.reveal(target),
-    },
-    explorer,
-    ui: createQueryUi(),
-    maxRows: () => maxRowsOf(vscode.workspace.getConfiguration('aantje').get<unknown>('sql.maxRows')),
-    history,
-  });
 }
 
 function queryTimeoutMs(): number {

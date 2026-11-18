@@ -1,0 +1,11 @@
+-- aantje-template: 1
+-- name: Add existing Parquet files to a table
+-- description: Registers Parquet files that already exist as data files of a table, without copying them.
+-- tags: load, parquet, add files, register
+-- created: 2026-11-16
+-- param: schema | text | main                       | Schema of the table
+-- param: table  | text |                            | Table that gets the files; its columns must match those of the files
+-- param: files  | text | s3://bucket/path/*.parquet | Parquet files: a path or a glob
+-- WARNING: the lake owns the files from now on. Expiring snapshots and cleaning up old files may delete them later.
+-- ignore_extra_columns => true accepts files with more columns than the table; allow_missing => true files with fewer.
+CALL ducklake_add_data_files('lake', {{table}}, {{files}}, schema => {{schema}});

@@ -268,6 +268,11 @@
         "category": "aantje"
       },
       {
+        "command": "aantje.renameObject",
+        "title": "Rename...",
+        "category": "aantje"
+      },
+      {
         "command": "aantje.maintenanceCheckpoint",
         "title": "Checkpoint",
         "category": "aantje"
@@ -400,6 +405,21 @@
         "category": "aantje"
       },
       {
+        "command": "aantje.syncIcebergRow",
+        "title": "Sync to Iceberg",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.refreshIcebergRow",
+        "title": "Refresh Iceberg State",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.forgetIcebergSync",
+        "title": "Forget Iceberg Sync",
+        "category": "aantje"
+      },
+      {
         "command": "aantje.schemaCompare",
         "title": "Schema Compare...",
         "category": "aantje"
@@ -446,6 +466,11 @@
         "category": "aantje"
       },
       {
+        "command": "aantje.showInactiveTables",
+        "title": "Inactive Tables",
+        "category": "aantje"
+      },
+      {
         "command": "aantje.showGrowth",
         "title": "Growth",
         "category": "aantje"
@@ -453,6 +478,11 @@
       {
         "command": "aantje.showDependencies",
         "title": "Dependencies",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.showColumnLineage",
+        "title": "Show Column Lineage",
         "category": "aantje"
       },
       {
@@ -468,6 +498,36 @@
       {
         "command": "aantje.checkTableHealth",
         "title": "Check Table Health",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.checkHealthAtSnapshot",
+        "title": "Check Health at Snapshot...",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.findLastGoodSnapshot",
+        "title": "Find Last Good Snapshot...",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.showCatalogDashboard",
+        "title": "Catalog Dashboard",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.inspectDataFiles",
+        "title": "Inspect Data Files...",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.suggestPartitioning",
+        "title": "Suggest Partitioning...",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.inspectParquetFile",
+        "title": "Inspect Parquet File",
         "category": "aantje"
       },
       {
@@ -532,6 +592,11 @@
         "category": "aantje"
       },
       {
+        "command": "aantje.setQueryParameters",
+        "title": "Set Parameters...",
+        "category": "aantje"
+      },
+      {
         "command": "aantje.cancelQuery",
         "title": "Cancel Query",
         "category": "aantje",
@@ -580,8 +645,86 @@
         "category": "aantje"
       },
       {
+        "command": "aantje.openTemplates",
+        "title": "Templates",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.saveSelectionAsTemplate",
+        "title": "Save Selection as Template...",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.addQueryFavorite",
+        "title": "Set as Favorite",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.renameQueryFavorite",
+        "title": "Rename...",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.removeQueryFavorite",
+        "title": "Remove from Favorites",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.editComment",
+        "title": "Edit Comment...",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.executeMacro",
+        "title": "Execute Macro...",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.showDetails",
+        "title": "Show Details",
+        "category": "aantje",
+        "icon": "$(list-flat)"
+      },
+      {
+        "command": "aantje.filterTree",
+        "title": "Filter...",
+        "category": "aantje",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "aantje.clearTreeFilter",
+        "title": "Clear Filter",
+        "category": "aantje",
+        "icon": "$(clear-all)"
+      },
+      {
         "command": "aantje.addMcpServerToClaudeCode",
         "title": "Add MCP Server to Claude Code",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.copyCell",
+        "title": "Copy Cell",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.copyRow",
+        "title": "Copy Row",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.copyAll",
+        "title": "Copy All",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.copyAsMarkdown",
+        "title": "Copy as Markdown",
+        "category": "aantje"
+      },
+      {
+        "command": "aantje.copyColumnStatistics",
+        "title": "Copy Column Statistics as Markdown",
         "category": "aantje"
       }
     ],
@@ -652,6 +795,11 @@
           "command": "aantje.scriptAlter",
           "when": "viewItem =~ /^(table(\\.azure)?|view(\\.azure)?|macro|column(\\.member)?|folder\\.(columns|partitioning|sortOrder|tags))$/",
           "group": "2_define@2"
+        },
+        {
+          "command": "aantje.renameObject",
+          "when": "viewItem =~ /^(table(\\.azure)?|view(\\.azure)?|column)$/",
+          "group": "2_define@3"
         },
         {
           "command": "aantje.scriptDrop",
@@ -733,6 +881,11 @@
           "group": "1_cloud@2"
         },
         {
+          "command": "aantje.openTemplates",
+          "when": "view == aantje.catalogs",
+          "group": "7_templates@1"
+        },
+        {
           "command": "aantje.schemaCompare",
           "when": "view == aantje.catalogs",
           "group": "8_compare@1"
@@ -790,19 +943,39 @@
           "group": "1_snapshot@1"
         },
         {
+          "command": "aantje.checkHealthAtSnapshot",
+          "when": "view == aantje.catalogs && viewItem == snapshot",
+          "group": "1_snapshot@2"
+        },
+        {
           "command": "aantje.showSnapshotChanges",
           "when": "view == aantje.catalogs && viewItem == detail.table",
           "group": "1_changes@1"
         },
         {
           "command": "aantje.openQueryHistoryEntry",
-          "when": "view == aantje.catalogs && viewItem == query",
+          "when": "view == aantje.catalogs && viewItem =~ /^query(\\.favorite)?$/",
           "group": "1_query@1"
         },
         {
           "command": "aantje.copyQueryHistorySql",
-          "when": "view == aantje.catalogs && viewItem == query",
+          "when": "view == aantje.catalogs && viewItem =~ /^query(\\.favorite)?$/",
           "group": "1_query@2"
+        },
+        {
+          "command": "aantje.addQueryFavorite",
+          "when": "view == aantje.catalogs && viewItem == query",
+          "group": "1_query_favorite@1"
+        },
+        {
+          "command": "aantje.renameQueryFavorite",
+          "when": "view == aantje.catalogs && viewItem == query.favorite",
+          "group": "1_query_favorite@1"
+        },
+        {
+          "command": "aantje.removeQueryFavorite",
+          "when": "view == aantje.catalogs && viewItem == query.favorite",
+          "group": "1_query_favorite@2"
         },
         {
           "command": "aantje.clearQueryHistory",
@@ -840,18 +1013,23 @@
           "group": "2_copy@2"
         },
         {
+          "command": "aantje.inspectParquetFile",
+          "when": "view == aantje.catalogs && viewItem == file.importable.parquet",
+          "group": "1_files@2"
+        },
+        {
           "command": "aantje.copyPath",
-          "when": "view == aantje.catalogs && viewItem =~ /^(fileRoot|fileFolder|file(\\.importable)?)$/",
+          "when": "view == aantje.catalogs && viewItem =~ /^(fileRoot|fileFolder|file(\\.importable(\\.parquet)?)?)$/",
           "group": "2_copy@1"
         },
         {
           "command": "aantje.scriptImportFile",
-          "when": "view == aantje.catalogs && viewItem =~ /^(fileRoot|fileFolder|file\\.importable)$/",
+          "when": "view == aantje.catalogs && viewItem =~ /^(fileRoot|fileFolder|file\\.importable(\\.parquet)?)$/",
           "group": "3_import@1"
         },
         {
           "command": "aantje.scriptInsertFile",
-          "when": "view == aantje.catalogs && viewItem =~ /^(fileRoot|fileFolder|file\\.importable)$/",
+          "when": "view == aantje.catalogs && viewItem =~ /^(fileRoot|fileFolder|file\\.importable(\\.parquet)?)$/",
           "group": "3_import@2"
         },
         {
@@ -895,6 +1073,21 @@
           "group": "1_report@1"
         },
         {
+          "command": "aantje.syncIcebergRow",
+          "when": "view == aantje.catalogs && viewItem == folder.iceberg",
+          "group": "2_iceberg@1"
+        },
+        {
+          "command": "aantje.refreshIcebergRow",
+          "when": "view == aantje.catalogs && viewItem == folder.iceberg",
+          "group": "2_iceberg@2"
+        },
+        {
+          "command": "aantje.forgetIcebergSync",
+          "when": "view == aantje.catalogs && viewItem == folder.iceberg",
+          "group": "2_iceberg@3"
+        },
+        {
           "command": "aantje.selectSnapshot",
           "when": "view == aantje.catalogs && viewItem =~ /^connection\\.connected(\\.(azure|aws))?$/",
           "group": "2_travel@2"
@@ -925,6 +1118,11 @@
           "group": "3_reports"
         },
         {
+          "command": "aantje.showColumnLineage",
+          "when": "view == aantje.catalogs && viewItem =~ /^(column|viewColumn)$/",
+          "group": "3_reports@1"
+        },
+        {
           "command": "aantje.showStatistics",
           "when": "view == aantje.catalogs && viewItem == folder.statistics",
           "group": "3_data@3"
@@ -933,6 +1131,31 @@
           "command": "aantje.showStatistics",
           "when": "view == aantje.catalogs && viewItem == folder.statistics",
           "group": "inline@1"
+        },
+        {
+          "command": "aantje.editComment",
+          "when": "view == aantje.catalogs && viewItem =~ /^(table(\\.azure)?|view(\\.azure)?|column)$/",
+          "group": "2_script_comment@1"
+        },
+        {
+          "command": "aantje.executeMacro",
+          "when": "view == aantje.catalogs && viewItem == macro",
+          "group": "3_data@1"
+        },
+        {
+          "command": "aantje.showDetails",
+          "when": "view == aantje.catalogs && viewItem =~ /^(connection\\.connected(\\.(azure|aws))?|schema(\\.main)?|folder\\.tables)$/",
+          "group": "3_details@1"
+        },
+        {
+          "command": "aantje.filterTree",
+          "when": "view == aantje.catalogs && viewItem =~ /^(connection\\.connected(\\.(azure|aws))?|schema(\\.main)?|folder\\.(tables|views|macros))$/",
+          "group": "4_filter@1"
+        },
+        {
+          "command": "aantje.clearTreeFilter",
+          "when": "view == aantje.catalogs && viewItem =~ /^(connection\\.connected(\\.(azure|aws))?|schema(\\.main)?|folder\\.(tables|views|macros))$/",
+          "group": "4_filter@2"
         },
         {
           "command": "aantje.allowMyIp",
@@ -961,6 +1184,26 @@
         }
       ],
       "commandPalette": [
+        {
+          "command": "aantje.copyCell",
+          "when": "false"
+        },
+        {
+          "command": "aantje.copyRow",
+          "when": "false"
+        },
+        {
+          "command": "aantje.copyAll",
+          "when": "false"
+        },
+        {
+          "command": "aantje.copyAsMarkdown",
+          "when": "false"
+        },
+        {
+          "command": "aantje.copyColumnStatistics",
+          "when": "false"
+        },
         {
           "command": "aantje.showSnapshot",
           "when": "false"
@@ -1054,6 +1297,10 @@
           "when": "false"
         },
         {
+          "command": "aantje.renameObject",
+          "when": "false"
+        },
+        {
           "command": "aantje.maintenanceCheckpoint",
           "when": "false"
         },
@@ -1122,6 +1369,18 @@
           "when": "false"
         },
         {
+          "command": "aantje.syncIcebergRow",
+          "when": "false"
+        },
+        {
+          "command": "aantje.refreshIcebergRow",
+          "when": "false"
+        },
+        {
+          "command": "aantje.forgetIcebergSync",
+          "when": "false"
+        },
+        {
           "command": "aantje.showChanges",
           "when": "false"
         },
@@ -1150,11 +1409,19 @@
           "when": "false"
         },
         {
+          "command": "aantje.showInactiveTables",
+          "when": "false"
+        },
+        {
           "command": "aantje.showGrowth",
           "when": "false"
         },
         {
           "command": "aantje.showDependencies",
+          "when": "false"
+        },
+        {
+          "command": "aantje.showColumnLineage",
           "when": "false"
         },
         {
@@ -1167,6 +1434,30 @@
         },
         {
           "command": "aantje.checkTableHealth",
+          "when": "false"
+        },
+        {
+          "command": "aantje.checkHealthAtSnapshot",
+          "when": "false"
+        },
+        {
+          "command": "aantje.findLastGoodSnapshot",
+          "when": "false"
+        },
+        {
+          "command": "aantje.showCatalogDashboard",
+          "when": "false"
+        },
+        {
+          "command": "aantje.inspectDataFiles",
+          "when": "false"
+        },
+        {
+          "command": "aantje.suggestPartitioning",
+          "when": "false"
+        },
+        {
+          "command": "aantje.inspectParquetFile",
           "when": "false"
         },
         {
@@ -1199,6 +1490,14 @@
         },
         {
           "command": "aantje.runToFile",
+          "when": "editorLangId == sql"
+        },
+        {
+          "command": "aantje.setQueryParameters",
+          "when": "editorLangId == sql"
+        },
+        {
+          "command": "aantje.saveSelectionAsTemplate",
           "when": "editorLangId == sql"
         },
         {
@@ -1235,6 +1534,38 @@
         },
         {
           "command": "aantje.clearQueryHistory",
+          "when": "false"
+        },
+        {
+          "command": "aantje.addQueryFavorite",
+          "when": "false"
+        },
+        {
+          "command": "aantje.renameQueryFavorite",
+          "when": "false"
+        },
+        {
+          "command": "aantje.removeQueryFavorite",
+          "when": "false"
+        },
+        {
+          "command": "aantje.editComment",
+          "when": "false"
+        },
+        {
+          "command": "aantje.executeMacro",
+          "when": "false"
+        },
+        {
+          "command": "aantje.showDetails",
+          "when": "false"
+        },
+        {
+          "command": "aantje.filterTree",
+          "when": "false"
+        },
+        {
+          "command": "aantje.clearTreeFilter",
           "when": "false"
         },
         {
@@ -1329,6 +1660,16 @@
           "command": "aantje.runToFile",
           "when": "aantje.queryEditor && !aantje.queryRunning",
           "group": "1_aantje@6"
+        },
+        {
+          "command": "aantje.setQueryParameters",
+          "when": "aantje.queryEditor && !aantje.queryRunning",
+          "group": "2_aantje@1"
+        },
+        {
+          "command": "aantje.saveSelectionAsTemplate",
+          "when": "aantje.queryEditor && editorHasSelection",
+          "group": "3_aantje@1"
         }
       ],
       "editor/context": [
@@ -1361,6 +1702,43 @@
           "command": "aantje.runToFile",
           "when": "editorLangId == sql && aantje.queryEditor && !aantje.queryRunning",
           "group": "1_aantje@6"
+        },
+        {
+          "command": "aantje.setQueryParameters",
+          "when": "editorLangId == sql && aantje.queryEditor && !aantje.queryRunning",
+          "group": "2_aantje@1"
+        },
+        {
+          "command": "aantje.saveSelectionAsTemplate",
+          "when": "editorLangId == sql && aantje.queryEditor && editorHasSelection",
+          "group": "3_aantje@1"
+        }
+      ],
+      "webview/context": [
+        {
+          "command": "aantje.copyCell",
+          "when": "(webviewId == 'aantje.grid' || webviewId == 'aantje.results') && webviewSection == 'grid'",
+          "group": "1_copy@1"
+        },
+        {
+          "command": "aantje.copyRow",
+          "when": "(webviewId == 'aantje.grid' || webviewId == 'aantje.results') && webviewSection == 'grid'",
+          "group": "1_copy@2"
+        },
+        {
+          "command": "aantje.copyAll",
+          "when": "(webviewId == 'aantje.grid' || webviewId == 'aantje.results') && webviewSection == 'grid'",
+          "group": "1_copy@3"
+        },
+        {
+          "command": "aantje.copyAsMarkdown",
+          "when": "(webviewId == 'aantje.grid' || webviewId == 'aantje.results') && webviewSection == 'grid'",
+          "group": "1_copy@4"
+        },
+        {
+          "command": "aantje.copyColumnStatistics",
+          "when": "(webviewId == 'aantje.grid' || webviewId == 'aantje.results') && (webviewSection == 'statistics' || webviewSection == 'grid' && aantjeStatistics)",
+          "group": "2_statistics@1"
         }
       ],
       "aantje.reports": [
@@ -1450,6 +1828,36 @@
           "group": "1_lake@8"
         },
         {
+          "command": "aantje.showCatalogDashboard",
+          "when": "viewItem =~ /^connection\\.connected(\\.(azure|aws))?$/",
+          "group": "1_lake@9"
+        },
+        {
+          "command": "aantje.showInactiveTables",
+          "when": "viewItem =~ /^connection\\.connected(\\.(azure|aws))?$/",
+          "group": "1_lake@10"
+        },
+        {
+          "command": "aantje.showInactiveTables",
+          "when": "viewItem =~ /^schema(\\.main)?$/",
+          "group": "1_schema@7"
+        },
+        {
+          "command": "aantje.checkHealthAtSnapshot",
+          "when": "viewItem =~ /^connection\\.connected(\\.(azure|aws))?$/",
+          "group": "1_lake@11"
+        },
+        {
+          "command": "aantje.findLastGoodSnapshot",
+          "when": "viewItem =~ /^connection\\.connected(\\.(azure|aws))?$/",
+          "group": "1_lake@12"
+        },
+        {
+          "command": "aantje.checkHealthAtSnapshot",
+          "when": "viewItem =~ /^schema(\\.main)?$/",
+          "group": "1_schema@8"
+        },
+        {
           "command": "aantje.showGrowth",
           "when": "viewItem =~ /^table(\\.azure)?$/",
           "group": "2_table@5"
@@ -1458,6 +1866,26 @@
           "command": "aantje.showDependencies",
           "when": "viewItem =~ /^table(\\.azure)?$/",
           "group": "2_table@4"
+        },
+        {
+          "command": "aantje.inspectDataFiles",
+          "when": "viewItem =~ /^table(\\.azure)?$/",
+          "group": "2_table@6"
+        },
+        {
+          "command": "aantje.suggestPartitioning",
+          "when": "viewItem =~ /^table(\\.azure)?$/",
+          "group": "2_table@7"
+        },
+        {
+          "command": "aantje.checkHealthAtSnapshot",
+          "when": "viewItem =~ /^table(\\.azure)?$/",
+          "group": "2_table@8"
+        },
+        {
+          "command": "aantje.findLastGoodSnapshot",
+          "when": "viewItem =~ /^table(\\.azure)?$/",
+          "group": "2_table@9"
         },
         {
           "command": "aantje.showDependencies",
@@ -1478,64 +1906,121 @@
           "type": "array",
           "scope": "machine",
           "default": [],
-          "markdownDescription": "Iceberg REST catalogs that **Sync to Iceberg...** writes to. Client secrets and tokens are never stored here; aantje keeps them in the VS Code secret storage. Use the **aantje: Add Iceberg Target** command instead of editing this by hand.",
+          "markdownDescription": "Iceberg REST catalogs and Microsoft Fabric lakehouses that **Sync to Iceberg...** writes to. Client secrets and tokens are never stored here; aantje keeps them in the VS Code secret storage, and a Fabric lakehouse signs in with your Microsoft account. Use the **aantje: Add Iceberg Target** command instead of editing this by hand.",
           "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "name",
-              "endpoint",
-              "warehouse",
-              "signIn"
-            ],
-            "properties": {
-              "id": {
-                "type": "string",
-                "description": "Stable id; set by aantje."
-              },
-              "name": {
-                "type": "string",
-                "description": "Name shown when you copy a lake."
-              },
-              "endpoint": {
-                "type": "string",
-                "description": "REST endpoint of the catalog, for example http://polaris:8181/api/catalog."
-              },
-              "warehouse": {
-                "type": "string",
-                "description": "Warehouse or catalog name."
-              },
-              "signIn": {
-                "enum": [
-                  "oauth2",
-                  "token",
-                  "none"
+            "anyOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "kind",
+                  "workspace",
+                  "lakehouse"
                 ],
-                "description": "oauth2: client ID and secret; token: a bearer token; none: no sign-in."
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "description": "Stable id; set by aantje."
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "Name shown when you copy a lake."
+                  },
+                  "kind": {
+                    "const": "fabric",
+                    "description": "A lakehouse of Microsoft Fabric, written through the Iceberg catalog of OneLake."
+                  },
+                  "workspace": {
+                    "type": "string",
+                    "description": "ID (GUID) of the Fabric workspace."
+                  },
+                  "lakehouse": {
+                    "type": "string",
+                    "description": "ID (GUID) of the lakehouse."
+                  },
+                  "workspaceName": {
+                    "type": "string",
+                    "description": "Name of the workspace, for messages."
+                  },
+                  "lakehouseName": {
+                    "type": "string",
+                    "description": "Name of the lakehouse, for messages."
+                  },
+                  "tenant": {
+                    "type": "string",
+                    "description": "Directory (tenant) ID of the sign-in; default: the tenant of your Microsoft account."
+                  },
+                  "schemas": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Whether the lakehouse has schemas; one without has only dbo."
+                  }
+                }
               },
-              "clientId": {
-                "type": "string",
-                "description": "OAuth2 client ID."
-              },
-              "oauth2ServerUri": {
-                "type": "string",
-                "description": "OAuth2 token endpoint; default: <endpoint>/v1/oauth/tokens."
-              },
-              "scope": {
-                "type": "string",
-                "description": "OAuth2 scope."
-              },
-              "region": {
-                "type": "string",
-                "default": "us-east-1",
-                "description": "Region of the storage behind the catalog."
-              },
-              "vendedCredentials": {
-                "type": "boolean",
-                "default": true,
-                "description": "Use the short-lived storage credentials that the catalog hands out."
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "endpoint",
+                  "warehouse",
+                  "signIn"
+                ],
+                "properties": {
+                  "kind": {
+                    "const": "rest",
+                    "description": "An Iceberg REST catalog (the default)."
+                  },
+                  "id": {
+                    "type": "string",
+                    "description": "Stable id; set by aantje."
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "Name shown when you copy a lake."
+                  },
+                  "endpoint": {
+                    "type": "string",
+                    "description": "REST endpoint of the catalog, for example http://polaris:8181/api/catalog."
+                  },
+                  "warehouse": {
+                    "type": "string",
+                    "description": "Warehouse or catalog name."
+                  },
+                  "signIn": {
+                    "enum": [
+                      "oauth2",
+                      "token",
+                      "none"
+                    ],
+                    "description": "oauth2: client ID and secret; token: a bearer token; none: no sign-in."
+                  },
+                  "clientId": {
+                    "type": "string",
+                    "description": "OAuth2 client ID."
+                  },
+                  "oauth2ServerUri": {
+                    "type": "string",
+                    "description": "OAuth2 token endpoint; default: <endpoint>/v1/oauth/tokens."
+                  },
+                  "scope": {
+                    "type": "string",
+                    "description": "OAuth2 scope."
+                  },
+                  "region": {
+                    "type": "string",
+                    "default": "us-east-1",
+                    "description": "Region of the storage behind the catalog."
+                  },
+                  "vendedCredentials": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Use the short-lived storage credentials that the catalog hands out."
+                  }
+                }
               }
-            }
+            ]
           }
         },
         "aantje.connections": {
@@ -1875,6 +2360,24 @@
           "maximum": 1000000,
           "markdownDescription": "The `LIMIT` that Execute of a CTE on its own adds. **Run CTE with Limit...** asks for another number, or none."
         },
+        "aantje.sql.confirmUnfilteredWrites": {
+          "type": "boolean",
+          "scope": "machine",
+          "default": true,
+          "markdownDescription": "Before an `UPDATE` or `DELETE` without `WHERE` (also `WHERE true` and `WHERE 1 = 1`) runs in the SQL editor, asks in a dialog that names the rows of its table. A guard against mistakes, not a permission check."
+        },
+        "aantje.sql.askCommitMessage": {
+          "type": "boolean",
+          "scope": "machine",
+          "default": true,
+          "markdownDescription": "Asks once per run of the SQL editor that changes the lake for the commit message of its snapshots, empty by default: Enter with an empty field runs without one, Escape cancels the run. The last five messages of the connection are offered."
+        },
+        "aantje.commitAuthor": {
+          "type": "string",
+          "scope": "machine",
+          "default": "",
+          "markdownDescription": "The author that the SQL editor records together with a commit message. Empty uses the user of a PostgreSQL connection (for an Entra login its UPN); other connections then record no author."
+        },
         "aantje.sql.formatKeywordCase": {
           "type": "string",
           "scope": "machine",
@@ -1892,7 +2395,30 @@
           "default": 25,
           "minimum": 0,
           "maximum": 1000,
-          "markdownDescription": "How many statements the **Query History** of a connection keeps: the statements that the SQL editor ran on it with Run Query, Run Statement or Execute, newest first. They are kept in the global state of VS Code on this machine, with the SQL text and its literals. `0` records nothing, hides the folder and deletes the stored statements."
+          "markdownDescription": "How many statements the **Query History** of a connection keeps: the statements that the SQL editor ran on it with Run Query, Run Statement or Execute, newest first. They are kept in the global state of VS Code on this machine, with the SQL text and its literals. Favorites are kept apart from this limit. `0` records nothing, hides the folder and deletes the stored statements and favorites."
+        },
+        "aantje.export.markdownNull": {
+          "type": "string",
+          "scope": "machine",
+          "enum": [
+            "empty",
+            "NULL"
+          ],
+          "enumDescriptions": [
+            "A NULL is an empty cell, as in a CSV file.",
+            "A NULL is the word NULL, so that it differs from an empty text."
+          ],
+          "default": "empty",
+          "markdownDescription": "How a NULL shows in a Markdown table: **Copy as Markdown** and the Markdown export of the grid, and Markdown files of **Run to File...** and **Export...**."
+        },
+        "aantje.templates.folders": {
+          "type": "array",
+          "scope": "machine",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "Folders of SQL templates, for example the clone of a Git repository of your team, that **aantje: Templates** lists read-only, as source *folder*. The `.sql` files directly in a folder that are marked as a template (header line `-- aantje-template: 1`) are read; other `.sql` files are passed over. Absolute paths; `~` at the start is your home folder."
         },
         "aantje.mcp.enabled": {
           "type": "boolean",
@@ -1977,6 +2503,8 @@
     "@vscode/vsce-sign@2.1.0": true
   },
   "overrides": {
+    "glob": "^14.0.2",
+    "minimatch": "^11.0.1",
     "mocha": "^12.0.3"
   },
   "activationEvents": [

@@ -13,6 +13,7 @@ import {
 import { el } from '../shell/dom';
 import { count } from '../shell/model';
 import { reportPage } from '../shell/report-page';
+import { reportHeading } from '../shell/report-heading';
 import { METADATA_ROWS, matchingMetadata, propertiesCards, scopeText } from './model';
 import type { PropertiesData, PropertiesView } from './model';
 import { isPropertiesMessage } from './protocol';
@@ -67,7 +68,7 @@ export const propertiesPage = reportPage<PropertiesData>(
         filter = restoredFilter(context.state.get(), next);
         const { properties } = next;
         const header = pageHeader(context, {
-          title: 'Properties',
+          title: reportHeading('Properties'),
           subtitle: `${next.connection} · ${count(properties.metadata.length)} metadata entries`,
           refresh: 'Read the properties again; the filter stays',
           view: (): PropertiesView => ({ filter }),

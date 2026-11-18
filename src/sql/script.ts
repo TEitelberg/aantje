@@ -1,3 +1,5 @@
+import type { SqlToken } from './tokens';
+
 /** A row of DuckDB's `sql_tokenize`; `start` is a UTF-8 byte offset into the text. */
 export interface Token {
   readonly start: number;
@@ -40,6 +42,15 @@ export function utf16Offsets(text: string): (byteOffset: number) => number {
   }
   map[byte] = unit;
   return (byteOffset) => map[Math.min(byteOffset, byte)] ?? text.length;
+}
+
+/** The rows of `sql_tokenize` as tokens with UTF-16 offsets into the text they came from. */
+export function textTokens(text: string, rows: readonly Token[]): SqlToken[] {
+  const unitOf = utf16Offsets(text);
+  return rows.map(({ start, type, word }) => {
+    const offset = unitOf(start);
+    return { start: offset, end: offset + word.length, type, word };
+  });
 }
 
 /** The tokens of one statement, without comments, and the terminator that ends it (none for the last statement). */

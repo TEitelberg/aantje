@@ -1,16 +1,22 @@
+import { foldIdentifier } from '../catalog/ddl';
 import type { CatalogReader, SnapshotId } from '../catalog/model';
+import { columnsOf, lineageAround } from './columns';
 import { buildGraph } from './graph';
 import type { CatalogObjects, DependencyGraph } from './graph';
-import { traverse } from './model';
 import { LAKE_SCOPE } from '../shell/scope';
 import type { DependenciesData } from './model';
 import type { SqlParser } from './parser';
+import { connectedComponent } from './picture';
 
-/** The tables, views and macros of every schema at the snapshot, with the SQL of the views and macros. */
+/**
+ * The tables, views and macros of every schema at the snapshot, with the SQL of the views and macros; with `columns`
+ * also the top-level columns of every table, which the column lineage needs.
+ */
 export async function readObjects(
   reader: CatalogReader,
   snapshot: SnapshotId,
   signal?: AbortSignal,
+  { columns = false }: { readonly columns?: boolean } = {},
 ): Promise<CatalogObjects> {
   // One statement per kind of object, whatever the number of schemas: on a remote catalog each is a round trip.
   const schemas = await reader.schemas(snapshot);
@@ -19,7 +25,16 @@ export async function readObjects(
   const views = entries.some(({ kind }) => kind === 'view') ? await reader.views(null, snapshot) : [];
   signal?.throwIfAborted();
   const macros = await reader.macros(null, snapshot);
-  return { schemas, entries, views, macros };
+  if (!columns) return { schemas, entries, views, macros };
+  signal?.throwIfAborted();
+  const byTable = await reader.columnEntries(snapshot);
+  const tableColumns = new Map(
+    [...byTable].map(([id, list]) => [
+      id,
+      list.flatMap(({ path }) => (path.length === 1 && path[0] !== undefined ? [path[0]] : [])),
+    ]),
+  );
+  return { schemas, entries, views, macros, columns: tableColumns };
 }
 
 // Snapshots kept in the cache; the user moves between a few.
@@ -52,7 +67,7 @@ export async function readGraph(
   let read = known?.abort.signal.aborted ? undefined : known;
   if (!read) {
     const abort = new AbortController();
-    const graph = readObjects(reader, snapshot, abort.signal).then((objects) =>
+    const graph = readObjects(reader, snapshot, abort.signal, { columns: true }).then((objects) =>
       buildGraph(objects, parser, { signal: abort.signal }),
     );
     read = { graph, abort, waiting: 0 };
@@ -92,7 +107,7 @@ function join(read: Read, signal: AbortSignal | undefined): Promise<DependencyGr
 }
 
 // The part of the graph with the given nodes, numbered anew; edges and issues of other nodes are dropped.
-function restrict(graph: DependencyGraph, keep: readonly number[]): DependencyGraph {
+function restrict(graph: DependencyGraph, keep: readonly number[]): Omit<DependencyGraph, 'lineage'> {
   const index = new Map(keep.map((old, now) => [old, now]));
   const at = (old: number): number | undefined => index.get(old);
   return {
@@ -169,14 +184,19 @@ export function schemaData(
 
 /**
  * One object with everything it uses and everything that uses it, and the other objects of the lake that have
- * dependencies, which the graph shows on Show all. The problems are only those of the object and of the objects it
- * reaches. Undefined if the graph lacks the object.
+ * dependencies, which the graph shows on Show all. The problems are only those of the objects connected to it, which
+ * its graph holds. Undefined if the graph lacks the object.
  */
 export function objectData(
   graph: DependencyGraph,
   connection: string,
   snapshot: SnapshotId,
-  target: { readonly kind: DependencyGraph['nodes'][number]['kind']; readonly id: number },
+  target: {
+    readonly kind: DependencyGraph['nodes'][number]['kind'];
+    readonly id: number;
+    /** A column of a table, for Show Column Lineage: the lineage is that of this column only. */
+    readonly column?: string | undefined;
+  },
 ): DependenciesData | undefined {
   const start = graph.nodes.findIndex(({ kind, id }) => kind === target.kind && id === target.id);
   if (start < 0) {
@@ -184,13 +204,13 @@ export function objectData(
   }
   const keep = [...new Set([start, ...involvedNodes(graph)])].sort((a, b) => a - b);
   const data = restrict(graph, keep);
-  const reached = new Set(
-    [
-      start,
-      ...traverse(graph, start, 'usedBy', 1).reached,
-      ...traverse(graph, start, 'dependsOn', 1).reached,
-    ].map((old) => keep.indexOf(old)),
-  );
+  const now = new Map(keep.map((old, index) => [old, index]));
+  const reached = new Set([...connectedComponent(graph.edges, start)].map((old) => now.get(old)));
+  // Macros have no columns: their lineage is not followed.
+  const lineage =
+    graph.lineage && (target.kind === 'table' || target.kind === 'view')
+      ? objectLineage(graph.lineage, start, keep, target.column)
+      : undefined;
   return {
     ...data,
     broken: data.broken.filter(({ from }) => reached.has(from)),
@@ -200,5 +220,25 @@ export function objectData(
     snapshot,
     target: keep.indexOf(start),
     isolated: 0,
+    ...(lineage ? { lineage } : {}),
   };
+}
+
+// The lineage of the object's columns, or of one column of a table: what they are built from and what uses them.
+function objectLineage(
+  lineage: NonNullable<DependencyGraph['lineage']>,
+  start: number,
+  keep: readonly number[],
+  column: string | undefined,
+): DependenciesData['lineage'] {
+  const own = columnsOf(lineage, start);
+  const focus =
+    column === undefined
+      ? undefined
+      : own.find((at) => foldIdentifier(lineage.columns[at]?.name ?? '') === foldIdentifier(column));
+  const index = new Map(keep.map((old, now) => [old, now]));
+  const around = lineageAround(lineage, focus === undefined ? own : [focus], true, (node) => index.get(node));
+  const { index: renumbered, ...shown } = around;
+  const at = focus === undefined ? undefined : renumbered.get(focus);
+  return { ...shown, ...(at === undefined ? {} : { focus: at }) };
 }

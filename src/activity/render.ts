@@ -7,55 +7,65 @@ import {
   empty,
   kindBoxes,
   note,
-  pickCell,
   rangeFields,
   searchBox,
   tableRow,
   toolbar,
 } from '../shell/blocks';
-import type { ListRow } from '../shell/blocks';
 import { barChartHeight } from '../shell/chart-option';
 import type { ChartSet } from '../shell/chart-set';
 import { el } from '../shell/dom';
-import { LIST_ROWS, count, shortUtc } from '../shell/model';
+import { count, shortUtc } from '../shell/model';
 import type { Theme } from '../shell/theme';
-import type { SnapshotActionRequest } from '../snapshot-changes/actions';
-import { detailPane } from '../snapshot-changes/detail';
-import { KIND_LABEL, POINT_KINDS, detailOf, summaryOf } from '../snapshot-changes/model';
+import { KIND_LABEL, POINT_KINDS } from '../snapshot-changes/model';
 import type { Model, PointKind } from '../snapshot-changes/model';
 import type { ActivityActionRequest } from './actions';
 import { activityTablesOption, commitsOption, kindsOption } from './chart-options';
 import { NO_AUTHOR, authorLabel, choices, omittedAuthorsNote, omittedTablesNote } from './model';
 import type { ActivityData, ActivitySummary } from './model';
+import type { TabId } from './state';
 
-/** What the builders show: the data read, its model and the summary of the filtered part. */
+/** What a tab shows: the data read, the summary of the part that the filters leave, and the theme of the charts. */
 interface ActivityView {
   readonly data: ActivityData;
-  readonly model: Model;
   readonly summary: ActivitySummary;
   readonly theme: Theme;
 }
 
+/** The chart set that draws the boxes of a tab, and what a click on a table (its bar or its name) does. */
+interface TabFrame {
+  readonly charts: ChartSet;
+  readonly pickTable: (key: string) => void;
+}
+
 const kindColumns = POINT_KINDS.map((kind) => KIND_LABEL[kind]);
 
-export function drawDays(into: HTMLElement, view: ActivityView, charts: ChartSet): void {
-  const { data, summary, theme } = view;
-  const shown = summary.days;
-  if (shown.length === 0) {
-    into.replaceChildren(
-      el('h2', undefined, 'Commits per day'),
-      empty(
-        data.snapshots.length === 0 ? 'This catalog has no snapshots.' : 'No snapshot matches the filters.',
-      ),
-    );
-    return;
-  }
+/** The button before Refresh: the Snapshot report shows each snapshot, what it changed and what can be done with it. */
+export function headerActions(ask: (request: ActivityActionRequest) => void): HTMLElement[] {
+  return [
+    actionButton(
+      'Show Snapshot Report',
+      () => ask({ action: 'showSnapshotReport' }),
+      'Open the snapshot report of this connection, with each snapshot and what it changed',
+    ),
+  ];
+}
+
+const noSnapshot = (view: ActivityView): HTMLElement =>
+  empty(
+    view.data.snapshots.length === 0 ? 'This catalog has no snapshots.' : 'No snapshot matches the filters.',
+  );
+
+const noTable = (): HTMLElement => empty('No table was changed by the snapshots that the filters leave.');
+
+/** The days, newest first, with their commits and changes: the keyboard route of the charts of the days. */
+function daysTable(summary: ActivitySummary): HTMLElement {
   const alternative = el('details', 'alternative');
   alternative.append(
     el('summary', undefined, 'Show the days as a table'),
     dataTable(
       ['Day (UTC)', 'Commits', ...kindColumns],
-      shown
+      summary.days
         .toReversed()
         .map((day) =>
           tableRow([
@@ -66,50 +76,52 @@ export function drawDays(into: HTMLElement, view: ActivityView, charts: ChartSet
         ),
     ),
   );
-  into.replaceChildren(
-    el('h2', undefined, 'Commits per day'),
-    charts.box(commitsOption(shown, theme.palette)),
-    el('h2', undefined, 'Changes by kind'),
-    note(POINT_KINDS.map((kind) => `${KIND_LABEL[kind]}: ${count(summary.kinds[kind])}`).join(' · ')),
-    charts.box(kindsOption(shown, theme.palette)),
-    alternative,
-  );
+  return alternative;
 }
 
-export function drawAuthors(into: HTMLElement, summary: ActivitySummary): void {
-  into.replaceChildren(
-    el('h2', undefined, 'Authors'),
-    summary.authors.length === 0
-      ? empty('No snapshot matches the filters.')
-      : dataTable(
-          ['Author', 'Commits', 'First', 'Latest', 'Latest message'],
-          summary.authors.map((row) =>
-            tableRow([
-              el('td', row.author === NO_AUTHOR ? undefined : 'name', authorLabel(row.author)),
-              el('td', 'number', String(row.commits)),
-              shortUtc(row.first),
-              shortUtc(row.last),
-              el('td', 'who', row.message ?? ''),
-            ]),
-          ),
-        ),
-    ...(summary.omittedAuthors > 0 ? [note(omittedAuthorsNote(summary.omittedAuthors), 'warning')] : []),
-  );
-}
-
-export function drawTables(
-  into: HTMLElement,
-  view: ActivityView,
-  charts: ChartSet,
-  pickTable: (key: string) => void,
-): void {
+function commitsTab(view: ActivityView, { charts }: TabFrame): HTMLElement[] {
   const { summary, theme } = view;
-  into.replaceChildren(el('h2', undefined, 'Most changed tables'));
-  if (summary.tables.length === 0) {
-    into.append(empty('No table was changed by the snapshots that the filters leave.'));
-    return;
-  }
-  into.append(
+  if (summary.days.length === 0) return [noSnapshot(view)];
+  return [charts.box(commitsOption(summary.days, theme.palette)), daysTable(summary)];
+}
+
+function kindsTab(view: ActivityView, { charts }: TabFrame): HTMLElement[] {
+  const { summary, theme } = view;
+  if (summary.days.length === 0) return [noSnapshot(view)];
+  return [
+    note(POINT_KINDS.map((kind) => `${KIND_LABEL[kind]}: ${count(summary.kinds[kind])}`).join(' · ')),
+    charts.box(kindsOption(summary.days, theme.palette)),
+    daysTable(summary),
+  ];
+}
+
+function authorsTab(view: ActivityView): HTMLElement[] {
+  const { summary } = view;
+  if (summary.authors.length === 0) return [noSnapshot(view)];
+  return [
+    dataTable(
+      ['Author', 'Commits', 'First', 'Latest', 'Latest message'],
+      summary.authors.map((row) =>
+        tableRow([
+          el('td', row.author === NO_AUTHOR ? undefined : 'name', authorLabel(row.author)),
+          el('td', 'number', String(row.commits)),
+          shortUtc(row.first),
+          shortUtc(row.last),
+          el('td', 'who', row.message ?? ''),
+        ]),
+      ),
+    ),
+    ...(summary.omittedAuthors > 0 ? [note(omittedAuthorsNote(summary.omittedAuthors), 'warning')] : []),
+  ];
+}
+
+const omittedTables = (summary: ActivitySummary): HTMLElement[] =>
+  summary.omittedTables > 0 ? [note(omittedTablesNote(summary.omittedTables), 'warning')] : [];
+
+function rankingTab(view: ActivityView, { charts, pickTable }: TabFrame): HTMLElement[] {
+  const { summary, theme } = view;
+  if (summary.tables.length === 0) return [noTable()];
+  return [
     charts.box(activityTablesOption(summary.tables, theme.palette), {
       height: barChartHeight(summary.tables.length),
       onItemClick: (index) => {
@@ -117,11 +129,19 @@ export function drawTables(
         if (row) pickTable(row.key);
       },
     }),
+    ...omittedTables(summary),
+  ];
+}
+
+function tableChangesTab(view: ActivityView, { pickTable }: TabFrame): HTMLElement[] {
+  const { summary } = view;
+  if (summary.tables.length === 0) return [noTable()];
+  return [
     dataTable(
       ['Table', 'Changes', ...kindColumns],
       summary.tables.map((row) => {
         const pick = el('button', 'table-pick', row.label);
-        pick.setAttribute('aria-label', `Show only the snapshots that changed ${row.label}`);
+        pick.setAttribute('aria-label', `Filter the report to the snapshots that changed ${row.label}`);
         pick.addEventListener('click', () => pickTable(row.key));
         const first = el('td', 'name');
         first.append(pick);
@@ -132,78 +152,21 @@ export function drawTables(
         ]);
       }),
     ),
-    ...(summary.omittedTables > 0 ? [note(omittedTablesNote(summary.omittedTables), 'warning')] : []),
-  );
+    ...omittedTables(summary),
+  ];
 }
 
-/** Fills `into` with the snapshot list; returns each row and its button by snapshot. */
-export function drawList(
-  into: HTMLElement,
-  view: ActivityView,
-  onSelect: (id: number) => void,
-): Map<number, ListRow> {
-  const { data, model, summary } = view;
-  const rows = new Map<number, ListRow>();
-  const shown = summary.commits.slice(0, LIST_ROWS);
-  const body = shown.flatMap((commit) => {
-    const facts = detailOf(model, data.latest, commit.id);
-    if (!facts) return [];
-    const { cell, pick } = pickCell(
-      `@${commit.id}`,
-      `Snapshot ${commit.id}. Select it to see what it changed.`,
-      () => onSelect(commit.id),
-    );
-    const row = tableRow([
-      cell,
-      shortUtc(commit.time),
-      el('td', 'who', commit.author ?? ''),
-      el('td', 'who', commit.message ?? ''),
-      summaryOf(facts),
-    ]);
-    rows.set(commit.id, { row, pick });
-    return [row];
-  });
-  into.replaceChildren(
-    el('h2', undefined, 'Snapshots'),
-    body.length === 0
-      ? empty('No snapshot matches the filters.')
-      : dataTable(['Snapshot', 'Time (UTC)', 'Author', 'Message', 'Changes'], body),
-    ...(summary.commits.length > shown.length
-      ? [
-          note(
-            `${shown.length} of ${summary.commits.length} snapshots are listed, the newest first. Narrow the filters to see the others.`,
-          ),
-        ]
-      : []),
-  );
-  return rows;
-}
+const TAB_CONTENT: Readonly<Record<TabId, (view: ActivityView, frame: TabFrame) => HTMLElement[]>> = {
+  days: commitsTab,
+  kinds: kindsTab,
+  authors: authorsTab,
+  ranking: rankingTab,
+  tables: tableChangesTab,
+};
 
-export function drawDetail(
-  into: HTMLElement,
-  view: Pick<ActivityView, 'data' | 'model'>,
-  selected: number | undefined,
-  ask: (request: ActivityActionRequest | SnapshotActionRequest) => void,
-): void {
-  into.replaceChildren(
-    ...detailPane(
-      {
-        model: view.model,
-        latest: view.data.latest,
-        selected,
-        actions: [
-          actionButton(
-            'Show Snapshot Report',
-            () => ask({ action: 'showSnapshotReport' }),
-            'Open the snapshot report of this connection',
-          ),
-        ],
-        hint: 'Select a snapshot in the list to see what it changed.',
-      },
-      ask,
-    ),
-  );
-}
+/** The blocks of a tab; the next `drawAll` of the chart set draws its charts, once they are in the page. */
+export const tabContent = (tab: TabId, view: ActivityView, frame: TabFrame): HTMLElement[] =>
+  TAB_CONTENT[tab](view, frame);
 
 /** The filters when the bar is built; `kinds` is read on every change of a checkbox. */
 interface Filters {
@@ -222,7 +185,7 @@ interface FilterHandlers {
   readonly onRange: (end: 'from' | 'to', value: number) => void;
 }
 
-/** The filter bar; `showTable` selects a table in its drop-down when the table list picks one. */
+/** The filter bar; `showTable` selects a table in its drop-down when a bar or a table name picks one. */
 export function filterBar(
   model: Model,
   filters: Filters,

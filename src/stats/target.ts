@@ -1,4 +1,5 @@
 import type { SnapshotId } from '../catalog/model';
+import { reportHeading } from '../shell/report-heading';
 import type { NodeRef } from '../tree/refs';
 
 /** The table that Show Statistics acts on: a table node, or the Statistics folder of a table. */
@@ -26,11 +27,11 @@ export function statisticsKey({ connectionId, tableId }: StatisticsTarget, snaps
   return JSON.stringify([connectionId, tableId, snapshot]);
 }
 
-/** `Statistics of shop.events @56 · Lake`: the names are the ones the tree shows at that snapshot. */
+/** `Statistics: shop.events @56 · Lake`: the names are the ones the tree shows at that snapshot. */
 export function statisticsTitle(
   { schema, table }: StatisticsTarget,
   connectionName: string,
   snapshot: SnapshotId,
 ): string {
-  return `Statistics of ${schema}.${table} @${snapshot} · ${connectionName}`;
+  return `${reportHeading('Statistics', `${schema}.${table}`)} @${snapshot} · ${connectionName}`;
 }

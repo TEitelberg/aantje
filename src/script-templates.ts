@@ -335,7 +335,10 @@ export function scriptKindOf(ref: NodeRef): ScriptKind | undefined {
       return ref.member ? 'column.member' : 'column';
     case 'folder':
       // The Query History holds statements, Files the storage and an Iceberg row a copy, not catalog objects: no Script as.
-      return ref.folder === 'queryHistory' || ref.folder === 'files' || ref.folder === 'iceberg'
+      return ref.folder === 'queryHistory' ||
+        ref.folder === 'favorites' ||
+        ref.folder === 'files' ||
+        ref.folder === 'iceberg'
         ? undefined
         : `folder.${ref.folder}`;
     case 'detail':

@@ -31,6 +31,8 @@ export interface Chart {
   resize(): void;
   /** Replaces the series; keeps the rest, including the zoom. */
   update(option: ChartOption): void;
+  /** The drawing as a PNG data URL at twice the size, on `background`. */
+  image(background: string): string;
   dispose(): void;
 }
 
@@ -74,6 +76,7 @@ export function drawChart(
   return {
     resize: () => chart.resize(),
     update: (next) => chart.setOption(next as EChartsCoreOption, { replaceMerge: ['series'] }),
+    image: (background) => chart.getDataURL({ type: 'png', pixelRatio: 2, backgroundColor: background }),
     dispose: () => chart.dispose(),
   };
 }

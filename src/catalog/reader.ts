@@ -2,7 +2,9 @@ import { isAantjeError } from '../errors';
 import type { Driver } from './drivers/driver';
 import type { CatalogReader } from './model';
 import type { Query } from './queries/shared';
+import { activityReads } from './reader/activity';
 import { coreReads } from './reader/core';
+import { databaseReads } from './reader/database';
 import { detailReads } from './reader/details';
 import { growthReads } from './reader/growth';
 import { historyReads } from './reader/history';
@@ -47,6 +49,8 @@ export function createCatalogReader(driver: Driver): CatalogReader {
     ...growthReads(run, attempt),
     ...historyReads(run, attempt, withCommits),
     ...maintenanceReads(run, attempt),
+    ...databaseReads(run),
+    ...activityReads(run, attempt, withCommits),
     close: () => driver.close(),
   };
 }

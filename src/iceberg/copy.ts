@@ -7,8 +7,10 @@ import type { DataAccess, TableRef } from '../data/types';
 import { loadEngine } from '../duckdb/engine';
 import { extensionFailure, scrubbed } from '../duckdb/messages';
 import { AantjeError } from '../errors';
-import { selectList } from './mapping';
+import { extraCastsOf, selectList } from './mapping';
+import { leftoverCleanup, tokenRenewal } from './renew';
 import { ICEBERG, icebergSetup } from './statements';
+import { targetPlace } from './target';
 import type { IcebergTarget } from './target';
 
 /** What to do with a table that the Iceberg catalog has already. */
@@ -37,6 +39,8 @@ export interface CopyRequest {
   readonly target: IcebergTarget;
   /** The client secret or token of the target. */
   readonly secret: string | undefined;
+  /** The token of the sign-in now, without asking (Fabric): asked before each table, a new one replaces `secret`. */
+  readonly freshSecret?: () => Promise<string | undefined>;
   readonly existing: ExistingTables;
   /** The whole lake when undefined. */
   readonly scope?: CopyScope;
@@ -44,6 +48,8 @@ export interface CopyRequest {
   readonly partitions?: ReadonlyMap<string, string>;
   /** The line under the title of the progress notification. */
   readonly report?: (text: string) => void;
+  /** Told after each table: what came of it, for example `gold.sales written, 120 rows (2 of 5)`, and whether it worked. */
+  readonly stepDone?: (line: string, ok: boolean) => void;
 }
 
 /** Where a table of the lake goes in the Iceberg catalog. */
@@ -169,10 +175,35 @@ export async function copyToIceberg(request: CopyRequest, signal?: AbortSignal):
       }
 
       const copies: TableCopy[] = [];
+      const { renew, token } = tokenRenewal(
+        target,
+        secret,
+        request.freshSecret,
+        (sql) => connection.run(sql),
+        hidden,
+      );
+      const leftover = leftoverCleanup(target, token, request.stepDone);
+      await createNamespaces(
+        (sql) => connection.run(sql),
+        rows,
+        tables.map((table) => icebergNameOf(scope, table).namespace),
+        request.stepDone,
+        hidden,
+      );
       for (const [index, table] of tables.entries()) {
         signal?.throwIfAborted();
         report(`${tableKey(table)} (${index + 1} of ${tables.length})`);
-        copies.push(await copyTable(table, clashes.includes(table)));
+        await renew();
+        const copy = await copyTable(table, clashes.includes(table));
+        copies.push(copy);
+        const what =
+          copy.status === 'copied'
+            ? `written, ${copy.rows ?? 0} rows`
+            : `failed: ${copy.error ?? 'no reason'}`;
+        request.stepDone?.(
+          `${tableKey(table)} ${what} (${index + 1} of ${tables.length})`,
+          copy.status === 'copied',
+        );
       }
       return { snapshot, snapshotTime: time, tables: copies };
 
@@ -182,6 +213,8 @@ export async function copyToIceberg(request: CopyRequest, signal?: AbortSignal):
         try {
           await connection.run(`CREATE SCHEMA IF NOT EXISTS ${ICE}.${quoteIdentifier(iceberg.namespace)}`);
           if (replace) await connection.run(`DROP TABLE ${destination}`);
+          // An empty table that a failed write left (DuckDB does not list it) would refuse the create.
+          else await leftover(iceberg);
           const partitioned = request.partitions?.get(tableKey(table));
           await connection.run('BEGIN TRANSACTION');
           try {
@@ -193,6 +226,7 @@ export async function copyToIceberg(request: CopyRequest, signal?: AbortSignal):
             const described = await rows(`DESCRIBE SELECT * FROM ${source}`);
             const { list, converted } = selectList(
               described.map(([name, type]) => [String(name), String(type)]),
+              extraCastsOf(target),
             );
             const result = await connection.runAndReadAll(
               `CREATE TABLE ${destination}${partitioned === undefined ? '' : ` PARTITIONED BY (${partitioned})`} AS SELECT ${list} FROM ${source}`,
@@ -216,6 +250,8 @@ export async function copyToIceberg(request: CopyRequest, signal?: AbortSignal):
             throw failure;
           }
         } catch (failure) {
+          // OneLake made the table before its data: a failed write leaves it empty, which is dropped again.
+          await leftover(iceberg);
           if (signal?.aborted) throw failure;
           return { ...table, status: 'failed', iceberg, error: scrubbed(failure, hidden).line };
         }
@@ -229,6 +265,34 @@ export async function copyToIceberg(request: CopyRequest, signal?: AbortSignal):
         : new AantjeError('CONNECTION_FAILED', `Cannot sync to Iceberg: ${line}`, { cause: new Error(line) });
     },
   });
+}
+
+/**
+ * Creates the namespaces (schemas) that the tables go to and the catalog lacks, before the first table is written, and
+ * tells each one; the catalog of OneLake creates a schema of a lakehouse this way too. A namespace that cannot be created
+ * is told with its reason, and its tables then fail on their own.
+ */
+export async function createNamespaces(
+  run: (sql: string) => Promise<unknown>,
+  rows: (sql: string) => Promise<unknown[][]>,
+  namespaces: readonly string[],
+  told: ((line: string, ok: boolean) => void) | undefined,
+  hidden: readonly string[],
+): Promise<void> {
+  const present = new Set(
+    (await rows(`SELECT schema_name FROM duckdb_schemas() WHERE database_name = '${ICE}'`)).map(([name]) =>
+      String(name).toLowerCase(),
+    ),
+  );
+  const missing = [...new Set(namespaces)].filter((namespace) => !present.has(namespace.toLowerCase()));
+  for (const namespace of missing) {
+    try {
+      await run(`CREATE SCHEMA IF NOT EXISTS ${ICE}.${quoteIdentifier(namespace)}`);
+      told?.(`created the schema "${namespace}"`, true);
+    } catch (failure) {
+      told?.(`could not create the schema "${namespace}": ${scrubbed(failure, hidden).line}`, false);
+    }
+  }
 }
 
 /** The newest Iceberg snapshot of the table as text (the ids are 64 bit); undefined when the extension cannot say. */
@@ -248,5 +312,4 @@ export async function icebergSnapshotOf(
 }
 
 /** The target in words for a message. */
-export const describeTarget = (target: IcebergTarget): string =>
-  `${target.name} (${target.warehouse} at ${target.endpoint})`;
+export const describeTarget = (target: IcebergTarget): string => `${target.name} (${targetPlace(target)})`;

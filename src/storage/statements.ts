@@ -40,13 +40,17 @@ export function storageExtensions(
     case 's3':
       return ['INSTALL httpfs', 'LOAD httpfs'];
     case 'azure':
-    case 'onelake': {
-      const load = ['INSTALL azure', 'LOAD azure'];
-      return platform === 'linux' ? [...load, "SET azure_transport_option_type = 'curl'"] : load;
-    }
+    case 'onelake':
+      return azureExtensions(platform);
     default:
       return [];
   }
+}
+
+/** The azure extension, with the curl transport on Linux (see `storageExtensions`). */
+export function azureExtensions(platform: NodeJS.Platform = process.platform): string[] {
+  const load = ['INSTALL azure', 'LOAD azure'];
+  return platform === 'linux' ? [...load, "SET azure_transport_option_type = 'curl'"] : load;
 }
 
 /**

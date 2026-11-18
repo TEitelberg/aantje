@@ -1,5 +1,5 @@
 /// <reference lib="dom" />
-// The detail pane of one snapshot, shared by the Snapshot Report and Activity; user input comes back through `ask`.
+// The detail pane of one snapshot in the Snapshot Report; user input comes back through `ask`.
 import { actionButton, note, whoLine } from '../shell/blocks';
 import { el } from '../shell/dom';
 import { compareTargets, isReadable, showsRows } from './actions';
@@ -15,8 +15,6 @@ export interface DetailPane {
   readonly other?: number | undefined;
   /** Query and Schema vs on each table, besides Rows changed. */
   readonly tableQueries?: boolean;
-  /** Buttons after Show catalog. */
-  readonly actions?: readonly HTMLElement[];
   /** Blocks between the buttons and the tables. */
   readonly notes?: readonly HTMLElement[];
   /** Shown while no snapshot is selected. */
@@ -77,7 +75,6 @@ function snapshotActions(snapshot: SnapshotDetail, pane: DetailPane, ask: Ask): 
     actionButton(`Show catalog at @${snapshot.id}`, () =>
       ask({ action: 'showCatalog', snapshot: snapshot.id }),
     ),
-    ...(pane.actions ?? []),
     ...(targets.length > 0 ? [el('span', 'label', 'Compare the catalog with')] : []),
     ...targets.map((target) =>
       actionButton(

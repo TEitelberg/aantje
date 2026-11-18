@@ -7,6 +7,7 @@ import { escapeGlob } from '../data/store-sql';
 import type { HealthFinding } from './model';
 import { storeProblemOf } from '../storage/diagnose';
 import type { StorageKind } from '../storage/config';
+import { neededBy } from './storage-checks';
 
 interface FileColumn {
   readonly name: string;
@@ -19,15 +20,15 @@ interface FooterFacts {
   readonly columns: readonly FileColumn[];
 }
 
-// The files the deep check opens: those the newest snapshot needs and DuckDB can read, largest half first, then
-// newest. Encrypted, placeless and non-Parquet files (deletion vectors) are left out; ties break by id.
+// The files the deep check opens: those the newest snapshot (or the snapshot `at`) needs and DuckDB can read, largest
+// half first, then newest. Encrypted, placeless and non-Parquet files (deletion vectors) are left out; ties by id.
 export function chooseDeepFiles(
   files: readonly StoredFile[],
   limit: number,
+  at?: number,
 ): { chosen: StoredFile[]; eligible: number } {
   const eligible = files.filter(
-    (file) =>
-      file.endSnapshot === null && file.location !== null && !file.encrypted && file.format === 'parquet',
+    (file) => neededBy(file, at) && file.location !== null && !file.encrypted && file.format === 'parquet',
   );
   const largest = eligible
     .toSorted(

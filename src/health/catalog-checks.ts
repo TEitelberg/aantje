@@ -43,6 +43,8 @@ export interface HealthCatalogFacts {
   readonly schemas?: ReadonlyMap<number, string>;
   /** Most findings reported per check. */
   readonly limit: number;
+  /** The snapshot whose state is checked when it is not the newest: the findings of maintenance are left out. */
+  readonly at?: number;
 }
 
 interface CatalogResult {
@@ -58,6 +60,8 @@ const KIND_TEXT: Record<ConsistencySample['kind'], string> = {
   'delete-file': 'delete file',
   table: 'table',
   view: 'view',
+  schema: 'schema',
+  column: 'column',
   partitioning: 'partitioning',
   'sort-order': 'sort order',
 };
@@ -74,6 +78,8 @@ interface ProblemText {
 
 const BACKUP =
   'Restore the catalog from a backup taken before the damage. Do not run Clean Up Old Files or Delete Orphaned Files first: the Parquet files may be the only copy of the data.';
+
+const NOT_BY_HAND = `${BACKUP} Do not edit the catalog tables by hand: a row changed in place cannot be told from one that a writer wrote, and later writers build on it.`;
 
 const PROBLEMS: Record<ConsistencyCheck, ProblemText> = {
   'files-without-table': {
@@ -217,9 +223,38 @@ const PROBLEMS: Record<ConsistencyCheck, ProblemText> = {
     sql: `SELECT table_id, data_file_id, row_id_start, record_count FROM ${META}.ducklake_data_file WHERE end_snapshot IS NULL AND row_id_start IS NOT NULL ORDER BY table_id, row_id_start;`,
     value: (value) => `row ids reach ${value}`,
   },
+  'ids-never-allocated': {
+    check: 'catalog.ids-never-allocated',
+    title: 'Rows of the catalog have ids that no snapshot ever handed out',
+    what: 'schemas, tables, views or files have an id, or point to one, at or beyond the counters of the newest snapshot (next_catalog_id, next_file_id)',
+    cause:
+      'Rows were written by hand or by a tool that does not keep the counters of DuckLake, or the catalog was put together from copies of different times, such as a table whose schema id never existed (discussion duckdb/ducklake #1203).',
+    fix: NOT_BY_HAND,
+    sql: `SELECT MAX(next_catalog_id) AS next_catalog_id, MAX(next_file_id) AS next_file_id FROM ${META}.ducklake_snapshot;`,
+    value: (value) => `id ${value}`,
+  },
+  'rows-without-table': {
+    check: 'catalog.rows-without-table',
+    title: 'Columns and statistics belong to a table that no snapshot ever had',
+    what: 'column or statistics rows name a table that has no row in ducklake_table',
+    cause:
+      'Rows of ducklake_table were deleted by hand, or a copy of the catalog lost them, or a tool wrote rows for a table it never created.',
+    fix: NOT_BY_HAND,
+    sql: `SELECT c.* FROM ${META}.ducklake_column c WHERE NOT EXISTS (SELECT 1 FROM ${META}.ducklake_table t WHERE t.table_id = c.table_id);`,
+  },
 };
 
 export function catalogFindings(facts: HealthCatalogFacts): CatalogResult {
+  if (facts.at !== undefined) {
+    return {
+      findings: [
+        ...specFindings(facts),
+        ...(facts.consistency?.problems ?? []).map((problem) => problemFinding(problem, facts)),
+      ],
+      omitted: 0,
+      truncated: false,
+    };
+  }
   const small = smallFileFindings(facts);
   const inlined = largeInlinedFindings(facts);
   const compact = autoCompactFindings({

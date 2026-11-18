@@ -1,22 +1,22 @@
-import { SHELL_CSS } from '../shell/style';
+import { LIST_CSS, SHELL_CSS } from '../shell/style';
 import { ICON_BUTTON_CSS } from '../shell/svg-icon';
 
-/** The Dependencies stylesheet: the shell sheet plus the rules of the indented list, the detail pane and its icons. */
-export const DEPENDENCIES_CSS = `${SHELL_CSS}
-[hidden] { display: none !important; }
-.direction { display: inline-flex; gap: 4px; }
-.keylist.objects button { font-family: var(--vscode-editor-font-family); }
-.keylist .sign { display: inline-block; min-width: 2.2em; color: var(--vscode-descriptionForeground); }
-.keylist .kind, .keylist .edge { margin-left: 8px; color: var(--vscode-descriptionForeground); }
-.keylist button[aria-selected="true"] .sign, .keylist button[aria-selected="true"] .kind, .keylist button[aria-selected="true"] .edge { color: inherit; }
-.detail ul { margin: 4px 0; padding-left: 20px; }
-.detail { margin-top: var(--aantje-section-gap); padding: var(--aantje-card-padding); border: 1px solid var(--vscode-focusBorder); border-radius: 4px; }
-.detail:focus { outline: none; }
-.detail .title-line { display: flex; align-items: center; gap: var(--aantje-control-gap); margin-bottom: 4px; }
-.detail .title-line h2 { flex: 1; min-width: 0; margin: 0; overflow-wrap: anywhere; }
-.icons { display: flex; flex: none; gap: 2px; }
-${ICON_BUTTON_CSS}
-.detail h3 { margin: 12px 0 4px; font-size: 1em; }
-td.name, td.what { font-family: var(--vscode-editor-font-family); }
+/**
+ * The Dependencies stylesheet: the shell and list sheets plus the tables of objects and columns with the icons of their
+ * rows, the icons of the header and the groups of the toolbar.
+ */
+export const DEPENDENCIES_CSS = `${SHELL_CSS}${LIST_CSS}
+.mode-group { display: inline-flex; gap: 4px; }
+td.name { font-family: var(--vscode-editor-font-family); }
 td.detail-text { font-family: var(--vscode-editor-font-family); white-space: normal; overflow-wrap: anywhere; }
+th.number, td.number { text-align: right; }
+.depends-on table, .used-by table { table-layout: fixed; }
+.depends-on th.kind, .used-by th.kind { width: 9em; }
+.depends-on th.number, .used-by th.number { width: 4em; }
+.depends-on th.icons, .used-by th.icons { width: 7.5em; }
+.depends-on td.name, .used-by td.name { white-space: normal; overflow-wrap: anywhere; }
+td.icons { padding-top: 0; padding-bottom: 0; }
+td.icons button.icon + button.icon { margin-left: 2px; }
+header button.icon { margin-right: 4px; }
+${ICON_BUTTON_CSS}
 `;

@@ -11,11 +11,12 @@ export interface CopyPlan {
   readonly partitions: ReadonlyMap<string, string>;
 }
 
-/** The plan of the tables of the scope at the snapshot, from the explorer's reader. */
+/** The plan of the tables of the scope at the snapshot, from the explorer's reader; `extra` are the casts of the target. */
 export async function readCopyPlan(
   reader: Pick<CatalogReader, 'entries' | 'columnEntries' | 'partitioning'>,
   snapshot: number,
   scope: CopyScope,
+  extra: Readonly<Record<string, string>> = {},
 ): Promise<CopyPlan> {
   const tables = (await reader.entries(snapshot)).filter(
     (entry) => entry.kind === 'table' && inScope(scope, { schema: entry.schemaName, table: entry.name }),
@@ -28,7 +29,7 @@ export async function readCopyPlan(
   }
   return {
     tables: tables.map((entry) =>
-      tablePlan({ schema: entry.schemaName, table: entry.name }, columns.get(entry.id) ?? []),
+      tablePlan({ schema: entry.schemaName, table: entry.name }, columns.get(entry.id) ?? [], extra),
     ),
     partitions,
   };

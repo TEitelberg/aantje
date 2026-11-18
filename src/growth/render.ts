@@ -1,26 +1,13 @@
 /// <reference lib="dom" />
 // DOM builders of the Growth report; user input comes back through callbacks.
-import {
-  actionButton,
-  choiceSelect,
-  dataTable,
-  empty,
-  modeGroup,
-  note,
-  pickCell,
-  tableRow,
-  toolbar,
-  whoLine,
-} from '../shell/blocks';
-import type { ListRow } from '../shell/blocks';
+import { actionButton, choiceSelect, empty, modeGroup, note, toolbar, whoLine } from '../shell/blocks';
 import type { ChartSet } from '../shell/chart-set';
 import type { ChartOption } from '../shell/chart-option';
 import { el } from '../shell/dom';
-import { LIST_ROWS, formatUtc, shortUtc } from '../shell/model';
+import { formatUtc } from '../shell/model';
 import type { GrowthActionRequest } from './actions';
 import {
   APPROXIMATE_NOTE,
-  EXPIRED_NOTE,
   INLINED_FAILED_NOTE,
   INLINED_NOTE,
   METRICS,
@@ -29,10 +16,12 @@ import {
   formatDelta,
   formatStep,
   growthOlderNote,
-  hasExpired,
-  truncationNote,
 } from './model';
 import type { GrowthData, GrowthXAxis, Metric, Step, TableChoice } from './model';
+import type { TabId } from './state';
+
+/** The height of the chart; a little more than the charts of the other reports, for the steps of a long history. */
+const CHART_PX = 400;
 
 interface DetailView {
   readonly steps: readonly Step[];
@@ -40,20 +29,25 @@ interface DetailView {
   readonly table: number | undefined;
   readonly metric: Metric;
   readonly scope: string;
+  /** The tab that shows the pane: its hint names the chart or the table. */
+  readonly tab: TabId;
 }
 
 interface FilterView {
   readonly choices: readonly TableChoice[];
   readonly table: number | undefined;
   readonly metric: Metric;
-  readonly axis: GrowthXAxis;
 }
 
 interface FilterHandlers {
   readonly onTable: (table: number | undefined) => void;
   readonly onMetric: (metric: Metric) => void;
-  readonly onAxis: (axis: GrowthXAxis) => void;
 }
+
+const HINT: Readonly<Record<TabId, string>> = {
+  chart: 'Select a snapshot in the chart to see its actions.',
+  snapshots: 'Select a snapshot in the table to see its actions.',
+};
 
 /** The heading and, when there are steps, the box of the chart; a click on a point picks its step. */
 export function growthPane(
@@ -68,13 +62,13 @@ export function growthPane(
 ): HTMLElement[] {
   const heading = el('h2', undefined, `${METRIC_LABEL[metric]} of ${scope}`);
   return hasSteps
-    ? [heading, chart.charts.box(chart.option, { onItemClick: chart.onItemClick })]
+    ? [heading, chart.charts.box(chart.option, { height: CHART_PX, onItemClick: chart.onItemClick })]
     : [heading, empty('This catalog has no snapshots.')];
 }
 
 export function noteChildren(data: GrowthData, steps: readonly Step[]): HTMLElement[] {
   return [
-    ...(data.more ? [note(growthOlderNote(data))] : hasExpired(data) ? [note(EXPIRED_NOTE)] : []),
+    ...(data.more ? [note(growthOlderNote(data))] : []),
     ...(data.inlinedMore ? [note(INLINED_NOTE, 'warning')] : []),
     ...(data.inlinedFailed ? [note(INLINED_FAILED_NOTE, 'warning')] : []),
     ...(steps.some(({ approximate }) => approximate) ? [note(APPROXIMATE_NOTE)] : []),
@@ -82,44 +76,12 @@ export function noteChildren(data: GrowthData, steps: readonly Step[]): HTMLElem
   ];
 }
 
-export function snapshotList(
-  steps: readonly Step[],
-  metric: Metric,
-  onSelect: (id: number) => void,
-): { readonly children: HTMLElement[]; readonly rows: Map<number, ListRow> } {
-  const rows = new Map<number, ListRow>();
-  const shown = steps.toReversed().slice(0, LIST_ROWS);
-  const body = shown.map((step) => {
-    const { cell, pick } = pickCell(`@${step.id}`, `Snapshot ${step.id}. Select it to see its actions.`, () =>
-      onSelect(step.id),
-    );
-    const row = tableRow([
-      cell,
-      shortUtc(step.time),
-      el('td', 'number', formatStep(metric, step)),
-      el('td', 'number', formatDelta(metric, step.delta[metric])),
-      el('td', 'who', step.author ?? ''),
-      el('td', 'who', step.message ?? ''),
-    ]);
-    rows.set(step.id, { row, pick });
-    return row;
-  });
-  const children = [
-    el('h2', undefined, 'Snapshots'),
-    body.length === 0
-      ? empty('This catalog has no snapshots.')
-      : dataTable(['Snapshot', 'Time (UTC)', METRIC_LABEL[metric], 'Change', 'Author', 'Message'], body),
-    ...(steps.length > shown.length ? [note(truncationNote(shown.length, steps.length))] : []),
-  ];
-  return { children, rows };
-}
-
 /** The pane of the selected snapshot, or the hint to select one. */
 export function detailChildren(view: DetailView, ask: (request: GrowthActionRequest) => void): HTMLElement[] {
   const { metric, table } = view;
   const step = view.steps.find(({ id }) => id === view.selected);
   if (!step) {
-    return [note('Select a snapshot in the list or the chart to see its actions.')];
+    return [note(HINT[view.tab])];
   }
   const actions = el('div', 'actions');
   actions.append(
@@ -146,6 +108,7 @@ export function detailChildren(view: DetailView, ask: (request: GrowthActionRequ
   ];
 }
 
+/** The filters above the tabs: the table, and the value of the key figures and the chart. */
 export function filters(view: FilterView, on: FilterHandlers): HTMLElement {
   const tableChoice = choiceSelect(
     'Table',
@@ -163,15 +126,23 @@ export function filters(view: FilterView, on: FilterHandlers): HTMLElement {
       on.onMetric,
       { className: 'axis', shown: true },
     ),
+  );
+}
+
+/** What belongs to the chart only: its x axis. */
+export function axisBar(axis: GrowthXAxis, onAxis: (axis: GrowthXAxis) => void): HTMLElement {
+  const bar = toolbar(
     modeGroup(
       'X axis',
       [
         { value: 'snapshot' as const, text: 'Snapshots' },
         { value: 'time' as const, text: 'Time' },
       ],
-      view.axis,
-      on.onAxis,
+      axis,
+      onAxis,
       { className: 'axis', shown: true },
     ),
   );
+  bar.setAttribute('aria-label', 'Chart');
+  return bar;
 }

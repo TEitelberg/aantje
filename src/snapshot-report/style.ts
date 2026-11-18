@@ -1,6 +1,9 @@
 import { DETAIL_CSS, LIST_CSS, SHELL_CSS } from '../shell/style';
 
-/** The Snapshot Report stylesheet: the shell, list and detail sheets plus the table filter and the second snapshot. */
+/**
+ * The Snapshot Report stylesheet: the shell, list and detail sheets plus the table filter and the room between the
+ * filters and the tabs. The table of the snapshots is the shell's paged table, whose rules are in the shell sheet.
+ */
 export const SNAPSHOT_REPORT_CSS = `${SHELL_CSS}${LIST_CSS}${DETAIL_CSS}
 .filter { position: relative; }
 .filter summary { cursor: pointer; }
@@ -9,5 +12,5 @@ export const SNAPSHOT_REPORT_CSS = `${SHELL_CSS}${LIST_CSS}${DETAIL_CSS}
 .choices .table { margin-left: 1.5em; }
 .schema { margin-top: 4px; font-weight: 600; }
 .schema .table { font-weight: normal; }
-.list tr.other td { border-bottom: 2px dashed var(--vscode-focusBorder); }
+.tab-row { margin-top: var(--aantje-section-gap); }
 `;

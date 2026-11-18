@@ -14,6 +14,11 @@ export interface SqlParser {
   serialize(sql: string): Promise<string>;
   /** Lower case names of the built-in functions, and of those that can follow FROM (`FROM duckdb_tables`). */
   functions(): Promise<BuiltinFunctions>;
+  /**
+   * The names DuckDB gives select items without an alias (`(a * 2)`, `sum(b)`), from their nodes of a parsed document;
+   * undefined where it gives none. Without it, the column lineage cannot tell such columns.
+   */
+  names?(items: readonly object[]): Promise<(string | undefined)[]>;
   dispose(): Promise<void>;
 }
 
@@ -38,6 +43,7 @@ export function openSqlParser(): SqlParser & SqlTokenizer {
   return {
     serialize: async (sql) => serializeSql((await ready.get()).connection, sql),
     tokenize: async (text) => tokenRows((await ready.get()).connection, text),
+    names: async (items) => itemNames((await ready.get()).connection, items),
     functions: () => functions.get(),
     async dispose() {
       // A parser that failed to start has nothing to close; the call that started it got the error.
@@ -46,6 +52,56 @@ export function openSqlParser(): SqlParser & SqlTokenizer {
       if (created) closeParserDuckdb(created);
     },
   };
+}
+
+// JSON.parse turns DuckDB's unknown location, the largest 64-bit number, into one that DuckDB does not read back.
+const readable = (value: unknown): unknown =>
+  Array.isArray(value)
+    ? value.map(readable)
+    : typeof value === 'object' && value !== null
+      ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, readable(item)]))
+      : typeof value === 'number' && !Number.isSafeInteger(value)
+        ? 0
+        : value;
+
+/**
+ * DuckDB's text of each item as the only item of a SELECT, without its alias: the name it gives the column. One call
+ * for all items; an item that DuckDB cannot write gets no name. Nothing is run.
+ */
+async function itemNames(
+  connection: Duckdb.DuckDBConnection,
+  items: readonly object[],
+): Promise<(string | undefined)[]> {
+  if (items.length === 0) return [];
+  const template = JSON.parse(await serializeSql(connection, 'SELECT 1')) as {
+    readonly statements: readonly { readonly node: Record<string, unknown> }[];
+  };
+  const [statement] = template.statements;
+  if (!statement) return items.map(() => undefined);
+  const documents = items.map((item) => ({
+    ...template,
+    statements: [{ ...statement, node: { ...statement.node, select_list: [{ ...item, alias: '' }] } }],
+  }));
+  const written = async (part: readonly unknown[]): Promise<unknown[]> =>
+    (
+      await connection.runAndReadAll(
+        'SELECT json_deserialize_sql(value) FROM json_each($1) ORDER BY CAST(key AS INTEGER)',
+        [JSON.stringify(readable(part))],
+      )
+    )
+      .getRowsJson()
+      .map(([text]) => text);
+  let texts: unknown[];
+  try {
+    texts = await written(documents);
+  } catch {
+    // One item that DuckDB cannot write fails the batch: each one alone then.
+    texts = [];
+    for (const document of documents) texts.push(...(await written([document]).catch(() => [undefined])));
+  }
+  return texts.map((text) =>
+    typeof text === 'string' && text.startsWith('SELECT ') ? text.slice('SELECT '.length) : undefined,
+  );
 }
 
 async function builtinFunctions(connection: Duckdb.DuckDBConnection): Promise<BuiltinFunctions> {

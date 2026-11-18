@@ -171,10 +171,16 @@ export interface SnapshotDetail {
   readonly hasLatest: boolean;
 }
 
-/** The first changed tables for the list, then how many more there are. */
+/**
+ * The first changed tables for the table of snapshots, or the first other change of a snapshot that changed no table;
+ * then how many more there are.
+ */
 export function summaryOf(detail: SnapshotDetail): string {
-  const shown = detail.tables.slice(0, 3).map((table) => table.label);
-  const rest = detail.tables.length - shown.length + detail.others.length;
+  const shown =
+    detail.tables.length > 0
+      ? detail.tables.slice(0, 3).map((table) => table.label)
+      : detail.others.slice(0, 1);
+  const rest = detail.tables.length + detail.others.length - shown.length;
   return [...shown, ...(rest > 0 ? [`+${rest} more`] : [])].join(', ');
 }
 

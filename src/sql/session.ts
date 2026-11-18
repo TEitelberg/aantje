@@ -2,13 +2,7 @@ import type { Tip } from '../tips/model';
 import { stat } from 'node:fs/promises';
 import type * as Duckdb from '@duckdb/node-api';
 import { quoteIdentifier } from '../catalog/ddl';
-import {
-  dataPathQuery,
-  firstSchemaQuery,
-  postgresSecretStatement,
-  setupStatements,
-  USE_LAKE,
-} from '../data/attach';
+import { dataPathQuery, firstSchemaQuery, setupStatements, USE_LAKE } from '../data/attach';
 import type { AttachedLake } from '../data/attach';
 import type { ConnectionProfile } from '../connections/profile';
 import type { DataAccessFactory } from '../data/resolve';
@@ -17,7 +11,7 @@ import { MISSING_LOCAL_FILE, MISSING_OBJECT, secretsOf } from '../data/errors';
 import type { Phase } from '../data/errors';
 import { kindOf, toGridValue } from '../data/grid-values';
 import { closeAll, openLakeSession } from '../data/open-lake';
-import { startRenewal } from '../data/renewal';
+import { startRenewal, tokenRenewals } from '../data/renewal';
 import { DEFAULT_MAX_ROWS } from '../data/settings';
 import type { DataAccess, GridColumn, GridValue } from '../data/types';
 import { interruptRepeatedly, loadEngine } from '../duckdb/engine';
@@ -25,14 +19,25 @@ import type { Engine } from '../duckdb/engine';
 import { extensionFailure, firstLine, scrubbed } from '../duckdb/messages';
 import { AantjeError, messageOf } from '../errors';
 import { maskSecrets } from '../secrets';
-import { storageSecretStatement } from '../storage/statements';
 import { storageContextOf } from '../storage/diagnose';
 import { translateSqlError } from './errors';
 import type { SessionMode, SqlErrorContext } from './errors';
-import { serializeSql, tokenRows } from './parser-engine';
-import { caretRange, splitScript, statementSpans, withoutBom } from './script';
+import {
+  commits,
+  commitsChange,
+  controlsTransaction,
+  inTransactionOf,
+  setCommitMessageCall,
+} from './commit-message';
+import type { CommitMessage } from './commit-message';
+import type { RunParameters } from './parameters';
+import { serializeSql } from './parser-engine';
+import { caretRange, withoutBom } from './script';
 import type { Range, ScriptStatement } from './script';
-import { statementKind } from './statement-kind';
+import { bindValues, planScript, quackRunnable, SplitFailure } from './session-plan';
+import type { Planned, Runnable } from './session-plan';
+import { unfilteredWrite } from './statement-kind';
+import type { UnfilteredWrite } from './statement-kind';
 import { syntaxErrorsOf } from './syntax';
 import type { Diagnostic } from './syntax';
 
@@ -59,6 +64,27 @@ export interface RunOptions {
   readonly maxRows?: number;
   /** Most cells all result sets of the script may hold, unlimited by default; the set that overflows is cut and `truncated`. */
   readonly maxCells?: number;
+  /**
+   * The values of the placeholders (`parameters.ts`): each `{{name}}` is replaced by its SQL text before the script is
+   * split, each `$name` is bound to the prepared statement (on a Quack catalog set as a variable, see `run`).
+   */
+  readonly parameters?: RunParameters;
+  /**
+   * Asked before an UPDATE or DELETE without WHERE (`unfilteredWrite`) runs; `ran` statements of the script ran before
+   * it. `count` counts the rows of its table in this session, so inside its transaction; it gives undefined when that
+   * takes longer than a few seconds. False cancels the run there.
+   */
+  readonly confirmUnfiltered?: (
+    write: UnfilteredWrite & { readonly ran: number },
+    count: () => Promise<number | undefined>,
+  ) => Promise<boolean>;
+  /**
+   * Asked once before the first statement when the run commits a change (`commitsChange`): the message of its
+   * snapshots, null for none, undefined to cancel the run. With a message each statement that may change the catalog
+   * outside a transaction runs as `BEGIN; CALL lake.set_commit_message(...); <statement>; COMMIT`, so that the number
+   * of snapshots stays the same, and the call goes right before the COMMIT of an open transaction that changed something.
+   */
+  readonly commitMessage?: () => Promise<CommitMessage | null | undefined>;
 }
 
 /** Positions are UTF-16 offsets into the script passed to `run`. */
@@ -72,6 +98,13 @@ export type SqlEvent =
       readonly offset: number;
       /** The statement may change the catalog, judged by its tokens (`statement-kind.ts`). */
       readonly changesCatalog: boolean;
+      /** The names of the parameters (`$name`, `{{name}}`) that the statement uses; `sql` keeps the placeholders. */
+      readonly parameters?: readonly string[];
+      /**
+       * The statement is a query in which nothing writes, judged as for Analysis: the results may run it again, for the
+       * summary of its columns or Aggregate in DuckDB.
+       */
+      readonly readsOnly?: boolean;
     }
   | {
       readonly kind: 'resultSet';
@@ -116,6 +149,7 @@ export interface SqlSession {
   /**
    * Runs the statements in order and reports each as `start`, then `resultSet` or `message`; an `error` stops the script.
    * A script that does not parse runs nothing. A `run` while another is active, or on a closed session, throws.
+   * The events name the statements and positions of the script as written, also where `parameters` replaced text.
    */
   run(script: string, options?: RunOptions): AsyncIterable<SqlEvent>;
   /** Interrupts the active statement and skips the rest; does nothing when idle. */
@@ -129,12 +163,16 @@ export interface SqlSession {
 interface Limits {
   readonly maxRows: number;
   readonly maxCells: number;
+  readonly parameters: RunParameters | undefined;
+  /** The commit message of the run's snapshots, once it is known. */
+  readonly commit?: CommitMessage | null;
 }
 
-/** A statement of a script and whether it may change the catalog. */
-interface Planned extends ScriptStatement {
-  readonly changesCatalog: boolean;
-}
+/** What a run of `execute` reads besides the script. */
+type RunPlan = Limits & Pick<RunOptions, 'confirmUnfiltered' | 'commitMessage'>;
+
+// How long the count of the rows that an UPDATE or DELETE without WHERE hits may take before the question goes without.
+const COUNT_WAIT_MS = 3000;
 
 const STARTS_TRANSACTION = new Set(['BEGIN', 'START']);
 const ENDS_TRANSACTION = new Set(['COMMIT', 'END', 'ROLLBACK', 'ABORT']);
@@ -278,6 +316,10 @@ class LiveSession implements SqlSession {
   private cancelRequested = false;
   private statementRunning = false;
   private stopInterrupt: (() => void) | undefined;
+  // The count of `countRows` that runs on after its wait, inside a transaction; the next statement waits for it.
+  private counting: Promise<unknown> | undefined;
+  // A statement that may change the catalog ran in the open transaction.
+  private transactionChanged = false;
   private closing: Promise<void> | undefined;
   private azureRefresh: NodeJS.Timeout | undefined;
   private readonly context: SqlErrorContext;
@@ -323,11 +365,13 @@ class LiveSession implements SqlSession {
     options.signal?.addEventListener('abort', abort, { once: true });
     try {
       if (options.signal?.aborted) abort();
-      yield* this.execute(
-        withoutBom(script),
-        options.maxRows ?? this.maxRows,
-        options.maxCells ?? Number.POSITIVE_INFINITY,
-      );
+      yield* this.execute(withoutBom(script), {
+        maxRows: options.maxRows ?? this.maxRows,
+        maxCells: options.maxCells ?? Number.POSITIVE_INFINITY,
+        parameters: options.parameters,
+        confirmUnfiltered: options.confirmUnfiltered,
+        commitMessage: options.commitMessage,
+      });
     } finally {
       options.signal?.removeEventListener('abort', abort);
       this.stopInterrupt?.();
@@ -378,21 +422,14 @@ class LiveSession implements SqlSession {
     }
   }
 
-  private async *execute(script: string, maxRows: number, maxCells: number): AsyncGenerator<SqlEvent> {
-    let cellsLeft = maxCells;
+  private async *execute(script: string, plan: RunPlan): AsyncGenerator<SqlEvent> {
+    const { maxRows, parameters, confirmUnfiltered } = plan;
+    let cellsLeft = plan.maxCells;
     let statements: Planned[];
     try {
-      statements = await this.split(script);
+      statements = await planScript(this.parser, script, parameters);
     } catch (cause) {
-      // The position of the syntax error is a bonus; the message of the split failure is shown either way.
-      const [diagnostic] = await syntaxErrors(this.parser, script).catch(() => []);
-      const message = firstLine(this.scrubbed(cause)).replace(/^Failed to extract statements: /, '');
-      yield {
-        kind: 'error',
-        index: 0,
-        message: `${sentence(message)} No statement was run.`,
-        ...(diagnostic ? { position: { offset: diagnostic.offset, length: diagnostic.length } } : {}),
-      };
+      yield await this.splitFailure(script, cause);
       return;
     }
     if (statements.length === 0) {
@@ -404,6 +441,7 @@ class LiveSession implements SqlSession {
       };
       return;
     }
+    const commit = await this.commitOf(statements, plan.commitMessage);
     for (const [index, statement] of statements.entries()) {
       const rest = statements.length - index - 1;
       yield {
@@ -413,12 +451,14 @@ class LiveSession implements SqlSession {
         sql: statement.sql,
         offset: statement.offset,
         changesCatalog: statement.changesCatalog,
+        ...(statement.parameters.length > 0 ? { parameters: statement.parameters } : {}),
+        readsOnly: statement.readsOnly,
       };
-      if (this.cancelRequested) {
+      if (this.cancelRequested || !(await this.confirmed(statement, index, confirmUnfiltered))) {
         yield { kind: 'error', index, message: withRest('The run was cancelled.', rest + 1) };
         return;
       }
-      const step = this.step(statement, index, { maxRows, maxCells: cellsLeft }, rest);
+      const step = this.step(statement, index, { maxRows, maxCells: cellsLeft, parameters, commit }, rest);
       this.executing = step;
       const { event, failed } = await step;
       if (event.kind === 'resultSet') cellsLeft -= event.rows.length * event.columns.length;
@@ -427,58 +467,136 @@ class LiveSession implements SqlSession {
     }
   }
 
+  // The commit message of the run, asked for once when the run commits a change; a cancel ends the run. A run that was
+  // cancelled already (while the session opened) asks nothing.
+  private async commitOf(
+    statements: readonly Planned[],
+    ask: RunOptions['commitMessage'],
+  ): Promise<CommitMessage | null> {
+    const start = { inTransaction: this.inTransaction, changed: this.transactionChanged };
+    if (!ask || this.cancelRequested || !commitsChange(statements, start)) return null;
+    const answer = await ask();
+    if (answer === undefined) this.cancelRequested = true;
+    return answer ?? null;
+  }
+
+  // An UPDATE or DELETE without WHERE runs only when `confirm` says so; it waits for a count that ran on.
+  private async confirmed(
+    statement: Planned,
+    index: number,
+    confirm: RunOptions['confirmUnfiltered'],
+  ): Promise<boolean> {
+    const write = confirm && unfilteredWrite(statement.tokens);
+    if (!write) return true;
+    const go = await confirm({ ...write, ran: index }, () => this.countRows(write.target));
+    await this.counting;
+    this.counting = undefined;
+    return go && !this.cancelRequested;
+  }
+
+  /**
+   * The rows of a table, counted on the connection of the statements, so inside their transaction; undefined when the
+   * count fails or takes longer than `COUNT_WAIT_MS`. Outside a transaction it is interrupted then; inside one an
+   * interrupt would abort the transaction, so it runs on, also after a Cancel, and the statement waits for it.
+   */
+  private async countRows(target: string): Promise<number | undefined> {
+    this.statementRunning = this.inTransaction === 'none';
+    const counting = this.connection
+      .runAndReadAll(`SELECT count(*) FROM ${target}`)
+      .then(
+        (reader) => Number(reader.getRowsJson()[0]?.[0]),
+        () => undefined,
+      )
+      .finally(() => {
+        this.statementRunning = false;
+        this.stopInterrupt?.();
+        this.stopInterrupt = undefined;
+      });
+    this.executing = this.counting = counting;
+    let timer: NodeJS.Timeout | undefined;
+    const late = new Promise<'late'>((resolve) => (timer = setTimeout(() => resolve('late'), COUNT_WAIT_MS)));
+    const counted = await Promise.race([counting, late]).finally(() => clearTimeout(timer));
+    if (counted !== 'late') return counted;
+    if (this.inTransaction === 'none') this.stopInterrupt ??= interruptRepeatedly(this.connection);
+    return undefined;
+  }
+
   private async step(
-    statement: ScriptStatement,
+    statement: Planned,
     index: number,
     limits: Limits,
     rest: number,
   ): Promise<{ event: SqlEvent; failed: boolean }> {
     let event: SqlEvent;
     let failed = false;
+    let runnable: Runnable = statement;
+    const { keyword, changesCatalog } = statement;
+    const call = limits.commit ? setCommitMessageCall(limits.commit) : undefined;
+    // A statement that commits itself runs in a transaction of its own, which gets the message.
+    const own =
+      call !== undefined && changesCatalog && this.inTransaction === 'none' && !controlsTransaction(keyword);
+    // The COMMIT of a transaction that changed something: the message goes right before it.
+    const before =
+      call !== undefined && commits(keyword) && this.inTransaction === 'open' && this.transactionChanged;
+    let started = false;
     this.statementRunning = true;
     try {
-      event = await this.runStatement(statement, index, limits, performance.now());
+      const work = async (): Promise<SqlEvent> => {
+        if (before && call) await this.connection.run(call);
+        started = true;
+        const begun = performance.now();
+        const values = limits.parameters?.values;
+        if (this.context.kind === 'quack') {
+          runnable = await quackRunnable(statement, values, (sql) => this.connection.run(sql));
+        }
+        return this.runStatement(runnable, index, limits, begun);
+      };
+      const run = (sql: string): Promise<unknown> => this.connection.run(sql);
+      event = own && call ? await inTransactionOf(call, run, work) : await work();
     } catch (cause) {
       failed = true;
-      event = await this.failure(cause, statement, index, rest);
+      event = await this.failure(cause, statement, runnable, index, rest);
     } finally {
       // Nothing may interrupt the transaction probe below.
       this.statementRunning = false;
       this.stopInterrupt?.();
       this.stopInterrupt = undefined;
     }
-    await this.trackTransaction(statement.keyword, failed);
+    if (!failed && changesCatalog && this.inTransaction === 'open') this.transactionChanged = true;
+    // A COMMIT whose message could not be set did not run: the transaction is still there.
+    await this.trackTransaction(started ? keyword : '', failed);
     return { event, failed };
   }
 
-  // Splits by tokenizing; the parser has to agree on the number of statements.
-  private async split(script: string): Promise<Planned[]> {
-    const tokens = await tokenRows(this.parser, script);
-    // Both cut the tokens alike, so the n-th span is the n-th statement.
-    const spans = statementSpans(tokens);
-    const statements = splitScript(script, tokens).map((statement, index) => ({
-      ...statement,
-      changesCatalog: statementKind(spans[index]?.tokens ?? []) === 'writes',
-    }));
-    if (statements.length > 0) {
-      const parsed = await this.parser.extractStatements(script);
-      if (parsed.count !== statements.length) {
-        throw new Error(
-          `The script could not be split into statements safely (${statements.length} found, ${parsed.count} parsed).`,
-        );
-      }
-    }
-    return statements;
+  // A script that does not split runs nothing; the position of its syntax error is a bonus.
+  private async splitFailure(script: string, cause: unknown): Promise<SqlEvent> {
+    const failure = cause instanceof SplitFailure ? cause : undefined;
+    const [diagnostic] = await syntaxErrors(this.parser, failure?.text ?? script).catch(() => []);
+    const back = failure?.toOriginal ?? ((offset: number) => offset);
+    const message = firstLine(this.scrubbed(failure?.cause ?? cause)).replace(
+      /^Failed to extract statements: /,
+      '',
+    );
+    const start = diagnostic && back(diagnostic.offset);
+    return {
+      kind: 'error',
+      index: 0,
+      message: `${sentence(message)} No statement was run.`,
+      ...(diagnostic && start !== undefined
+        ? { position: { offset: start, length: back(diagnostic.offset + diagnostic.length, true) - start } }
+        : {}),
+    };
   }
 
   private async runStatement(
-    statement: ScriptStatement,
+    statement: Runnable,
     index: number,
-    { maxRows, maxCells }: Limits,
+    { maxRows, maxCells, parameters }: Limits,
     started: number,
   ): Promise<SqlEvent> {
-    const prepared = await this.connection.prepare(statement.sql);
+    const prepared = await this.connection.prepare(statement.text);
     try {
+      if (this.context.kind !== 'quack') bindValues(prepared, parameters?.values, this.engine);
       const result = await prepared.stream();
       try {
         if (result.returnType === this.engine.ResultReturnType.CHANGED_ROWS) {
@@ -524,6 +642,7 @@ class LiveSession implements SqlSession {
   private async failure(
     cause: unknown,
     statement: ScriptStatement,
+    ran: Runnable,
     index: number,
     rest: number,
   ): Promise<SqlEvent> {
@@ -531,12 +650,20 @@ class LiveSession implements SqlSession {
     if (this.cancelRequested || /^INTERRUPT Error/.test(raw)) {
       return { kind: 'error', index, message: withRest('The statement was cancelled.', rest) };
     }
-    const range = caretRange(raw, statement.sql);
+    const range = caretRange(raw, ran.text);
+    const start = range && ran.back(range.offset);
     return {
       kind: 'error',
       index,
       message: withRest(translateSqlError(raw, await this.contextFor(raw)).message, rest),
-      ...(range ? { position: { offset: statement.offset + range.offset, length: range.length } } : {}),
+      ...(range && start !== undefined
+        ? {
+            position: {
+              offset: statement.offset + start,
+              length: ran.back(range.offset + range.length, true) - start,
+            },
+          }
+        : {}),
     };
   }
 
@@ -564,8 +691,10 @@ class LiveSession implements SqlSession {
   private async trackTransaction(keyword: string, failed: boolean): Promise<void> {
     if (ENDS_TRANSACTION.has(keyword)) {
       this.inTransaction = 'none';
+      this.transactionChanged = false;
     } else if (!failed && STARTS_TRANSACTION.has(keyword)) {
       this.inTransaction = 'open';
+      this.transactionChanged = false;
     } else if (failed && this.inTransaction === 'open') {
       try {
         await this.connection.run('SELECT 1');
@@ -582,37 +711,6 @@ class LiveSession implements SqlSession {
 async function syntaxErrors(parser: Duckdb.DuckDBConnection, original: string): Promise<Diagnostic[]> {
   const text = withoutBom(original);
   return syntaxErrorsOf(await serializeSql(parser, text), text);
-}
-
-/**
- * The jobs that replace the tokens of a session: the storage token of an Azure or OneLake storage, the password of an
- * Entra login.
- * Each new token joins `secrets` before it is used, so that an error quoting it is masked; the old ones stay there,
- * because a statement that started with one may still report it.
- */
-export function tokenRenewals(
-  { storage, profile, renewPassword }: DataAccess,
-  secrets: string[],
-  run: (sql: string) => Promise<unknown>,
-): (() => Promise<void>)[] {
-  const renewals: (() => Promise<void>)[] = [];
-  if (storage?.refresh) {
-    const { refresh } = storage;
-    renewals.push(async () => {
-      const accessToken = await refresh();
-      secrets.push(accessToken);
-      const renewed = storageSecretStatement({ ...storage, values: { ...storage.values, accessToken } });
-      if (renewed) await run(renewed);
-    });
-  }
-  if (renewPassword && profile.kind === 'postgres') {
-    renewals.push(async () => {
-      const token = await renewPassword();
-      secrets.push(token);
-      await run(postgresSecretStatement(profile, token));
-    });
-  }
-  return renewals;
 }
 
 function withRest(message: string, rest: number): string {

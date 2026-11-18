@@ -10,9 +10,10 @@ import type { DataAccess, TableRef } from '../data/types';
 import { loadEngine } from '../duckdb/engine';
 import { extensionFailure, scrubbed } from '../duckdb/messages';
 import { AantjeError } from '../errors';
-import { icebergSnapshotOf, icebergTable, originProperties, quoted } from './copy';
+import { createNamespaces, icebergSnapshotOf, icebergTable, originProperties, quoted } from './copy';
 import type { IcebergName } from './copy';
-import { selectList } from './mapping';
+import { extraCastsOf, selectList } from './mapping';
+import { leftoverCleanup, tokenRenewal } from './renew';
 import { ICEBERG, icebergSetup } from './statements';
 import type { SyncStep } from './sync-plan';
 import type { IcebergTarget } from './target';
@@ -22,12 +23,26 @@ export interface SyncRequest {
   readonly access: DataAccess;
   readonly target: IcebergTarget;
   readonly secret: string | undefined;
+  /** The token of the sign-in now, without asking (Fabric): asked before each table, a new one replaces `secret`. */
+  readonly freshSecret?: () => Promise<string | undefined>;
   /** The steps that write: `none` and `skip` are left out by the caller. */
   readonly steps: readonly SyncStep[];
   /** The `PARTITIONED BY` list of each table that is written new, by `schema.table` of the lake. */
   readonly partitions?: ReadonlyMap<string, string>;
   readonly report?: (text: string) => void;
+  /** Told after each table: what came of it, for example `gold.sales appended 3 rows (2 of 5)`, and whether it worked. */
+  readonly stepDone?: (line: string, ok: boolean) => void;
 }
+
+/** What a step did, in words. */
+const DONE: Readonly<Record<SyncStep['mode'], string>> = {
+  append: 'appended',
+  replace: 'replaced, now',
+  create: 'written new,',
+  recreate: 'written new,',
+  none: 'unchanged,',
+  skip: 'left alone,',
+};
 
 export interface TableSync {
   readonly step: SyncStep;
@@ -78,10 +93,38 @@ export async function syncToIceberg(request: SyncRequest, signal?: AbortSignal):
       )[0]?.[0];
       const time = typeof found === 'string' ? found : undefined;
       const synced: TableSync[] = [];
+      const { renew, token } = tokenRenewal(
+        target,
+        secret,
+        request.freshSecret,
+        (sql) => connection.run(sql),
+        hidden,
+      );
+      const leftover = leftoverCleanup(target, token, request.stepDone);
+      // A table written new may go to a namespace that is gone from the catalog: it is created first, and told.
+      await createNamespaces(
+        (sql) => connection.run(sql),
+        rows,
+        request.steps
+          .filter((step) => step.mode === 'create' || step.mode === 'recreate')
+          .map((step) => icebergNameOfRecord(step).namespace),
+        request.stepDone,
+        hidden,
+      );
       for (const [index, step] of request.steps.entries()) {
         signal?.throwIfAborted();
         report(`${step.record.schema}.${step.record.table} (${index + 1} of ${request.steps.length})`);
-        synced.push(await syncTable(step));
+        await renew();
+        const done = await syncTable(step);
+        synced.push(done);
+        const what =
+          done.status === 'synced'
+            ? `${DONE[step.mode]} ${done.rows ?? 0} rows`
+            : `failed: ${done.error ?? 'no reason'}`;
+        request.stepDone?.(
+          `${step.record.schema}.${step.record.table} ${what} (${index + 1} of ${request.steps.length})`,
+          done.status === 'synced',
+        );
       }
       return { snapshot, snapshotTime: time, tables: synced };
 
@@ -96,6 +139,8 @@ export async function syncToIceberg(request: SyncRequest, signal?: AbortSignal):
               `CREATE SCHEMA IF NOT EXISTS ${ICEBERG}.${quoteIdentifier(icebergNameOfRecord(step).namespace)}`,
             );
             await connection.run(`DROP TABLE IF EXISTS ${destination}`);
+            // An empty table that a failed write left (DuckDB does not list it) would refuse the create.
+            await leftover(icebergNameOfRecord(step));
           }
           await connection.run('BEGIN TRANSACTION');
           try {
@@ -106,6 +151,7 @@ export async function syncToIceberg(request: SyncRequest, signal?: AbortSignal):
             const described = await rows(`DESCRIBE SELECT * FROM ${source}`);
             const { list, converted } = selectList(
               described.map(([name, type]) => [String(name), String(type)]),
+              extraCastsOf(target),
             );
             const written = await writeRows(step, lake, destination, source, list);
             await connection.run(
@@ -124,6 +170,9 @@ export async function syncToIceberg(request: SyncRequest, signal?: AbortSignal):
             throw failure;
           }
         } catch (failure) {
+          // OneLake made a new table before its data: a failed write leaves it empty, which is dropped again. A table
+          // that has a snapshot (append, replace) is never dropped.
+          await leftover(icebergNameOfRecord(step));
           if (signal?.aborted) throw failure;
           return { step, status: 'failed', error: scrubbed(failure, hidden).line };
         }

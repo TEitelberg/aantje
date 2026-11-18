@@ -1,4 +1,4 @@
-import { capRows, code, kindsText, markdownTable, reportTitle } from '../markdown';
+import { capRows, code, kindsText, markdownTable, reportHeadingLine } from '../markdown';
 import { LIST_ROWS, tableLabel, withoutUtc } from '../shell/model';
 import { boundsOf, fitRange } from '../shell/range-state';
 import {
@@ -59,7 +59,7 @@ export function snapshotReportMarkdown(data: SnapshotReportData, view?: Snapshot
     ['Snapshots listed', `${rows.length} of ${data.snapshots.length}`],
   ];
   return [
-    reportTitle('Snapshot report of', data.connection),
+    reportHeadingLine('Snapshot Report', data.connection),
     '',
     ...markdownTable(['Property', 'Value'], summary),
     '',

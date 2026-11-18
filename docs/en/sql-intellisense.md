@@ -11,6 +11,8 @@ The SQL editor of aantje completes, explains and checks SQL while you type: tabl
 
 The columns of a view are offered and explained once the connection's views are trusted ([Columns of views](#columns-of-views)).
 
+**Parameters** ([Parameters](sql-editor.md#parameters)): after `$` and inside `{{`, completion offers the parameters that the header of the document declares (`-- param: name | type | default | description`), with their type, description and default, and nothing else; `$` opens the list. Inside the braces of an inline default (`$limit{1000}`) it offers nothing, since the default is a value. A `$name` gets no warning for an unknown name, and a `{{name}}`, which is no SQL until it is replaced, is checked as a quoted name of the same length: no syntax error and no warning is reported on it, while the rest of the statement is checked as usual. The braces of an inline default are checked as blanks, as the run reads them, so they give no syntax error. An inline default that the dialog does not propose gets a warning on its braces: the header gives the parameter a default, or an earlier inline default of the name differs. A `$name` where SQL expects a name (right after `FROM`, `JOIN`, `INTO`, `UPDATE`, `TABLE` and the like, or in a qualified name) gets a warning that says to write `{{name}}` and declare it as an `identifier`, in place of DuckDB's syntax error at its `$` ([Parameters](sql-editor.md#parameters)).
+
 ## The catalog port
 
 The service reads the lake through a port at one snapshot (`src/sql/catalog.ts`):

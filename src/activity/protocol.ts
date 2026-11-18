@@ -17,7 +17,7 @@ import type { ActivityActionId, ActivityActionRequest } from './actions';
 import type { ActivityMarkdownView } from './markdown';
 import type { ActivityData } from './model';
 
-/** A page request: an action of the detail pane by id, never a command. */
+/** A page request: the action of the header by id, never a command. */
 export type ActivityPageRequest = { readonly type: 'action' } & ActivityActionRequest;
 
 type ActivityMessage = { readonly type: 'activity'; readonly data: ActivityData };
@@ -29,14 +29,12 @@ export function isActivityMessage(value: unknown): value is ActivityMessage {
   return isObject(value) && own(value, 'type') === 'activity' && isData(own(value, 'data'));
 }
 
+// No action names a snapshot or a table: those of a single snapshot are the Snapshot report's.
 const FIELDS: Readonly<Record<ActivityActionId, Readonly<Record<string, Test>>>> = {
   showSnapshotReport: {},
-  showCatalog: { snapshot: isCount },
-  rowsChanged: { snapshot: isCount, table: isCount },
-  compareSnapshots: { snapshot: isCount, against: isOneOf('previous', 'latest') },
 };
 
-/** A known action with exactly its fields; `planActivityAction` checks that they name something sent. */
+/** The known action with no field besides its id. */
 export const isActivityAction: (value: unknown) => value is ActivityPageRequest = actionGuard(FIELDS);
 
 /** The choices that Open as Markdown may name; the extension fits them to the data. */

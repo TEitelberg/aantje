@@ -1,8 +1,9 @@
 import type { GrowthChange, SnapshotId } from '../catalog/model';
 import { compareText } from '../order';
-import { count, formatBytes, tableLabel } from '../shell/model';
+import { count, formatBytes, shortUtc, tableLabel, whoText } from '../shell/model';
 import type { Card } from '../shell/model';
-import { OTHER_LANE, buildModel } from '../snapshot-changes/model';
+import type { PagedColumn, PagedRow } from '../shell/paged-table';
+import { OTHER_LANE, buildModel, detailOf } from '../snapshot-changes/model';
 import type { Model } from '../snapshot-changes/model';
 import { olderNote, windowSubtitle } from '../snapshot-changes/window';
 import type { ScopedWindow } from '../snapshot-changes/window';
@@ -14,8 +15,6 @@ import type { ScopedWindow } from '../snapshot-changes/window';
 export interface GrowthData extends ScopedWindow {
   /** The table that the page starts with; null for the whole lake. */
   readonly focus: number | null;
-  /** For a schema: whether snapshots expired, judged on all snapshots read; the ones of the schema have gaps anyway. */
-  readonly expired?: boolean;
   /** The tables of the newest snapshot; the changes name dropped ones (see `growthTableChoices`). */
   readonly tables: readonly GrowthTable[];
   /** What each snapshot did to each table; older, unread snapshots are summed up (`snapshot: null`). */
@@ -221,20 +220,6 @@ export const growthOlderNote = (data: GrowthData): string =>
     'the first value is the state after the oldest snapshot shown, and its change is the change of that snapshot',
   );
 
-/** Whether snapshots are missing between or ahead of the ones read, because they expired. */
-export function hasExpired(data: GrowthData): boolean {
-  return data.expired ?? expiredAmong(data.snapshots.map(({ id }) => id));
-}
-
-/** The ids are those of all snapshots that were read: the ones of one schema would have gaps without any expiry. */
-export function expiredAmong(ids: readonly SnapshotId[]): boolean {
-  const oldest = Math.min(...ids);
-  return ids.length > 0 && (ids.length < Math.max(...ids) - oldest + 1 || oldest > 0);
-}
-
-export const EXPIRED_NOTE =
-  'Some snapshots have expired and are gone from the catalog, so the history has gaps or starts late. What an expired snapshot changed shows at the next snapshot that is left.';
-
 export const INLINED_NOTE =
   'The catalog keeps inlined rows in more tables than were read; the rows of the others are not counted.';
 
@@ -249,7 +234,52 @@ export const NO_DATA_NOTE = 'No snapshot read changed the table of the selection
 export const growthScopeLabel = (choices: readonly TableChoice[], table: number | undefined): string =>
   table === undefined ? 'all tables' : (choices.find(({ id }) => id === table)?.label ?? `table #${table}`);
 
-export const truncationNote = (shown: number, total: number): string =>
-  `${shown} of ${total} snapshots are listed, the newest first. The chart has the others.`;
-
 export const subtitle = (data: GrowthData): string => windowSubtitle(data);
+
+/** Whether a snapshot read has an author or a commit message; without one, the table has no column for them. */
+const hasWho = (steps: readonly Step[]): boolean =>
+  steps.some((step) => whoText(step.author, step.message) !== '');
+
+/** The columns of the table of snapshots: each value and its change, and the author and message where the data has them. */
+export function growthColumns(steps: readonly Step[]): PagedColumn[] {
+  return [
+    { label: 'Snapshot' },
+    { label: 'Time (UTC)' },
+    ...(hasWho(steps) ? [{ label: 'Author and message', className: 'who' }] : []),
+    ...METRICS.flatMap((metric) => [
+      { label: METRIC_LABEL[metric], className: 'number' },
+      {
+        label: 'Change',
+        className: 'number',
+        description: `Change of the ${METRIC_LABEL[metric].toLowerCase()} against the snapshot before`,
+      },
+    ]),
+  ];
+}
+
+/**
+ * The snapshots, newest first, as rows of the table. The filter box finds a snapshot by its number, its author and
+ * message, and the tables and other objects it changed.
+ */
+export function growthRows(steps: readonly Step[], model: Model, latest: SnapshotId): PagedRow<SnapshotId>[] {
+  const who = hasWho(steps);
+  return steps.toReversed().map((step) => {
+    const detail = detailOf(model, latest, step.id);
+    return {
+      key: step.id,
+      label: `@${step.id}`,
+      description: `Snapshot ${step.id}. Select it to see its actions.`,
+      cells: [
+        shortUtc(step.time),
+        ...(who ? [whoText(step.author, step.message)] : []),
+        ...METRICS.flatMap((metric) => [formatStep(metric, step), formatDelta(metric, step.delta[metric])]),
+      ],
+      search: [
+        step.author ?? '',
+        step.message ?? '',
+        ...(detail?.tables.map((table) => table.label) ?? []),
+        ...(detail?.others ?? []),
+      ].join('\n'),
+    };
+  });
+}

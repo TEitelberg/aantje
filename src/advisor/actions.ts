@@ -13,7 +13,8 @@ export type AdvisorActionId =
   | 'revealTable'
   | 'showStorage'
   | 'checkHealth'
-  | 'maintenanceScript';
+  | 'maintenanceScript'
+  | 'suggestPartitioning';
 
 export type AdvisorPlan =
   | { readonly action: 'script'; readonly kind: 'expire' | 'cleanup' | 'orphans' }
@@ -25,6 +26,7 @@ export type AdvisorPlan =
       readonly deleted?: DeletedRead;
     }
   | { readonly action: 'showStatistics' | 'revealTable'; readonly table: AdvisorTable }
+  | { readonly action: 'suggestPartitioning'; readonly table: AdvisorTable }
   | { readonly action: 'showStorage' | 'checkHealth' | 'maintenanceScript' };
 
 const TABLE_SCRIPTS = { scriptMerge: 'merge', scriptRewrite: 'rewrite', scriptFlush: 'flush' } as const;
@@ -69,6 +71,10 @@ export function planAdvisorAction(data: AdvisorData, message: AdvisorAction): Ad
           ...(kind === 'merge' ? { deleted: countedDeletes(data, table) } : {}),
         }
       );
+    }
+    case 'suggestPartitioning': {
+      const table = data.unpartitioned?.find((entry) => entry.table.id === message.table)?.table;
+      return table && { action: 'suggestPartitioning', table };
     }
     case 'showStatistics':
     case 'revealTable': {

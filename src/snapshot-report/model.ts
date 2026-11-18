@@ -1,7 +1,8 @@
 import type { SnapshotId } from '../catalog/model';
 import { compareText, groupBy } from '../order';
-import { plural } from '../shell/model';
-import { OTHER_LANE, compareLanes } from '../snapshot-changes/model';
+import { plural, whoText, withoutUtc } from '../shell/model';
+import type { PagedColumn, PagedRow } from '../shell/paged-table';
+import { OTHER_LANE, compareLanes, detailOf, summaryOf } from '../snapshot-changes/model';
 import type { Lane, Model, Point, PointKind } from '../snapshot-changes/model';
 import { olderNote } from '../snapshot-changes/window';
 import type { SnapshotWindow } from '../snapshot-changes/window';
@@ -34,6 +35,8 @@ export interface SnapshotReportView {
   readonly columns: readonly Column[];
   /** Snapshots that changed more than one lane; the chart joins them with a line. */
   readonly transactions: readonly SnapshotId[];
+  /** Oldest first: every snapshot that the filters leave, also one that changed only tables the chart leaves out. */
+  readonly snapshots: readonly SnapshotId[];
 }
 
 export function snapshotReportViewOf(model: Model, filter: SnapshotReportFilter): SnapshotReportView {
@@ -70,7 +73,46 @@ export function snapshotReportViewOf(model: Model, filter: SnapshotReportFilter)
     points,
     columns: [...bySnapshot.keys()].map((id) => ({ id, time: timeOf.get(id) ?? '' })),
     transactions: [...bySnapshot].filter(([, laneKeys]) => laneKeys.length > 1).map(([snapshot]) => snapshot),
+    snapshots: [...new Set(candidates.map((point) => point.snapshot))],
   };
+}
+
+/** The columns of the table of snapshots; the first holds the buttons that select a snapshot. */
+export const SNAPSHOT_COLUMNS: readonly PagedColumn[] = [
+  { label: 'Snapshot' },
+  { label: 'Time (UTC)' },
+  { label: 'Author and message', className: 'who' },
+  { label: 'Changes' },
+];
+
+/**
+ * The snapshots of the view, newest first, as rows of the table. The filter box finds a snapshot by its number, its
+ * author and message, the tables it changed and its other changes.
+ */
+export function snapshotRows(
+  view: SnapshotReportView,
+  model: Model,
+  latest: SnapshotId,
+): PagedRow<SnapshotId>[] {
+  return view.snapshots.toReversed().flatMap((id) => {
+    const detail = detailOf(model, latest, id);
+    return detail
+      ? [
+          {
+            key: id,
+            label: `@${id}`,
+            description: `Snapshot ${id}. Press Ctrl and Enter to choose it as the second snapshot of a comparison.`,
+            cells: [withoutUtc(detail.timeText), whoText(detail.author, detail.message), summaryOf(detail)],
+            search: [
+              detail.author ?? '',
+              detail.message ?? '',
+              ...detail.tables.map((table) => table.label),
+              ...detail.others,
+            ].join('\n'),
+          },
+        ]
+      : [];
+  });
 }
 
 interface TableChoice {

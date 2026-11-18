@@ -6,13 +6,13 @@
 
 - **Where.** The **Reports** submenu of an open connection (see [Reports](reports.md)), and as **Storage Report** in the [Properties](reports.md#the-properties-report) panel. The command needs a node, so it is hidden from the Command Palette.
 - **Which snapshot.** The one the tree shows (pinned or latest) when the report is read. **Refresh** reads again at the snapshot the tree shows then.
-- **One panel per connection**, titled `Storage · <connection>`. The command again reveals it with fresh data.
+- **One panel per connection**, titled `Storage Report · <connection>`. The command again reveals it with fresh data.
 - **Progress with Cancel.** `Reading the storage of "Lake"...` with a Cancel button. Cancelling stops the statements the engine can stop (PostgreSQL, DuckDB) and ends with `The query was cancelled.`; no panel opens.
 - **Closed connection.** `Connect to a catalog first to show its storage.` After the connection was removed, a refresh says `The connection of this storage report was removed. Close the report.`
 
 ## For one schema
 
-**Storage Report** in the Reports submenu of a schema (`ReportScope` in `src/shell/scope.ts`, [Reports](reports.md#reports-for-one-schema)) opens `Storage · <connection> · schema <schema>` and `# Storage of <connection> · schema <schema>`. Tables, rows, small files, the data and delete file totals and the growth chart are those of the schema's tables: `storage(snapshot, { schemaId })` sums the files of its tables, `lakeGrowth(snapshot, limit, signal, { schemaId })` adds up their file changes (a snapshot is a compaction when it merged one of them), and only the tables of the schema are read. The data path, the encryption and the files scheduled for deletion are the lake's; their cards and rows say `(lake-wide)`. **Clean Up Old Files** and **Expire Snapshots** open the lake's scripts. The share of a table is its share of the schema.
+**Storage Report** in the Reports submenu of a schema (`ReportScope` in `src/shell/scope.ts`, [Reports](reports.md#reports-for-one-schema)) opens `Storage Report: <schema> · <connection>` and `# Storage Report: <schema> · <connection>`. Tables, rows, small files, the data and delete file totals and the growth chart are those of the schema's tables: `storage(snapshot, { schemaId })` sums the files of its tables, `lakeGrowth(snapshot, limit, signal, { schemaId })` adds up their file changes (a snapshot is a compaction when it merged one of them), and only the tables of the schema are read. The data path, the encryption and the files scheduled for deletion are the lake's; their cards and rows say `(lake-wide)`. **Clean Up Old Files** and **Expire Snapshots** open the lake's scripts. The share of a table is its share of the schema.
 
 ## What the report shows
 
@@ -36,10 +36,10 @@ Next to the scheduled files the report says how many snapshots Expire Snapshots 
 
 ### Tables
 
-- **The chart** has a bar for each of the 30 largest tables by data and delete file size, largest on top, and one bar `N more tables` for the rest. A table with many small files has a warning-coloured bar and a label ending in ⚠. The selected table has the second series colour. A click selects.
+- **The chart** has a bar for each of the 30 largest tables by data and delete file size, largest on top, and one bar `N more tables` for the rest. The bars are navy; a table with many small files has a bar in the warning colour and a label ending in ⚠, the selected table a bar in the orange of aantje, `N more tables` a muted one ([Reports](reports.md#colours)). A click selects.
 - **The list** shows `schema.table`, files, size, share of the lake's size, rows (`~` when approximate) and small files. The filter box matches `schema.table` regardless of case. The headings sort (a button with `aria-sort`; again reverses; ties by name) and the focus stays on the heading. A table name is a button (`aria-pressed`) that selects it. The list shows the first 200 matches and says `200 of 250 tables are shown. Type in the filter box to find the others.`
 - **Many small files.** The cell reads `5 of 9 (55.6 %)`, with `⚠ many small files` when the table has at least 5 data files and at least half below 16 MiB (`SMALL_FILES` in `src/catalog/thresholds.ts`, the [statistics report](statistics.md) rule). Words and sign carry the message, not colour. Counts come from `smallFiles(snapshot)` at the shown snapshot.
-- **The selection** shows the table's figures and four buttons: **Show Statistics**, **Show in Tree**, **Merge Adjacent Files**, **Rewrite Data Files**.
+- **The selection** shows the table's figures and five buttons: **Show Statistics**, **Show in Tree**, **Merge Adjacent Files**, **Rewrite Data Files**, **Inspect Data Files** (the [Parquet inspector](parquet-inspector.md)).
 
 ### Growth
 
@@ -55,6 +55,7 @@ The page sends an action id and, for a table, its catalog id; never a command or
 | `revealTable`    | `table` | Selects the table in the tree; says so when the tree's snapshot has no such table.                               |
 | `scriptMerge`    | `table` | Opens the Merge Adjacent Files script of the table in an untitled SQL document of the connection.                |
 | `scriptRewrite`  | `table` | The same for Rewrite Data Files.                                                                                 |
+| `inspectFiles`   | `table` | Runs **Inspect Data Files...** on the table's node in the tree, at the snapshot the tree shows.                  |
 | `scriptCleanup`  |         | Opens the Clean Up Old Files script of the lake; dry run active, real call commented out.                        |
 | `scriptExpire`   |         | The same for Expire Snapshots.                                                                                   |
 | `showProperties` |         | Opens the [Properties](reports.md#the-properties-report) panel of the connection.                                |
@@ -65,7 +66,7 @@ The scripts are those of the Maintenance menu (`maintenanceOf` in `src/maintenan
 
 The header button opens an untitled document built from the panel's data with the filter typed in the filter box (`storageMarkdown` in `src/storage-report/markdown.ts`; the page sends only `{ filter }`). Sections:
 
-- `# Storage of Lake` with a Property / Value table: data path, encryption, snapshot, data files, delete files, rows and the scheduled files (ready and waiting). A sentence says so when the oldest has waited over 7 days.
+- `# Storage Report · Lake` with a Property / Value table: data path, encryption, snapshot, data files, delete files, rows and the scheduled files (ready and waiting). A sentence says so when the oldest has waited over 7 days.
 - `## Largest tables`: `Table | Files | Size | Rows`, largest first, matching the filter, at most 50 rows, then `… 10 more omitted (limit: 50).` A lake with more tables than the report holds (1000) says `n smaller tables are not part of this report (limit: 1,000).`
 - `## Tables with many small files` (when any match): `Table | Files | Small files`.
 - `## Growth`: a summary and the last 20 points, then `… n more omitted (limit: 20).`
@@ -83,7 +84,7 @@ Two catalog reader methods serve it:
 
 ## Security
 
-The page loads from `dist` under a nonce CSP (see [Reports](reports.md#the-shell)). Catalog text (names, the data path) is set as text, never as markup, and chart tooltips escape it. A request is `ready`, `refresh`, `markdown` (with exactly `{ filter }`, or none) or one of the seven actions with exactly its fields; anything else is ignored, so the page cannot make the extension run a command, open text it wrote or touch a table it was not sent.
+The page loads from `dist` under a nonce CSP (see [Reports](reports.md#the-shell)). Catalog text (names, the data path) is set as text, never as markup, and chart tooltips escape it. A request is `ready`, `refresh`, `markdown` (with exactly `{ filter }`, or none) or one of the eight actions with exactly its fields; anything else is ignored, so the page cannot make the extension run a command, open text it wrote or touch a table it was not sent.
 
 ## Known limits
 

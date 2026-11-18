@@ -15,6 +15,8 @@ export interface PageContext {
   readonly state: StateStore;
   /** Refresh is pressed and the data has not arrived; the page refocuses the button when it does. */
   refreshAsked: boolean;
+  /** The webview address of the logo of aantje (`media/logo.png`) for the header; none on a page that has no logo. */
+  readonly logo?: string;
 }
 
 export interface Page<Data> {

@@ -5,6 +5,7 @@ import type { Card } from '../shell/model';
 import { count, files, formatBytes, groupedPlural } from '../shell/model';
 import { expirableLine, expirableNote, scheduledLine, scheduledNote } from '../shell/scheduled-text';
 import { lakeWide } from '../shell/scope';
+import type { UnpartitionedTable } from './partitioning';
 import type { ReportScope } from '../shell/scope';
 import { percent } from '../shell/numbers';
 
@@ -125,6 +126,8 @@ export interface AdvisorData {
   readonly more?: true;
   /** The inlined rows of some tables could not be read: `flush` may lack tables. */
   readonly inlinedFailed?: true;
+  /** The large tables without a partitioning, for Suggest Partitioning...; absent when there is none. */
+  readonly unpartitioned?: readonly UnpartitionedTable[];
 }
 
 /** The note on a page and in a document whose data has `inlinedFailed`. */

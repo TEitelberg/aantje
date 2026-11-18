@@ -1,7 +1,9 @@
 /// <reference lib="dom" />
-// The views of the results page: the Messages tab with a line per statement, and the view of each result set (rows,
-// a plan, a profile or a text). The page itself, with its tabs, is in results-page.ts.
+// The views of the results page: the Messages tab with a line per statement, the view of each result set (rows, a
+// plan, a profile or a text) and the chart of a result set. The page itself, with its tabs, is in results-page.ts.
 import { el } from '../shell/dom';
+import { chartView } from './chart-view';
+import type { ChartViewTab } from './chart-view';
 import { gridView } from './grid-view';
 import type { HostPort } from './grid-view';
 import { clip } from './model';
@@ -10,17 +12,15 @@ import { profileText } from './profile-text';
 import { lazyChartTab } from './result-tab';
 import type { ResultTab } from './result-tab';
 import {
-  HEADER_CHARS,
   STATUS_MARKS,
   TITLE_CHARS,
   elapsedText,
   endText,
+  hasChart,
   isPlan,
-  oneLine,
   planText,
   statementText,
   transactionText,
-  truncatedBanner,
 } from './results-model';
 import type { ResultSet, ResultsRunState, Statement } from './results-model';
 import { profileView } from './statistics-view';
@@ -127,17 +127,13 @@ function textView(host: HostPort, view: HTMLElement, text: string): ResultTab {
   return nothingToPlace(view);
 }
 
-/** The view of one result set below its statement; a grid, a plan and a profile tab draw once on the page. */
+/** The view of one result set; a grid, a plan and a profile tab draw once on the page. */
 export function resultView(host: HostPort, run: ResultsRunState, index: number): ResultTab {
   const set: ResultSet | undefined = run.resultSets[index];
   const view = el('div', 'result');
   if (!set) {
     return nothingToPlace(view);
   }
-  const sql = run.statements.find((statement) => statement.index === set.statement)?.sql ?? '';
-  const header = el('div', 'sql', oneLine(sql, HEADER_CHARS));
-  header.title = clip(sql, TITLE_CHARS);
-  view.append(header);
   if (set.view === 'tips') return tipsView(host, view, set.tips ?? [], index);
   if (set.view === 'text' && set.profile !== undefined) return textView(host, view, profileText(set.profile));
   if (set.profile !== undefined) {
@@ -160,9 +156,6 @@ export function resultView(host: HostPort, run: ResultsRunState, index: number):
   }
   // A plan in text: an EXPLAIN typed in the editor.
   if (isPlan(set)) return textView(host, view, planText(set));
-  if (set.truncated) {
-    view.append(el('div', 'banner', truncatedBanner(set)));
-  }
   const number = index + 1;
   const grid = gridView(
     host,
@@ -174,8 +167,29 @@ export function resultView(host: HostPort, run: ResultsRunState, index: number):
       truncated: set.truncated,
       elapsedMs: set.elapsedMs,
     },
-    { persist: false, fileName: `result-${number}.csv` },
+    {
+      persist: false,
+      fileStem: `result-${number}`,
+      summarize: () => host.post({ type: 'summarize', set: index }),
+      set: index,
+      ...(set.truncated ? { cut: set.rows.length } : {}),
+    },
   );
   view.append(...grid.elements);
-  return { elements: [view], placed: grid.placed };
+  return { ...grid, elements: [view] };
+}
+
+/** The tab of the chart of a result set, made when the tab is first shown; undefined for a set without a chart. */
+export function chartTabView(host: HostPort, run: ResultsRunState, index: number): ChartViewTab | undefined {
+  const set = run.resultSets[index];
+  if (!set || !hasChart(set)) return undefined;
+  const statement = run.statements.find((candidate) => candidate.index === set.statement);
+  return chartView(host, {
+    columns: set.columns,
+    rows: set.rows,
+    truncated: set.truncated,
+    set: index,
+    readsOnly: statement?.readsOnly === true,
+    fileStem: `result-${index + 1}`,
+  });
 }

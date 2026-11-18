@@ -1,23 +1,23 @@
 import { firstIndex, tip } from '../shell/chart-option';
 import type { ChartOption } from '../shell/chart-option';
 import { formatBytes } from '../shell/model';
-import type { Palette } from '../shell/palette';
+import type { ReportPalette } from '../shell/house-colors';
 import type { BarEntry } from './model';
 
 /**
  * Bytes per table, largest on top. A table with many small files has the warning colour and a sign in its label.
- * The selected table has the second colour, the others the line colour.
+ * The selected table has the accent of aantje (orange), the bar of the other tables the muted colour.
  */
 export function storageTablesOption(
   entries: readonly BarEntry[],
-  palette: Palette,
+  palette: ReportPalette,
   selected: number | undefined,
 ): ChartOption {
   const colorOf = (entry: BarEntry): string =>
     entry.tableId === undefined
-      ? palette.lines
+      ? palette.muted
       : entry.tableId === selected
-        ? palette.series[1]
+        ? palette.accent
         : entry.manySmallFiles
           ? palette.warning
           : palette.series[0];

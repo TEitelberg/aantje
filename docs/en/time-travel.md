@@ -45,11 +45,11 @@ SELECT
   "customer",
   "amount"
 FROM "sales"."orders" AT (VERSION => 5)
-LIMIT 1000;
+LIMIT $limit{1000};
 ```
 
 - Names and columns are those of the chosen snapshot (`selectAtSnapshot` in `src/script.ts`). A view is `SELECT *`, because the catalog has no typed columns for a view; DuckLake runs the view as it was at that snapshot over the tables as they were then.
-- The document belongs to the connection of the node, like every script ([SQL editor](sql-editor.md)). F5 runs it there, in a read-only session when the connection is read-only.
+- The document belongs to the connection of the node, like every script ([SQL editor](sql-editor.md)). F5 runs it there, in a read-only session when the connection is read-only, after asking for the `LIMIT` with 1000 proposed ([Parameters](sql-editor.md#parameters)).
 - No trust question is asked. The statement only names the relation; the user decides when running it.
 - The [Snapshot report](snapshot-report.md) offers the same choice in its **Query** action.
 
@@ -129,7 +129,7 @@ A snapshot of the **Snapshots** folder lists what it changed ([Tree](tree.md#sna
 - Snapshot `@0` has no predecessor: the command says so and shows nothing.
 - A table that does not exist at the snapshot (it was dropped there) gets a message and reads nothing.
 
-The [Snapshot report](snapshot-report.md) starts the same commands from its chart. [Schema History](schema-history.md) starts Compare Table at Two Snapshots and Query at Snapshot from a matrix cell. [Activity](activity-report.md) starts Compare Snapshots and Show Rows Changed through the plans and port of the Snapshot report.
+The [Snapshot report](snapshot-report.md) starts the same commands from a snapshot selected in its chart or its table. [Schema History](schema-history.md) starts Compare Table at Two Snapshots for the two snapshots it compares. [Activity](activity-report.md) offers them through the Snapshot report, which its **Show Snapshot Report** opens.
 
 ## Restore Table to Snapshot
 
@@ -144,6 +144,7 @@ The [Snapshot report](snapshot-report.md) starts the same commands from its char
 -- The table keeps its id, so its History, Schema History and Show Changes go on across the restore.
 
 BEGIN TRANSACTION;
+-- CALL lake.set_commit_message(NULL, 'Restore of "sales"."orders" to snapshot 42');
 -- Warning: this deletes every row of the table; the INSERT below writes the rows of snapshot 42.
 DELETE FROM "sales"."orders";
 INSERT INTO "sales"."orders" ("id", "customer", "amount")
@@ -157,6 +158,7 @@ Decisions:
 - **The statements act on the newest state.** The table is named as it is now; the `FROM` names it as it was at the snapshot, because `AT (VERSION => n)` resolves the name at that snapshot. When the tree shows a chosen snapshot, a comment says so.
 - **A table that was dropped since** gets a hint to use Restore Dropped Object instead, and no script.
 - **The rows of the snapshot come from DuckLake**, also rows that were inlined in the catalog then.
+- **A commit message** for the snapshot of the restore is a comment right after `BEGIN TRANSACTION`; remove the `-- ` to use it ([Commit messages](sql-editor.md#commit-messages)).
 
 ### When the structure changed
 
@@ -181,6 +183,7 @@ The renames come last, after `COMMIT`, also as comments: the `INSERT` names the 
 -- ALTER TABLE "sales"."orders" DROP COLUMN "region";
 
 BEGIN TRANSACTION;
+-- CALL lake.set_commit_message(NULL, 'Restore of "sales"."orders" to snapshot 5');
 -- Warning: this deletes every row of the table; the INSERT below writes the rows of snapshot 5.
 DELETE FROM "sales"."orders";
 INSERT INTO "sales"."orders" (

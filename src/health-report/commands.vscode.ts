@@ -6,7 +6,7 @@ import type { S3CredentialStore } from '../data/credentials';
 import type { DataAccessFactory } from '../data/resolve';
 import type { FindingScope, HealthReport, HealthRequest } from '../health/model';
 import { runHealthCheck } from '../health/run';
-import type { HealthRun } from '../health/run';
+import type { HealthDeps, HealthRun } from '../health/run';
 import { connectionClosed } from '../messages';
 import { reportPanels } from '../shell/host.vscode';
 import { scopeOfNode } from '../shell/scope';
@@ -18,6 +18,7 @@ import { healthKind } from './kind';
 import { offerFor, scopeForOffer } from './offer';
 import type { HealthOffer } from './offer';
 import { healthPerformer } from './perform.vscode';
+import { registerSnapshotHealth } from './snapshot-commands.vscode';
 
 const COMMAND = 'aantje.checkHealth';
 const TABLE_COMMAND = 'aantje.checkTableHealth';
@@ -42,11 +43,7 @@ export function registerHealthCommands(env: HealthCommandEnv): vscode.Disposable
     onClose: (key) => controller.close(key),
   });
 
-  async function check(
-    { connectionId }: HealthTarget,
-    request: HealthRequest,
-    run: HealthRun,
-  ): Promise<HealthReport> {
+  async function healthDeps(connectionId: string): Promise<HealthDeps> {
     const { reader } = catalogAt(tree, connectionId, GOAL);
     const profile = store.get(connectionId);
     if (!profile) {
@@ -58,11 +55,15 @@ export function registerHealthCommands(env: HealthCommandEnv): vscode.Disposable
       access.storage === undefined || access.storage.legacy === 'settings'
         ? await env.credentials.source()
         : undefined;
-    return runHealthCheck(
-      { reader, access, env: env.env, ...(credentialsFrom ? { credentialsFrom } : {}) },
-      request,
-      run,
-    );
+    return { reader, access, env: env.env, ...(credentialsFrom ? { credentialsFrom } : {}) };
+  }
+
+  async function check(
+    { connectionId }: HealthTarget,
+    request: HealthRequest,
+    run: HealthRun,
+  ): Promise<HealthReport> {
+    return runHealthCheck(await healthDeps(connectionId), request, run);
   }
 
   const controller = createHealthController({
@@ -104,6 +105,7 @@ export function registerHealthCommands(env: HealthCommandEnv): vscode.Disposable
   return [
     { dispose: () => controller.dispose() },
     { dispose: () => panels.dispose() },
+    ...registerSnapshotHealth({ ...env, healthDeps, targetOf, openAndRun }),
     // A failed read that the check can look into gets its button: Check Health or Check Table Health.
     offerOnErrors((error) => {
       const offer = offerFor(error);

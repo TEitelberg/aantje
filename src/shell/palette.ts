@@ -1,5 +1,7 @@
 // Chart colours. ECharts paints on a canvas and needs literal colours, not CSS variables, so the page reads
 // the VS Code theme once and builds a chart theme from it. Pure: the page passes the computed style and body class.
+// The reports draw with the colours of aantje on this palette (house-colors.ts); the theme's own colours stay for
+// the high contrast themes and for the plans of the SQL editor.
 
 /** `hc` and `hc-light` are the two high contrast themes of VS Code. */
 export type ColorMode = 'dark' | 'light' | 'hc' | 'hc-light';
@@ -8,8 +10,8 @@ export interface Palette {
   readonly background: string;
   readonly foreground: string;
   readonly lines: string;
-  /** Blue, green, purple, yellow: ordinary series, in use order. */
-  readonly series: readonly [string, string, string, string];
+  /** Blue, green, purple, yellow: ordinary series, in use order; the palette of a report has more (`housePalette`). */
+  readonly series: readonly [string, string, string, string, ...string[]];
   /** Orange: a value above a threshold (many small files, uneven partitions, many NULLs). */
   readonly warning: string;
   /** Red: an extreme (a column that is all NULL). */
@@ -179,7 +181,10 @@ function withAlpha(color: string, alpha: number): string {
 
 export const isHighContrast = (mode: ColorMode): boolean => mode === 'hc' || mode === 'hc-light';
 
-/** The ECharts theme; high contrast adds solid grid lines, outlines, larger markers and patterns (`aria.decal`). */
+/**
+ * The ECharts theme; high contrast adds solid grid lines, outlines, larger markers and patterns (`aria.decal`). The
+ * slider of a zoom is drawn in the first series colour, in high contrast in the text colour.
+ */
 export function chartTheme(palette: Palette, mode: ColorMode): Record<string, unknown> {
   const contrast = isHighContrast(mode);
   const grid = contrast ? palette.foreground : withAlpha(palette.lines, mode === 'light' ? 0.5 : 0.25);
@@ -189,7 +194,25 @@ export function chartTheme(palette: Palette, mode: ColorMode): Record<string, un
     axisLabel: { color: palette.foreground },
     splitLine: { lineStyle: { color: grid } },
   };
+  const strong = contrast ? palette.foreground : palette.series[0];
   return {
+    dataZoom: {
+      borderColor: contrast ? palette.foreground : withAlpha(palette.lines, 0.6),
+      fillerColor: withAlpha(strong, 0.15),
+      dataBackground: {
+        lineStyle: { color: withAlpha(palette.lines, 0.8) },
+        areaStyle: { color: withAlpha(palette.lines, 0.15) },
+      },
+      selectedDataBackground: {
+        lineStyle: { color: strong },
+        areaStyle: { color: withAlpha(strong, 0.25) },
+      },
+      handleStyle: { color: palette.background, borderColor: strong },
+      moveHandleStyle: { color: withAlpha(strong, 0.5) },
+      brushStyle: { color: withAlpha(strong, 0.15) },
+      textStyle: { color: palette.foreground },
+      emphasis: { handleStyle: { borderColor: strong }, moveHandleStyle: { color: strong } },
+    },
     color: [...palette.series],
     backgroundColor: 'transparent',
     textStyle: { color: palette.foreground, fontFamily: palette.fontFamily, fontSize: palette.fontSize },

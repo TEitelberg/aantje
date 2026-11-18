@@ -92,9 +92,14 @@ async function signIn(
   fetcher: Fetch,
 ): Promise<Record<string, string>> {
   if (target.signIn === 'none') return {};
-  if (secret === undefined)
-    throw new Error('No sign-in is stored for this target. Sync to Iceberg asks for it.');
-  if (target.signIn === 'token') return { Authorization: `Bearer ${secret}` };
+  if (secret === undefined) {
+    throw new Error(
+      target.signIn === 'entra'
+        ? 'Not signed in with your Microsoft account. Sync to Iceberg signs in.'
+        : 'No sign-in is stored for this target. Sync to Iceberg asks for it.',
+    );
+  }
+  if (target.signIn === 'token' || target.signIn === 'entra') return { Authorization: `Bearer ${secret}` };
   const form = new URLSearchParams({
     grant_type: 'client_credentials',
     client_id: target.clientId ?? '',
@@ -128,4 +133,30 @@ async function prefixOf(
   };
   const prefix = config.overrides?.prefix ?? config.defaults?.prefix;
   return typeof prefix === 'string' && prefix !== '' ? prefix : target.warehouse;
+}
+
+/**
+ * Drops the table when the catalog has it without any snapshot: nothing is lost. OneLake creates a table before its
+ * data (it does not stage a create), so a write that fails there leaves such an empty table, which DuckDB does not list
+ * and which a later create runs into (`AlreadyExistsException`). True when it dropped one.
+ */
+export async function dropEmptyTable(
+  target: IcebergTarget,
+  secret: string | undefined,
+  table: { readonly namespace: string; readonly name: string },
+  fetcher: Fetch = fetch,
+): Promise<boolean> {
+  const headers = await signIn(target, secret, fetcher);
+  const prefix = await prefixOf(target, headers, fetcher);
+  const url = `${target.endpoint.replace(/\/+$/, '')}/v1/${encodeURIComponent(prefix)}/namespaces/${encodeURIComponent(table.namespace)}/tables/${encodeURIComponent(table.name)}`;
+  const response = await fetcher(url, { headers, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+  if (!response.ok) return false;
+  const fact = factOf(await response.text());
+  if (fact.kind !== 'table' || fact.current !== undefined) return false;
+  const dropped = await fetcher(url, {
+    method: 'DELETE',
+    headers,
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  return dropped.ok;
 }

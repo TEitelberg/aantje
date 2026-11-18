@@ -11,13 +11,14 @@ import {
 } from '../shell/blocks';
 import { el } from '../shell/dom';
 import { formatUtc } from '../shell/model';
+import { reportHeading } from '../shell/report-heading';
 import { reportPage } from '../shell/report-page';
-import { icebergCards, matchingRows, stateText, tableName } from './model';
+import { icebergCards, matchingRows, rowState, tableName } from './model';
 import type { IcebergData, IcebergTableRow } from './model';
 import { icebergLogo } from './logo';
 import { isIcebergMessage } from './protocol';
 
-const ACTION_LABEL = { copyAgain: 'Sync to Apache Iceberg', forget: 'Forget Sync' } as const;
+const ACTION_LABEL = { copyAgain: 'Sync to Iceberg', forget: 'Forget Iceberg Sync' } as const;
 const ACTION_HINT = {
   copyAgain:
     'Bring the Iceberg tables of this sync to the state of the lake: append what the lake inserted, replace what it changed',
@@ -56,12 +57,13 @@ export const icebergPage = reportPage<IcebergData>('iceberg', isIcebergMessage, 
         : dataTable(
             ['Table', 'State', 'Synced at', 'Lake changes since', 'Iceberg snapshot', 'Rows', 'Notes'],
             matching.map((row) => {
-              const state = el(
-                'td',
-                row.problems.length === 0 ? 'state good' : 'state bad',
-                stateText(row.problems),
-              );
-              state.title = row.checkError ?? '';
+              const good = row.problems.length === 0 && row.failed === undefined;
+              const state = el('td', good ? 'state good' : 'state bad', rowState(row));
+              state.title = row.failed ?? row.checkError ?? '';
+              // A table the last sync could not write: only its name, the state and why.
+              if (row.failed !== undefined) {
+                return tableRow([el('td', 'name', tableName(row)), state, '', '', '', '', row.failed]);
+              }
               return tableRow([
                 el('td', 'name', tableName(row)),
                 state,
@@ -80,9 +82,9 @@ export const icebergPage = reportPage<IcebergData>('iceberg', isIcebergMessage, 
     show(next) {
       data = next;
       const header = pageHeader(context, {
-        title: 'Apache Iceberg Sync',
+        title: reportHeading('Iceberg Report', next.target.name),
         logo: icebergLogo(32),
-        subtitle: `${next.connection} → ${next.target.name} · copied ${next.copiedAt === '' ? 'never' : formatUtc(next.copiedAt)} · checked ${formatUtc(next.checkedAt)}`,
+        subtitle: `${next.connection} → ${next.target.name} (${next.target.place}) · copied ${next.copiedAt === '' ? 'never' : formatUtc(next.copiedAt)} · checked ${formatUtc(next.checkedAt)}`,
         refresh: 'Check the copy again against the lake and the Iceberg catalog',
         markdown: false,
         actions: next.actions.map((action) =>
@@ -117,7 +119,7 @@ export const icebergPage = reportPage<IcebergData>('iceberg', isIcebergMessage, 
       if (next.added.length > 0) {
         main.append(
           el('h2', undefined, 'New in the lake'),
-          el('p', undefined, 'These tables are not in the copy. Sync to Apache Iceberg to add them.'),
+          el('p', undefined, 'These tables are not in the copy. Sync to Iceberg to add them.'),
           addedList(next.added),
         );
       }

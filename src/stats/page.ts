@@ -2,6 +2,7 @@
 // Browser side of the statistics report: tab state and events; the DOM is built in render.ts.
 import { isOneOf, isShape, isString } from '../guards';
 import { pageHeader, tabBar } from '../shell/blocks';
+import { reportHeading } from '../shell/report-heading';
 import type { Frame } from '../shell/chart-set';
 import { el } from '../shell/dom';
 import { reportPage } from '../shell/report-page';
@@ -57,7 +58,7 @@ export const statisticsPage = reportPage<StatisticsData>(
       const frame: Frame = { theme: readTheme(), charts };
       const { statistics } = data;
       const header = pageHeader(context, {
-        title: `${data.table} statistics`,
+        title: reportHeading('Statistics', data.table),
         subtitle: `Snapshot @${statistics.snapshot} · ${data.connection}`,
       });
       const main = el('main');

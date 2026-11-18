@@ -14,6 +14,7 @@ import { groupBy } from '../order';
 import { MAINTENANCE_LABEL } from '../maintenance/labels';
 import type { MaintenanceScript } from '../maintenance/labels';
 import { count, plural } from '../shell/model';
+import { reportHeading } from '../shell/report-heading';
 import { formatDuration } from '../shell/numbers';
 import type { Card } from '../shell/model';
 
@@ -51,7 +52,9 @@ export interface HealthData {
   readonly depth: 'quick' | 'deep';
   readonly deepFiles: number;
   readonly status: HealthRunState;
-  /** The snapshot that was checked, the newest one; known when the run has read the catalog. */
+  /** The snapshot whose state the panel checks when it is not the newest (Check Health at Snapshot...). */
+  readonly at?: number;
+  /** The snapshot that was checked, the newest one or `at`; known when the run has read the catalog. */
   readonly snapshot?: number;
   /** The groups that have reported, in the order of `HEALTH_GROUPS`. */
   readonly groups: readonly GroupStatus[];
@@ -76,8 +79,17 @@ export function freshData(
   scope: FindingScope,
   choice: { readonly depth: 'quick' | 'deep'; readonly deepFiles: number },
   status: 'idle' | 'running',
+  at?: number,
 ): HealthData {
-  return { connection, scope, ...choice, status, groups: [], findings: [] };
+  return {
+    connection,
+    scope,
+    ...choice,
+    status,
+    ...(at === undefined ? {} : { at }),
+    groups: [],
+    findings: [],
+  };
 }
 
 /** The data after one event. The extension and the page both apply the events, so that they hold the same. */
@@ -123,11 +135,28 @@ export function healthScopeLabel(scope: FindingScope): string {
 }
 
 /** One panel per connection and scope. JSON, so that no combination of ids can imitate another key. */
-export const healthKey = (connectionId: string, scope: FindingScope): string =>
-  JSON.stringify(scope.kind === 'lake' ? [connectionId, 'lake'] : [connectionId, scope.kind, scope.id]);
+/** The panel of a scope, and of a snapshot whose state it checks; the newest has a panel of its own. */
+export const healthKey = (connectionId: string, scope: FindingScope, at?: number): string =>
+  JSON.stringify([
+    ...(scope.kind === 'lake' ? [connectionId, 'lake'] : [connectionId, scope.kind, scope.id]),
+    ...(at === undefined ? [] : [at]),
+  ]);
 
-export const healthTitle = (connection: string, scope: FindingScope): string =>
-  scope.kind === 'lake' ? `Health · ${connection}` : `Health · ${connection} · ${healthScopeLabel(scope)}`;
+/** The schema or the table that a check is about; undefined for the whole lake. */
+export const healthObject = (scope: FindingScope): string | undefined =>
+  scope.kind === 'lake' ? undefined : scope.kind === 'schema' ? scope.name : healthScopeLabel(scope);
+
+/** The heading of Check Health at Snapshot...: the scope and the snapshot whose state is checked. */
+export const snapshotHealthHeading = (scope: FindingScope, at: number): string =>
+  reportHeading('Check Health at Snapshot', `${healthObject(scope) ?? ''} @${at}`.trimStart());
+
+/** The heading of Find Last Good Snapshot...: its name alone for the lake, with the schema or the table. */
+export const lastGoodHeading = (scope: FindingScope): string =>
+  reportHeading('Find Last Good Snapshot', healthObject(scope));
+
+/** `Health Check: shop · Lake`, or the heading of a check at an older snapshot; the lake has the name alone. */
+export const healthTitle = (connection: string, scope: FindingScope, at?: number): string =>
+  `${at === undefined ? reportHeading('Health Check', healthObject(scope)) : snapshotHealthHeading(scope, at)} · ${connection}`;
 
 /** What the user chose to see; `severities` and `groups` are the ones that are shown. */
 export interface HealthFilter {

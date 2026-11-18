@@ -197,6 +197,7 @@ async function smallFileTables(
 type MaintenanceReads = Pick<
   CatalogReader,
   | 'smallFiles'
+  | 'deleteFiles'
   | 'consistency'
   | 'maintenanceFacts'
   | 'deletedSmallFiles'
@@ -221,11 +222,16 @@ export function maintenanceReads(run: Run, attempt: Attempt): MaintenanceReads {
         .toSorted((a, b) => b.small - a.small || a.tableId - b.tableId);
     },
 
-    async consistency(scope, snapshot, sampleLimit, signal): Promise<ConsistencyReport> {
+    async deleteFiles(snapshot, scope = {}, signal): Promise<Map<number, number>> {
+      const rows = await run(queries.deleteFilesAt(snapshot, scope), signal);
+      return new Map(rows.map((row) => [toNumber(row.table_id), toNumber(row.file_count)]));
+    },
+
+    async consistency(scope, snapshot, sampleLimit, signal, at): Promise<ConsistencyReport> {
       const limit = Math.max(1, Math.trunc(sampleLimit));
       const results = await Promise.all(
         CONSISTENCY_CHECKS.map(async (check) => {
-          const query = queries.consistency(check, snapshot, scope, limit);
+          const query = queries.consistency(check, snapshot, scope, limit, at);
           return {
             check,
             applies: query !== undefined,

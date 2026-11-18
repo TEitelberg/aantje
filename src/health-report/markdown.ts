@@ -1,6 +1,6 @@
 import { HEALTH_GROUPS } from '../health/model';
 import type { FindingScope, HealthFinding, HealthSeverity } from '../health/model';
-import { capRows, code, markdownTable, reportTitle } from '../markdown';
+import { capRows, code, markdownTable, markdownText, reportHeadingLine, visibleLine } from '../markdown';
 import { codeBlock } from '../markdown';
 import { count } from '../shell/model';
 import { formatDuration } from '../shell/numbers';
@@ -12,10 +12,12 @@ import {
   actionsOf,
   coverage,
   groupLine,
+  healthObject,
   matchingFindings,
   healthScopeLabel,
   lakeSectionLabel,
   sections,
+  snapshotHealthHeading,
   verdictText,
 } from './model';
 import type { HealthData, HealthFilter } from './model';
@@ -95,11 +97,9 @@ export function healthMarkdown(data: HealthData, view?: HealthFilter): string {
   const filter = view ?? DEFAULT_FILTER;
   const matching = matchingFindings(data.findings, filter);
   return [
-    reportTitle(
-      'Health check of',
-      data.connection,
-      data.scope.kind === 'schema' ? data.scope.name : undefined,
-    ),
+    data.at === undefined
+      ? reportHeadingLine('Health Check', data.connection, healthObject(data.scope))
+      : `# ${markdownText(visibleLine(`${snapshotHealthHeading(data.scope, data.at)} · ${data.connection}`))}`,
     '',
     verdictText(data),
     '',
@@ -131,7 +131,10 @@ function propertyRows(data: HealthData): string[][] {
       'Depth',
       data.depth === 'deep' ? `Deep check, up to ${count(data.deepFiles)} files` : 'Quick + existence',
     ],
-    ['Checked snapshot', data.snapshot === undefined ? 'not read' : `@${data.snapshot}`],
+    [
+      'Checked snapshot',
+      `${data.snapshot === undefined ? 'not read' : `@${data.snapshot}`}${data.at === undefined ? '' : ' (Check Health at Snapshot, not the newest)'}`,
+    ],
     ...(summary
       ? [
           ['Errors', count(summary.errors)],
