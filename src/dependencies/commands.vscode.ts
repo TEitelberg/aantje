@@ -4,7 +4,8 @@ import { shownSnapshot } from '../actions';
 import { showConnectFirst } from '../command.vscode';
 import type { Register } from '../command.vscode';
 import { openReport } from '../shell/host.vscode';
-import { LAKE_SCOPE, scopeKey, scopeOfNode, scopeSuffix } from '../shell/scope';
+import { reportHeading } from '../shell/report-heading';
+import { LAKE_SCOPE, scopeKey, scopeOfNode, scopeSchema } from '../shell/scope';
 import type { ReportScope } from '../shell/scope';
 import type { ReportHostEnv } from '../shell/host.vscode';
 import type { StatisticsTarget } from '../stats/target';
@@ -28,11 +29,14 @@ interface DependenciesCommandEnv extends ReportHostEnv {
 /** What one panel shows: an object, or the lake or a schema; `at` is a snapshot other than the tree's. */
 interface DependenciesParams {
   readonly object?: { readonly kind: NodeKind; readonly id: number };
+  /** A column of the object, for Show Column Lineage. */
+  readonly column?: string;
   readonly scope: ReportScope;
   readonly at?: number;
 }
 
 const COMMAND = 'aantje.showDependencies';
+const LINEAGE_COMMAND = 'aantje.showColumnLineage';
 const GOAL = 'show its dependencies';
 
 // The object a tree node stands for; undefined when it has no dependencies report.
@@ -58,9 +62,11 @@ export function registerDependenciesCommand(env: DependenciesCommandEnv): vscode
     kind: dependenciesKind,
     noun: 'dependencies report',
     goal: GOAL,
-    keyOf: (profile, { object, scope }: DependenciesParams) =>
-      object ? JSON.stringify([profile.id, object.kind, object.id]) : scopeKey(profile.id, scope),
-    open: (reader, profile, { object, scope, at }) => {
+    keyOf: (profile, { object, scope, column }: DependenciesParams) =>
+      object
+        ? JSON.stringify([profile.id, object.kind, object.id, ...(column === undefined ? [] : [column])])
+        : scopeKey(profile.id, scope),
+    open: (reader, profile, { object, scope, at, column }) => {
       // At the given snapshot, or at the one the tree shows.
       const snapshot = at ?? shownSnapshot(tree.state(profile.id));
       if (snapshot === undefined) return undefined;
@@ -70,7 +76,7 @@ export function registerDependenciesCommand(env: DependenciesCommandEnv): vscode
           const graph = await readGraph(reader, parser, snapshot, signal);
           return (
             (object
-              ? objectData(graph, profile.name, snapshot, object)
+              ? objectData(graph, profile.name, snapshot, { ...object, column })
               : scope.kind === 'schema'
                 ? schemaData(graph, profile.name, snapshot, scope)
                 : lakeData(graph, profile.name, snapshot)) ?? null
@@ -78,14 +84,20 @@ export function registerDependenciesCommand(env: DependenciesCommandEnv): vscode
         },
         title: (data) =>
           data.target === null
-            ? `Dependencies · ${profile.name}${scopeSuffix(scope)}`
-            : `Dependencies of ${nameAt(data, data.target)} · ${profile.name}`,
+            ? `${reportHeading('Dependencies', scopeSchema(scope))} · ${profile.name}`
+            : column === undefined
+              ? `${reportHeading('Dependencies', nameAt(data, data.target))} · ${profile.name}`
+              : `${reportHeading('Column Lineage', `${nameAt(data, data.target)}.${column}`)} · ${profile.name}`,
         absent:
           'This object does not exist at the snapshot that the tree shows, so it has no dependencies to show.',
       };
     },
     // A Refresh reads at the snapshot that the tree shows now.
-    refreshParams: ({ object, scope }) => ({ scope, ...(object ? { object } : {}) }),
+    refreshParams: ({ object, scope, column }) => ({
+      scope,
+      ...(object ? { object } : {}),
+      ...(column === undefined ? {} : { column }),
+    }),
     planAction: planDependenciesAction,
     perform: (plan, profile, data): Promise<void> =>
       performDependenciesAction(plan, data.snapshot, {
@@ -120,5 +132,29 @@ export function registerDependenciesCommand(env: DependenciesCommandEnv): vscode
         await report.show(profile, { object, scope: LAKE_SCOPE });
       }
     }),
+    // The report of the table or view of a column, about that column: what it is built from and what uses it.
+    env.register(LINEAGE_COMMAND, async (node) => {
+      const ref = node?.ref;
+      const profile = ref && store.get(ref.connectionId);
+      if (!ref || !profile) {
+        showConnectFirst(GOAL);
+        return;
+      }
+      const target = columnOf(ref);
+      if (target) await report.show(profile, { ...target, scope: LAKE_SCOPE });
+    }),
   ];
+}
+
+// A column of a table, or of a view; a field of a struct stands for its top-level column.
+function columnOf(
+  ref: NodeRef,
+):
+  { readonly object: { readonly kind: NodeKind; readonly id: number }; readonly column: string } | undefined {
+  if (ref.kind === 'column' && ref.path[0] !== undefined) {
+    return { object: { kind: 'table', id: ref.table.id }, column: ref.path[0] };
+  }
+  if (ref.kind === 'viewColumn')
+    return { object: { kind: 'view', id: ref.view.id }, column: ref.column.name };
+  return undefined;
 }

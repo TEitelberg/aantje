@@ -6,17 +6,27 @@ import type { Bounds } from '../shell/range-state';
 import { choices } from './model';
 import type { ActivityData } from './model';
 
-// Kept while the panel is hidden or the data is read again.
-interface Choices {
+/** The tabs below the key figures; the first is shown until the user picks another. */
+export const TABS = [
+  { id: 'days', label: 'Commits per day' },
+  { id: 'kinds', label: 'Changes by kind' },
+  { id: 'authors', label: 'Authors' },
+  { id: 'ranking', label: 'Most changed tables' },
+  { id: 'tables', label: 'Table changes' },
+] as const;
+export type TabId = (typeof TABS)[number]['id'];
+
+/** The tab and the filters, kept while the panel is hidden or the data is read again. */
+export interface ActivityChoices {
+  readonly tab: TabId;
   readonly author?: string | undefined;
   readonly table?: string | undefined;
   readonly kinds: readonly PointKind[];
   readonly text: string;
   readonly range: { readonly from: number; readonly to: number };
-  readonly selected?: number | undefined;
 }
 
-interface SavedState extends Choices {
+interface SavedState extends ActivityChoices {
   readonly connection: string;
   // The snapshots the range was chosen in.
   readonly bounds: Bounds;
@@ -25,34 +35,41 @@ interface SavedState extends Choices {
 const isSavedState = isShape({
   connection: isString,
   bounds: isBounds,
+  tab: isOneOf(...TABS.map(({ id }) => id)),
   author: isOptional(isString),
   table: isOptional(isString),
   kinds: isArrayOf(isOneOf(...POINT_KINDS)),
   text: isString,
   range: isShape({ from: isCount, to: isCount }),
-  selected: isOptional(isCount),
+}) as (value: unknown) => value is SavedState;
+
+/** What the page keeps for VS Code to hand back. */
+export const savedActivityState = (
+  data: ActivityData,
+  model: Model,
+  chosen: ActivityChoices,
+): SavedState => ({
+  connection: data.connection,
+  bounds: boundsOf(model.snapshots),
+  ...chosen,
 });
 
-/** Restores the saved filters without any author, table or snapshot the data lacks; undefined for foreign state. */
+/** Restores the saved tab and filters without any author or table the data lacks; undefined for foreign state. */
 export function restoreActivityChoices(
   saved: unknown,
   data: ActivityData,
   model: Model,
-): Choices | undefined {
-  if (!isSavedState(saved)) {
-    return undefined;
-  }
-  const state = saved as SavedState;
-  if (state.connection !== data.connection) {
+): ActivityChoices | undefined {
+  if (!isSavedState(saved) || saved.connection !== data.connection) {
     return undefined;
   }
   const offered = choices(model);
   return {
-    author: offered.authors.some(({ key }) => key === state.author) ? state.author : undefined,
-    table: offered.tables.some(({ key }) => key === state.table) ? state.table : undefined,
-    kinds: state.kinds,
-    text: state.text,
-    range: restoredRange(state.range, state.bounds, boundsOf(model.snapshots)),
-    selected: model.snapshots.some(({ id }) => id === state.selected) ? state.selected : undefined,
+    tab: saved.tab,
+    author: offered.authors.some(({ key }) => key === saved.author) ? saved.author : undefined,
+    table: offered.tables.some(({ key }) => key === saved.table) ? saved.table : undefined,
+    kinds: saved.kinds,
+    text: saved.text,
+    range: restoredRange(saved.range, saved.bounds, boundsOf(model.snapshots)),
   };
 }

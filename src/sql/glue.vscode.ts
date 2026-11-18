@@ -23,6 +23,7 @@ export const documentOfKey = (key: string): vscode.TextDocument | undefined =>
 export const editorOf = (document: vscode.TextDocument): EditorRef => ({
   key: documentKey(document),
   name: document.uri.path.split('/').pop() ?? document.uri.path,
+  text: () => document.getText(),
 });
 
 /** The active editor when it shows SQL; otherwise says to open one. */

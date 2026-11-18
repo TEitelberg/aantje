@@ -42,6 +42,11 @@ const SECRET_SETTING = /key|secret|token|password|credential|connection_string/i
 // In a literal: `scheme://user:password@host`, and `password=...` of a libpq connection string.
 const URL_PASSWORD = /(:\/\/[^\s:/?#']*):([^\s/?#']*)@/g;
 const KEYWORD_PASSWORD = /(\bpassword\s*=\s*)(''(?:[^']|'''')*''|[^\s']+)/gi;
+/** Whether a name says that its value is a secret, as a setting or a parameter of a run: `api_token`, `db_password`. */
+export function namesSecret(name: string): boolean {
+  return SECRET_SETTING.test(name);
+}
+
 const OPENERS = new Set(['(', '[', '{']);
 const CLOSERS = new Set([')', ']', '}']);
 
@@ -214,6 +219,28 @@ class Masker {
     this.mask(words.slice(index + (assigns ? 2 : 1)));
   }
 
+  /**
+   * The inline defaults of the parameters named like a secret, as the run masks their values: `$api_token{...}` keeps
+   * its braces around `'***'`.
+   */
+  parameterDefaults(lexemes: readonly Lexeme[]): void {
+    for (const [index, dollar] of lexemes.entries()) {
+      const name = lexemes[index + 1];
+      if (this.symbol(dollar) !== '$' || name?.kind !== 'word' || this.symbol(lexemes[index + 2]) !== '{')
+        continue;
+      if (!SECRET_SETTING.test(this.text.slice(name.start, name.end))) continue;
+      let depth = 0;
+      for (let position = index + 2; position < lexemes.length; position++) {
+        const symbol = this.symbol(lexemes[position]);
+        if (symbol === '{') depth++;
+        else if (symbol === '}' && --depth === 0) {
+          this.mask(lexemes.slice(index + 3, position));
+          break;
+        }
+      }
+    }
+  }
+
   /** The password parts of the connection strings in the literals that no statement rule masked. */
   literalPasswords(lexemes: readonly Lexeme[]): void {
     const covered = (item: Lexeme): boolean =>
@@ -238,8 +265,8 @@ class Masker {
 
 /**
  * The text with the secrets that its statements hand over replaced: the option values of CREATE SECRET (except TYPE
- * and PROVIDER), the value of a SET of a setting named like a key, token or password, and the passwords of connection
- * strings in literals.
+ * and PROVIDER), the value of a SET of a setting named like a key, token or password, the inline default of a parameter
+ * named so, and the passwords of connection strings in literals.
  */
 export function maskSecretStatements(text: string): MaskedSql {
   const lexemes = lex(text);
@@ -247,6 +274,7 @@ export function maskSecretStatements(text: string): MaskedSql {
   for (const words of statements(lexemes)) {
     if (!masker.createSecret(words)) masker.setSecret(words);
   }
+  masker.parameterDefaults(lexemes);
   masker.literalPasswords(lexemes);
   let masked = '';
   let position = 0;

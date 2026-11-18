@@ -1,5 +1,7 @@
 import type * as vscode from 'vscode';
 import type { Register } from './command.vscode';
+import { registerCommentCommands } from './comments.vscode';
+import { registerMacroCallCommand } from './macro-call.vscode';
 import { maintenanceScript } from './maintenance/scripts';
 import type { MaintenanceKind } from './maintenance/scripts';
 import { scriptOf } from './script-templates';
@@ -44,12 +46,20 @@ const scripts: readonly (readonly [
   ),
 ];
 
-/** Script as and Maintenance on a node of the explorer: the script opens bound to the node's connection, so F5 runs it there. */
-export function registerScriptCommands({ tree, register, openSql }: ScriptCommandEnv): vscode.Disposable[] {
-  return scripts.map(([id, scriptFor]) =>
-    register(id, async (node) => {
-      const text = node && (await scriptFor(tree, node.ref));
-      if (node && text !== undefined) await openSql(node.ref.connectionId, text);
-    }),
-  );
+/**
+ * Script as, Maintenance, Edit Comment and Execute Macro on a node of the explorer: the script opens bound to the node's
+ * connection, so F5 runs it there.
+ */
+export function registerScriptCommands(env: ScriptCommandEnv): vscode.Disposable[] {
+  const { tree, register, openSql } = env;
+  return [
+    ...scripts.map(([id, scriptFor]) =>
+      register(id, async (node) => {
+        const text = node && (await scriptFor(tree, node.ref));
+        if (node && text !== undefined) await openSql(node.ref.connectionId, text);
+      }),
+    ),
+    ...registerCommentCommands(env),
+    registerMacroCallCommand(env),
+  ];
 }

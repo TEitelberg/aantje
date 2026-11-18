@@ -1,4 +1,6 @@
 import { CHANGE_COLUMNS } from '../data/types';
+import { markdownCell, markdownHead, markdownRow, nullCell } from '../export/markdown';
+import type { MarkdownNull } from '../export/markdown';
 import { count, formatDuration, groupedPlural } from '../shell/numbers';
 import { collator } from '../order';
 import type { GridColumn, GridData, GridValue, RowKind, TableRef } from '../data/types';
@@ -28,7 +30,7 @@ export function cellText(value: GridValue, kind: GridColumn['kind']): CellText {
 
 /**
  * The exact text of one cell, for Copy cell: NULL becomes an empty field. Copy cell pastes a single value into SQL or
- * text, so it is never neutralised; Copy row, Copy all and the CSV export neutralise text cells (see `toTsv`, `toCsv`).
+ * text, so it is never neutralised; Copy row and Copy all neutralise text cells (see `toTsv`).
  */
 export function cellCopyText(value: GridValue, kind: GridColumn['kind']): string {
   return value === null ? '' : cellText(value, kind).text;
@@ -36,9 +38,8 @@ export function cellCopyText(value: GridValue, kind: GridColumn['kind']): string
 
 // Browsers choke on megabytes of text in a cell.
 const MAX_CELL_CHARS = 2000;
-const MAX_TITLE_CHARS = 1000;
-// Only values that the cell may have cut get a tooltip.
-const TITLE_FROM_CHARS = 60;
+/** The longest tooltip of a text that the grid cuts. */
+export const TOOLTIP_CHARS = 1000;
 // A screen reader says this for a real NULL, so it differs from the text "NULL".
 const NULL_LABEL = 'no value (SQL NULL)';
 /** The status line says this when Ctrl+C or Copy cell finds a NULL: the clipboard is left alone. */
@@ -47,8 +48,6 @@ export const NULL_NOT_COPIED = 'NULL: nothing copied';
 interface CellDisplay {
   readonly text: string;
   readonly isNull: boolean;
-  /** The tooltip, empty for none. */
-  readonly title: string;
   /** The accessible name that replaces the text, empty for none. */
   readonly label: string;
 }
@@ -67,15 +66,13 @@ export function clipTo(text: string, max: number): string {
   return text.length <= max ? text : clip(text, max - 1);
 }
 
-/** What the grid draws for one cell. Copy, export, sort and filter use the full value, not this. */
+/**
+ * What the grid draws for one cell. Copy, export, sort and filter use the full value, not this. A cell that is too narrow
+ * for its text cuts it with an ellipsis and shows it, up to `TOOLTIP_CHARS`, as a tooltip.
+ */
 export function cellDisplay(value: GridValue, kind: GridColumn['kind']): CellDisplay {
   const { text, isNull } = cellText(value, kind);
-  return {
-    text: clip(text, MAX_CELL_CHARS),
-    isNull,
-    title: !isNull && text.length > TITLE_FROM_CHARS ? clip(text, MAX_TITLE_CHARS) : '',
-    label: isNull ? NULL_LABEL : '',
-  };
+  return { text: clip(text, MAX_CELL_CHARS), isNull, label: isNull ? NULL_LABEL : '' };
 }
 
 type RowMarks = Readonly<Record<RowKind, { readonly mark: string; readonly label: string }>>;
@@ -262,31 +259,30 @@ function cellTest(filter: string, kind: GridColumn['kind']): ((value: GridValue)
 }
 
 /**
- * RFC 4180 CSV. A single column writes an empty field as `""`. Text a spreadsheet would read as a formula
- * (starts with `=`, `+`, `@`, `-`, tab or CR) gets a leading `'`; plain numbers such as `-5` stay as they are.
+ * RFC 4180 CSV, every value and column name exactly as it is. A single column writes an empty field as `""`, so that a
+ * NULL row is no blank line.
  */
 export function toCsv(columns: readonly GridColumn[], rows: readonly Row[]): string {
   const single = columns.length === 1;
-  const header = columns.map((column) => neutralised(column.name));
-  const records = rows.map((row) => neutralisedFields(columns, row));
+  const header = columns.map((column) => column.name);
+  const records = rows.map((row) => fields(columns, row));
   return `${[header, ...records]
     .map((record) => record.map((field) => (single && field === '' ? '""' : quoted(field, ','))).join(','))
     .join('\r\n')}\r\n`;
 }
 
 /** How text that a spreadsheet reads as a formula starts; a `-` counts only before text that is no `PLAIN_NUMBER`. */
-export const FORMULA_START = /^[=+@\t\r]/;
-/** A number such as `-5` or `-0.5`, which stays as it is. Run to File uses both patterns in SQL, as RE2 reads them too. */
-export const PLAIN_NUMBER = /^-?\d+(\.\d+)?$/;
+const FORMULA_START = /^[=+@\t\r]/;
+/** A number such as `-5` or `-0.5`, which stays as it is. */
+const PLAIN_NUMBER = /^-?\d+(\.\d+)?$/;
 
 /** The text with a leading `'` when a spreadsheet would read it as a formula. */
 export function neutralised(text: string): string {
   return FORMULA_START.test(text) || (text.startsWith('-') && !PLAIN_NUMBER.test(text)) ? `'${text}` : text;
 }
 
-// A row's cells for copy or export, with text cells neutralised so a spreadsheet does not read them as a formula; a
-// number, boolean or nested value is left exact. The same rule as the CSV export, because the clipboard text also pastes
-// into spreadsheets.
+// A row's cells for the clipboard, with text cells neutralised so a spreadsheet that the text is pasted into does not
+// read them as a formula; a number, boolean or nested value is left exact.
 function neutralisedFields(columns: readonly GridColumn[], row: Row): string[] {
   return fields(columns, row).map((field, index) =>
     columns[index]?.kind === 'text' ? neutralised(field) : field,
@@ -295,7 +291,7 @@ function neutralisedFields(columns: readonly GridColumn[], row: Row): string[] {
 
 /**
  * Tab separated for the clipboard of Copy row and Copy all, which paste into spreadsheets: text cells and column names
- * are neutralised like in the CSV export, fields are quoted where needed. Copy cell uses `cellCopyText` and stays exact.
+ * are neutralised, fields are quoted where needed. Copy cell uses `cellCopyText` and stays exact.
  */
 export function toTsv(columns: readonly GridColumn[], rows: readonly Row[], includeHeader: boolean): string {
   const header = columns.map((column) => neutralised(column.name));
@@ -311,6 +307,61 @@ function fields(columns: readonly GridColumn[], row: Row): string[] {
 
 function quoted(field: string, delimiter: string): string {
   return field.includes(delimiter) || /["\r\n]/.test(field) ? `"${field.replaceAll('"', '""')}"` : field;
+}
+
+// The text of a JSON number: BIGINT, HUGEINT and DECIMAL arrive as strings and are written with all their digits.
+const JSON_NUMBER = /^-?(0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?$/;
+
+/** One value as JSON text: numbers stay exact, nested values stay nested, NULL is `null`. */
+function jsonValue(value: GridValue, kind: GridColumn['kind']): string {
+  if (value === null) return 'null';
+  if (typeof value === 'boolean') return String(value);
+  const text = String(value);
+  if (kind === 'number' && JSON_NUMBER.test(text)) return text;
+  if (kind === 'nested' && typeof value === 'string') {
+    try {
+      JSON.parse(value);
+      return value;
+    } catch {
+      // Not JSON after all: written as a string below.
+    }
+  }
+  return JSON.stringify(typeof value === 'number' ? text : value);
+}
+
+/**
+ * The rows as a JSON array of objects, one object per line, keys in the order of the columns (two columns of one name
+ * give two keys, as DuckDB writes them). BIGINT and DECIMAL keep all their digits; a number that JSON cannot hold (NaN,
+ * Infinity) becomes a string. Nested values are nested JSON.
+ */
+export function toJson(columns: readonly GridColumn[], rows: readonly Row[]): string {
+  const keys = columns.map((column) => JSON.stringify(column.name));
+  const objects = rows.map(
+    (row) =>
+      `  {${columns.map((column, index) => `${keys[index]}: ${jsonValue(row[index] ?? null, column.kind)}`).join(', ')}}`,
+  );
+  return objects.length === 0 ? '[]\n' : `[\n${objects.join(',\n')}\n]\n`;
+}
+
+/**
+ * The rows as a Markdown table with a header row: `|`, backslashes and what would render as Markdown or HTML are
+ * escaped, a line break becomes `<br>`, NULL an empty cell or `NULL` (`nulls`). The same rules as the Markdown file of
+ * Run to File and Export, which DuckDB writes.
+ */
+export function toMarkdown(
+  columns: readonly GridColumn[],
+  rows: readonly Row[],
+  nulls: MarkdownNull,
+): string {
+  const lines = rows.map((row) =>
+    markdownRow(
+      columns.map((column, index) => {
+        const value = row[index] ?? null;
+        return value === null ? nullCell(nulls) : markdownCell(cellCopyText(value, column.kind));
+      }),
+    ),
+  );
+  return `${markdownHead(columns.map((column) => column.name))}${lines.map((line) => `${line}\n`).join('')}`;
 }
 
 const RESERVED_WINDOWS_NAME = /^(con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])$/i;
@@ -339,7 +390,12 @@ export function safeCsvFileName(name: string): string {
 
 /** `schema.table.csv` */
 export function csvFileName(table: TableRef): string {
-  return safeCsvFileName(`${table.schema}.${table.table}`);
+  return safeCsvFileName(fileStem(table));
+}
+
+/** `schema.table`: the name of a file that the grid saves, before its extension. */
+export function fileStem(table: TableRef): string {
+  return `${table.schema}.${table.table}`;
 }
 
 /** "3 of 1,000 rows (more rows exist) · 12 ms" */
@@ -352,8 +408,6 @@ export function statusText(data: GridData, shown: number): string {
 
 // Rows drawn above and below the visible ones: enough for a panel that grows before the next scroll.
 const WINDOW_MARGIN = 100;
-// A cell is cut at its maximum width long before this, so a longer text cannot widen the column.
-const SIZER_CHARS = 200;
 
 /** The rows of a grid that are in the page, `first` up to but not including `last`. */
 export interface RowWindow {
@@ -378,20 +432,6 @@ export function rowWindow(
   }
   const first = Math.max(0, start - WINDOW_MARGIN);
   return { first: first - (first % 2), last: Math.min(rows, end + WINDOW_MARGIN) };
-}
-
-/** The longest text of each column over all rows: a grid that draws some rows keeps its widths while it scrolls. */
-export function widestTexts(columns: readonly GridColumn[], rows: readonly Row[]): string[] {
-  return columns.map((column, index) => {
-    let widest = '';
-    for (const row of rows) {
-      const { text } = cellText(row[index] ?? null, column.kind);
-      if (text.length > widest.length) {
-        widest = text;
-      }
-    }
-    return clip(widest, SIZER_CHARS);
-  });
 }
 
 interface View {

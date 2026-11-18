@@ -107,6 +107,11 @@ export function selectionChildren(
       () => act('scriptRewrite', table.id),
       `Open the script that rewrites the data files of ${name} in a SQL document; nothing runs`,
     ),
+    actionButton(
+      'Inspect Data Files',
+      () => act('inspectFiles', table.id),
+      `Pick data files of ${name} and look into their Parquet footers`,
+    ),
   );
   box.append(
     el('h3', undefined, name),

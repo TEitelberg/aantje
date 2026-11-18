@@ -2,6 +2,7 @@ import { globalValue } from '../catalog/model';
 import type { CatalogEntry, SnapshotId } from '../catalog/model';
 import { isAantjeError } from '../errors';
 import { catalogFindings } from './catalog-checks';
+import type { HealthCatalogFacts } from './catalog-checks';
 import { finding } from './finding';
 import type { TableNames } from './finding';
 import type { GroupStatus, HealthFinding } from './model';
@@ -35,13 +36,15 @@ async function readCatalog(ctx: RunContext, newest: SnapshotId) {
   const { limits, request, scopeRef, signal } = ctx;
   const { reader } = ctx.deps;
   const metadataRead = reader.metadata();
+  // At an older snapshot the maintenance of the newest state is no question.
+  const newestOnly = request.at === undefined;
   const [metadata, snapshotCount, scheduled, consistency, maintenance, entries, viewed, schemas] =
     await Promise.allSettled([
       metadataRead,
       reader.snapshotCount(),
-      reader.scheduledForDeletion(metadataRead),
-      reader.consistency(scopeRef, newest, SAMPLES, signal),
-      reader.maintenanceFacts(scopeRef, limits.findingsPerCheck + 1, signal),
+      newestOnly ? reader.scheduledForDeletion(metadataRead) : undefined,
+      reader.consistency(scopeRef, newest, SAMPLES, signal, request.at),
+      newestOnly ? reader.maintenanceFacts(scopeRef, limits.findingsPerCheck + 1, signal) : undefined,
       reader.entries(newest),
       request.scope.kind === 'table' && request.snapshot !== newest
         ? reader.entries(request.snapshot)
@@ -76,6 +79,18 @@ function tableNames(entries: readonly CatalogEntry[]): TableNames {
   );
 }
 
+// The reads that answered, as facts of the checks; at an older snapshot there is no maintenance to check.
+function answered(reads: Reads, at: number | undefined): Partial<HealthCatalogFacts> {
+  const { metadata, scheduled, consistency, maintenance } = reads;
+  return {
+    ...(metadata.status === 'fulfilled' ? { metadata: metadata.value } : {}),
+    ...(consistency.status === 'fulfilled' ? { consistency: consistency.value } : {}),
+    ...(maintenance.status === 'fulfilled' && maintenance.value ? { maintenance: maintenance.value } : {}),
+    ...(scheduled.status === 'fulfilled' && scheduled.value ? { scheduled: scheduled.value } : {}),
+    ...(at === undefined ? {} : { at }),
+  };
+}
+
 async function checkCatalog(ctx: RunContext, facts: CatalogOutcome): Promise<void> {
   const { state, limits, request } = ctx;
   const info = await ctx.deps.reader.info();
@@ -91,7 +106,7 @@ async function checkCatalog(ctx: RunContext, facts: CatalogOutcome): Promise<voi
     ...listed.map((entry): [number, string] => [entry.schemaId, entry.schemaName]),
     ...named.map((schema): [number, string] => [schema.id, schema.name]),
   ]);
-  const { metadata, snapshotCount, scheduled, consistency, maintenance } = reads;
+  const { metadata, snapshotCount, consistency, maintenance } = reads;
   if (metadata.status === 'fulfilled') facts.dataPath = globalValue(metadata.value, 'data_path');
   const result = catalogFindings({
     now: ctx.now(),
@@ -103,16 +118,13 @@ async function checkCatalog(ctx: RunContext, facts: CatalogOutcome): Promise<voi
     snapshotCount: snapshotCount.status === 'fulfilled' ? snapshotCount.value : 0,
     limit: limits.findingsPerCheck,
     schemas: facts.schemas,
-    ...(metadata.status === 'fulfilled' ? { metadata: metadata.value } : {}),
-    ...(consistency.status === 'fulfilled' ? { consistency: consistency.value } : {}),
-    ...(maintenance.status === 'fulfilled' ? { maintenance: maintenance.value } : {}),
-    ...(scheduled.status === 'fulfilled' ? { scheduled: scheduled.value } : {}),
+    ...answered(reads, request.at),
   });
   state.add(result.findings);
   // Checks that could not run: consistency checks without their tables, and the inlined rows when some were unread.
   const unavailable =
     (consistency.status === 'fulfilled' ? consistency.value.unavailable.length : 0) +
-    (maintenance.status === 'fulfilled' && maintenance.value.inlinedFailed ? 1 : 0);
+    (maintenance.status === 'fulfilled' && maintenance.value?.inlinedFailed ? 1 : 0);
   const status: GroupStatus = {
     group: 'catalog',
     state: reads.failures.length > 0 ? 'failed' : 'done',

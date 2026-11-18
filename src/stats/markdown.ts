@@ -1,4 +1,4 @@
-import { capRows, code, inlineCode, markdownTable, reportTitle } from '../markdown';
+import { capRows, code, inlineCode, markdownTable, reportHeadingLine } from '../markdown';
 import { count, formatBytes } from '../shell/model';
 import { FILES_NOTE, growthLabel, growthNotes, growthTime, noGrowthNote } from '../shell/file-growth';
 import {
@@ -59,7 +59,7 @@ export function statisticsMarkdown({ table, connection, statistics: stats }: Sta
   const growth = capRows(stats.growth.toReversed(), GROWTH_ROWS);
   return [
     // Like Schema History and Dependencies: the title names the table, the next line the snapshot and the connection.
-    reportTitle('Statistics of', table),
+    reportHeadingLine('Statistics', connection, table),
     '',
     `Snapshot @${stats.snapshot} of ${inlineCode(connection)}.`,
     '',

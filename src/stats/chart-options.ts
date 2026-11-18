@@ -4,13 +4,13 @@ import { files } from '../shell/model';
 import { binLabel, partitionEntries } from './model';
 import { firstIndex, tip } from '../shell/chart-option';
 import type { ChartOption } from '../shell/chart-option';
-import type { Palette } from '../shell/palette';
+import type { ReportPalette } from '../shell/house-colors';
 
 // Animation is off because the page redraws on every theme change; patterns (`aria.decal`) come from the theme.
 const base = { animation: false, tooltip: { confine: true } };
 
 /** The number of data files per size range; the ranges are halves of the largest file. */
-export function histogramOption(stats: TableStatistics, palette: Palette): ChartOption {
+export function histogramOption(stats: TableStatistics, palette: ReportPalette): ChartOption {
   const bins = stats.sizeHistogram;
   return {
     ...base,
@@ -45,10 +45,10 @@ export function histogramOption(stats: TableStatistics, palette: Palette): Chart
   };
 }
 
-/** Bytes per partition, largest on top; the unnamed partitions are one bar in the line colour. */
+/** Bytes per partition, largest on top; the unnamed partitions are one bar in the muted colour. */
 export function partitionOption(
   partitioning: NonNullable<TableStatistics['partitioning']>,
-  palette: Palette,
+  palette: ReportPalette,
 ): ChartOption {
   const entries = partitionEntries(partitioning);
   return {
@@ -71,7 +71,7 @@ export function partitionOption(
         name: 'Size',
         data: entries.map((entry) => ({
           value: entry.sizeBytes,
-          itemStyle: { color: entry.rest ? palette.lines : palette.series[0] },
+          itemStyle: { color: entry.rest ? palette.muted : palette.series[0] },
         })),
       },
     ],

@@ -70,6 +70,7 @@ const ACTION_FIELDS: Readonly<Record<StorageActionId, Readonly<Record<string, Te
   revealTable: { table: isCount },
   scriptMerge: { table: isCount },
   scriptRewrite: { table: isCount },
+  inspectFiles: { table: isCount },
   scriptCleanup: {},
   scriptExpire: {},
   showProperties: {},

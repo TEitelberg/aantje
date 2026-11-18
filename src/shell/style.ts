@@ -1,11 +1,18 @@
-/** Spacing of every page and its container `.app`, which the page script creates, so no page forgets the gutter. */
+import { HOUSE_CSS } from './house-colors';
+import { PAGED_TABLE_CSS } from './paged-table';
+
+/**
+ * Spacing of every page and its container `.app`, which the page script creates, so no page forgets the gutter; and
+ * the colours of aantje as variables (`HOUSE_CSS`).
+ */
 export const LAYOUT_CSS = `
 :root { --aantje-gutter: 20px; --aantje-section-gap: 16px; --aantje-card-padding: 10px 12px; --aantje-control-gap: 8px; }
+${HOUSE_CSS}
 html, body { height: 100%; margin: 0; padding: 0; }
 body { color: var(--vscode-editor-foreground); background: var(--vscode-editor-background); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); }
 .app { box-sizing: border-box; display: flex; flex-direction: column; min-height: 100%; padding: var(--aantje-gutter); }
 .app > * { min-width: 0; }
-.stale-note { margin: 0 0 var(--aantje-section-gap); padding: 6px 10px; border-left: 4px solid var(--vscode-editorWarning-foreground); background: var(--vscode-editorWidget-background); }
+.stale-note { margin: 0 0 var(--aantje-section-gap); padding: 6px 10px; border-left: 4px solid var(--aantje-warning); background: var(--vscode-editorWidget-background); }
 `;
 
 /**
@@ -13,15 +20,22 @@ body { color: var(--vscode-editor-foreground); background: var(--vscode-editor-b
  * A heading carries its own gap above it. The margin of a heading starting a plain `section` or `div` collapses
  * through the wrapper, keeping the gap to the previous block. A box with a border or padding that starts with a
  * heading sets that heading's margin itself.
+ * The header: the logo of aantje as tall as the title and the subtitle together (their line heights are fixed for
+ * that: 1.4em and 1em at 1.25, 2px between), the actions to the right while they fit, else on a line of their own. On
+ * a dark theme the logo lies on a white tile, so that its navy outline stays visible; the picture is unchanged.
  */
 export const SHELL_CSS = `${LAYOUT_CSS}
-header { margin: 0 0 var(--aantje-section-gap); }
-h1 { margin: 0; font-size: 1.4em; font-weight: 600; }
-.subtitle { margin: 2px 0 var(--aantje-control-gap); color: var(--vscode-descriptionForeground); }
+header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--aantje-control-gap) var(--aantje-section-gap); margin: 0 0 var(--aantje-section-gap); }
+.heading { display: flex; align-items: flex-start; gap: 12px; min-width: 0; }
+.titles { min-width: 0; }
+.aantje-logo { flex: none; display: block; box-sizing: border-box; width: auto; height: calc(3em + 2px); aspect-ratio: 528 / 570; object-fit: contain; }
+body.vscode-dark .aantje-logo, body.vscode-high-contrast .aantje-logo { aspect-ratio: 1; padding: 3px; background: #ffffff; border-radius: 6px; }
+h1 { margin: 0; font-size: 1.4em; line-height: 1.25; font-weight: 600; overflow-wrap: anywhere; }
+.subtitle { margin: 2px 0 0; line-height: 1.25; color: var(--vscode-descriptionForeground); }
 .tabs { display: flex; flex-wrap: wrap; margin: 0 0 var(--aantje-section-gap); border-bottom: 1px solid var(--vscode-panel-border); }
 .tab { padding: 6px 14px; color: var(--vscode-tab-inactiveForeground); background: none; border: 0; border-bottom: 2px solid transparent; font: inherit; cursor: pointer; }
 .tab:hover { color: var(--vscode-tab-activeForeground); }
-.tab[aria-selected="true"] { color: var(--vscode-tab-activeForeground); border-bottom-color: var(--vscode-focusBorder); }
+.tab[aria-selected="true"] { color: var(--vscode-tab-activeForeground); border-bottom-color: var(--aantje-accent); }
 .tab:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
 main { flex: 1; }
 h2 { margin: var(--aantje-section-gap) 0 var(--aantje-control-gap); font-size: 1.1em; font-weight: 600; }
@@ -31,6 +45,8 @@ main > h2:first-child { margin-top: 0; }
 @media (max-width: 760px) { .cards.cards-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .card { padding: var(--aantje-card-padding); background: var(--vscode-editorWidget-background, transparent); border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border)); border-radius: 4px; }
 .card.warning, .card.error { border-left-width: 4px; }
+.card.warning { border-color: var(--aantje-warning); }
+.card.error { border-color: var(--aantje-error); }
 .card-label { color: var(--vscode-descriptionForeground); }
 .card-value { margin: 2px 0; font-size: 1.7em; font-weight: 600; overflow-wrap: anywhere; }
 .card.warning .card-value::after { content: " \\26A0"; font-size: 0.6em; }
@@ -51,7 +67,7 @@ th { color: var(--vscode-descriptionForeground); font-weight: normal; }
 .toolbar input[type="search"] { width: 20em; max-width: 100%; }
 button.action, button.mode, button.pick { margin: 2px 4px 2px 0; padding: 2px 8px; color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); border: 1px solid var(--vscode-contrastBorder, transparent); font: inherit; cursor: pointer; }
 button.action:hover, button.mode:hover, button.pick:hover { background: var(--vscode-button-secondaryHoverBackground); }
-button.mode[aria-pressed="true"], button.pick[aria-pressed="true"] { color: var(--vscode-button-foreground); background: var(--vscode-button-background); }
+button.mode[aria-pressed="true"], button.pick[aria-pressed="true"] { color: var(--aantje-on-selected); background: var(--aantje-selected); }
 button.action:focus-visible, button.mode:focus-visible, button.pick:focus-visible, .filter summary:focus-visible, .finding summary:focus-visible, .keylist button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
 .actions { display: flex; flex-wrap: wrap; align-items: center; }
 .kinds { display: flex; flex-wrap: wrap; gap: 4px 12px; }
@@ -61,16 +77,19 @@ button.action:focus-visible, button.mode:focus-visible, button.pick:focus-visibl
 .keylist button[aria-selected="true"] { color: var(--vscode-list-activeSelectionForeground); background: var(--vscode-list-activeSelectionBackground); }
 .finding { margin: var(--aantje-control-gap) 0; border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border)); border-radius: 4px; }
 .finding.warning, .finding.error { border-left-width: 4px; }
+.finding.warning { border-left-color: var(--aantje-warning); }
+.finding.error { border-left-color: var(--aantje-error); }
 .finding summary { padding: 6px 10px; cursor: pointer; font-weight: 600; }
-.finding.warning summary::before { content: "\\26A0 "; }
-.finding.error summary::before { content: "\\2716 "; }
+.finding.warning summary::before { content: "\\26A0"; margin-right: 0.35em; }
+.finding.error summary::before { content: "\\2716"; margin-right: 0.35em; }
 .finding-body { padding: 0 10px 8px; }
 .finding-body p { margin: 4px 0; }
 body.vscode-high-contrast .card, body.vscode-high-contrast-light .card, body.vscode-high-contrast .finding, body.vscode-high-contrast-light .finding { border-color: var(--vscode-contrastBorder); }
 body.vscode-high-contrast .tabs, body.vscode-high-contrast-light .tabs, body.vscode-high-contrast th, body.vscode-high-contrast-light th, body.vscode-high-contrast td, body.vscode-high-contrast-light td { border-bottom-color: var(--vscode-contrastBorder); }
+${PAGED_TABLE_CSS}
 `;
 
-/** The toolbar and the list of the reports of snapshots by time (Snapshot Report, Activity, Growth). */
+/** The toolbar and the list of the reports of snapshots by time (Snapshot Report, Growth; Activity for its toolbar and tables). */
 export const LIST_CSS = `
 .toolbar select { color: var(--vscode-dropdown-foreground); background: var(--vscode-dropdown-background); border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border)); font: inherit; max-width: 20em; }
 td.who { white-space: normal; max-width: 30em; }
@@ -79,7 +98,7 @@ td.number { text-align: right; }
 .list tr.selected td { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
 `;
 
-/** The pane of the selected snapshot (Snapshot Report, Activity, Growth, Schema History). */
+/** The pane of the selected snapshot (Snapshot Report, Growth, Schema History). */
 export const DETAIL_CSS = `
 .detail { margin-top: var(--aantje-section-gap); }
 .detail:focus { outline: none; }

@@ -1,39 +1,37 @@
-import { capRows, code, markdownTable, reportTitle } from '../markdown';
+import { capRows, code, markdownTable, reportHeadingLine } from '../markdown';
+import { DARK_ROLES } from '../shell/house-colors';
 import { scopeSchema } from '../shell/scope';
 import { markdownText } from '../markdown';
 import {
-  BROKEN_KIND,
   DIRECTIONS,
   DIRECTION_LABEL,
   DEPENDENCIES_KIND_LABEL,
   MAX_DEPTH,
-  REASON_TEXT,
-  brokenName,
-  edgeVerb,
   issuesOf,
   lakeRows,
   limitNote,
   nameAt,
   traverse,
 } from './model';
-import type { DependenciesData, Direction } from './model';
-import { connectedObjects, picture } from './picture';
+import type { DependenciesData } from './model';
+import { lineageMarkdown } from './lineage-markdown';
+import { lineageName } from './lineage-view';
+import { picture } from './picture';
 import type { GraphReach, Picture, PictureItem } from './picture';
 
 /** The choices on the page that the document repeats; the extension fits them to the data. */
 export interface DependenciesMarkdownView {
-  readonly direction: Direction;
+  /** How many levels the tables of an object follow. */
   readonly depth: number;
-  /** The filter of the lake list. */
+  /** The filter box of the table of the lake or a schema. */
   readonly text: string;
-  /** What the graph of an object holds besides what it uses and what uses it; nothing more without it. */
+  /** What the graph of an object holds besides the objects connected to it; nothing more without it. */
   readonly reach?: GraphReach | undefined;
 }
 
 // The page shows more rows; a smaller depth or a filter reaches the others.
 const MARKDOWN_ROWS = 200;
 const MARKDOWN_OBJECTS = 100;
-const MARKDOWN_ISSUES = 100;
 // Larger graphs are unreadable as a diagram, and Mermaid refuses more than 500 edges.
 const MARKDOWN_GRAPH_ITEMS = 150;
 const MARKDOWN_GRAPH_EDGES = 400;
@@ -70,7 +68,8 @@ export function mermaidGraph(shown: Picture): string[] {
       return `  n${index}${open}"${mermaidText(item.name)}"${close}`;
     }),
     ...shown.edges.map(({ from, to, kind }) => `  n${from} ${kind === 'reads' ? '-->' : '-.->'} n${to}`),
-    '  classDef missing stroke:#f14c4c,stroke-dasharray:4',
+    // The error colour of aantje that keeps 3:1 on a light and on a dark Markdown preview.
+    `  classDef missing stroke:${DARK_ROLES.error},stroke-dasharray:4`,
     '  classDef faint opacity:0.4',
     ...classes('missing', ({ kind }) => kind === 'missing'),
     ...classes('faint', ({ faint }) => faint),
@@ -89,42 +88,12 @@ function graphSection(shown: Picture): string[] {
   ];
 }
 
-function issueTables(data: DependenciesData, nodes?: ReadonlySet<number>): string[] {
-  const { broken, unresolved } = issuesOf(data, nodes);
-  const brokenRows = capRows(broken, MARKDOWN_ISSUES);
-  const unresolvedRows = capRows(unresolved, MARKDOWN_ISSUES);
+// The key figures of the problems, as the page counts them.
+function problemRows(data: DependenciesData): string[][] {
+  const { broken, unresolved } = issuesOf(data);
   return [
-    '## Broken references',
-    '',
-    ...(broken.length === 0
-      ? ['No object names something that the lake does not have.']
-      : [
-          ...markdownTable(
-            ['Object', 'Names', 'As'],
-            brokenRows.shown.map((item) => [
-              code(nameAt(data, item.from)),
-              code(brokenName(item)),
-              BROKEN_KIND[item.kind],
-            ]),
-          ),
-          ...brokenRows.omitted,
-        ]),
-    '',
-    '## Not followed',
-    '',
-    ...(unresolved.length === 0
-      ? ['Every text was read.']
-      : [
-          ...markdownTable(
-            ['Object', 'Why', 'Detail'],
-            unresolvedRows.shown.map((item) => [
-              code(nameAt(data, item.node)),
-              REASON_TEXT[item.reason],
-              code(item.detail),
-            ]),
-          ),
-          ...unresolvedRows.omitted,
-        ]),
+    ['Broken references', String(broken.length)],
+    ['Not followed', String(unresolved.length)],
   ];
 }
 
@@ -133,7 +102,7 @@ function lakeMarkdown(data: DependenciesData, text: string): string {
   const { rows, omitted } = lakeRows(data, text, MARKDOWN_OBJECTS);
   const note = limitNote(data);
   return [
-    reportTitle('Dependencies in', data.connection, scopeSchema(data.scope)),
+    reportHeadingLine('Dependencies', data.connection, scopeSchema(data.scope)),
     '',
     `Read at snapshot @${data.snapshot}.`,
     '',
@@ -151,6 +120,7 @@ function lakeMarkdown(data: DependenciesData, text: string): string {
           : []),
         ['Objects with dependencies', String(data.nodes.length)],
         ['Dependencies', String(data.edges.length)],
+        ...problemRows(data),
         ['Objects without any', String(data.isolated)],
         ['Filter', text === '' ? 'none' : code(text)],
       ],
@@ -162,7 +132,7 @@ function lakeMarkdown(data: DependenciesData, text: string): string {
       ? ['No object matches the filter.']
       : [
           ...markdownTable(
-            ['Object', 'Kind', 'Used by', 'Depends on'],
+            ['Name', 'Type', 'Used by', 'Depends on'],
             rows.map(({ node, usedBy, dependsOn }) => [
               code(nameAt(data, node)),
               DEPENDENCIES_KIND_LABEL[data.nodes[node]?.kind ?? 'table'],
@@ -173,40 +143,27 @@ function lakeMarkdown(data: DependenciesData, text: string): string {
           ...(omitted > 0 ? ['', `… ${omitted} more omitted (limit: ${MARKDOWN_OBJECTS}).`] : []),
         ]),
     '',
-    ...(data.nodes.length > 0 ? graphSection(picture(data, { depth: MAX_DEPTH, reach: 'all' })) : []),
-    ...issueTables(data),
-    '',
+    ...(data.nodes.length > 0 ? graphSection(picture(data, { reach: 'all' })) : []),
   ].join('\n');
 }
 
-/** The Dependencies report as Markdown, for one object or for the lake. Catalog text is code. */
-export function dependenciesMarkdown(data: DependenciesData, view?: DependenciesMarkdownView): string {
-  const start = data.target;
-  const target = start === null ? undefined : data.nodes[start];
-  if (start === null || !target) {
-    return lakeMarkdown(data, view?.text.trim() ?? '');
-  }
-  const depth = Math.min(Math.max(Math.trunc(view?.depth ?? MAX_DEPTH), 1), MAX_DEPTH);
-  const lists = (view ? [view.direction] : DIRECTIONS).flatMap((direction) => {
+// The tables of an object as on the page: what it depends on, then what uses it, to the depth.
+function objectTables(data: DependenciesData, start: number, depth: number): string[] {
+  return DIRECTIONS.flatMap((direction) => {
     const { rows, cycle } = traverse(data, start, direction, depth);
     const listed = capRows(rows, MARKDOWN_ROWS);
     return [
       `## ${DIRECTION_LABEL[direction]}`,
       '',
       ...(rows.length === 0
-        ? [
-            direction === 'usedBy'
-              ? 'No view or macro uses this object.'
-              : 'This object uses no table, view or macro.',
-          ]
+        ? ['None.']
         : [
             ...markdownTable(
-              ['Depth', 'Object', 'Kind', 'Edge'],
+              ['Name', 'Type', 'Level'],
               listed.shown.map((row) => [
-                String(row.depth),
                 code(nameAt(data, row.node)),
                 DEPENDENCIES_KIND_LABEL[data.nodes[row.node]?.kind ?? 'table'],
-                `${edgeVerb(row.via, direction)} ${code(nameAt(data, row.parent))}`,
+                String(row.depth),
               ]),
             ),
             ...listed.omitted,
@@ -215,9 +172,22 @@ export function dependenciesMarkdown(data: DependenciesData, view?: Dependencies
       '',
     ];
   });
+}
+
+/** The Dependencies report as Markdown, for one object or for the lake or a schema. Catalog text is code. */
+export function dependenciesMarkdown(data: DependenciesData, view?: DependenciesMarkdownView): string {
+  const start = data.target;
+  const target = start === null ? undefined : data.nodes[start];
+  if (start === null || !target) {
+    return lakeMarkdown(data, view?.text.trim() ?? '');
+  }
+  const depth = Math.min(Math.max(Math.trunc(view?.depth ?? MAX_DEPTH), 1), MAX_DEPTH);
+  const focus = data.lineage?.focus;
   const note = limitNote(data);
   return [
-    reportTitle('Dependencies of', nameAt(data, start)),
+    focus === undefined
+      ? reportHeadingLine('Dependencies', data.connection, nameAt(data, start))
+      : reportHeadingLine('Column Lineage', data.connection, lineageName(data, focus)),
     '',
     `Read from ${markdownText(data.connection.replace(/\s+/g, ' ').trim())} at snapshot @${data.snapshot}.`,
     '',
@@ -227,15 +197,13 @@ export function dependenciesMarkdown(data: DependenciesData, view?: Dependencies
       [
         ['Object', code(nameAt(data, start))],
         ['Kind', DEPENDENCIES_KIND_LABEL[target.kind]],
-        ['Direction', view ? DIRECTION_LABEL[view.direction] : 'both'],
         ['Depth', String(depth)],
+        ...problemRows(data),
       ],
     ),
     '',
-    ...lists,
-    ...graphSection(picture(data, { depth, reach: view?.reach ?? 'connected' })),
-    // The problems of what the graph connects, whatever direction the lists have; not of the faint objects.
-    ...issueTables(data, connectedObjects(data, depth)),
-    '',
+    ...objectTables(data, start, depth),
+    ...lineageMarkdown(data),
+    ...graphSection(picture(data, { reach: view?.reach ?? 'connected' })),
   ].join('\n');
 }

@@ -11,8 +11,8 @@ th[aria-sort="ascending"] button.sort::after { content: " \\25B2"; font-size: 0.
 th[aria-sort="descending"] button.sort::after { content: " \\25BC"; font-size: 0.7em; }
 td.name button.pick { font-family: var(--vscode-editor-font-family); font-weight: 600; }
 tr.selected td { background: var(--vscode-list-activeSelectionBackground); color: var(--vscode-list-activeSelectionForeground); }
-.selection { margin: var(--aantje-control-gap) 0; padding: var(--aantje-card-padding); border: 1px solid var(--vscode-focusBorder); border-radius: 4px; }
+.selection { margin: var(--aantje-control-gap) 0; padding: var(--aantje-card-padding); border: 1px solid var(--aantje-accent); border-radius: 4px; }
 .selection h3 { margin: 0 0 4px; font-size: 1em; }
 .selection p { margin: 2px 0 6px; color: var(--vscode-descriptionForeground); }
-.scheduled.warning { padding-left: 8px; border-left: 4px solid var(--vscode-editorWarning-foreground); }
+.scheduled.warning { padding-left: 8px; border-left: 4px solid var(--aantje-warning); }
 `;

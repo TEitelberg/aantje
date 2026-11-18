@@ -44,7 +44,10 @@ export function growthNotes(stats: Pick<TableStatistics, 'growthMerged'>): strin
 export const noGrowthNote = (snapshot: number): string =>
   `No data file was added or removed up to snapshot ${snapshot}.`;
 
-/** Size and number of files after each snapshot that changed them; a compaction is a diamond on the size line. */
+/**
+ * Size and number of files after each snapshot that changed them, in the first two colours of aantje (navy and
+ * orange, the two that differ most); a compaction is a diamond on the size line.
+ */
 export function fileGrowthOption(stats: Pick<TableStatistics, 'growth'>, palette: Palette): ChartOption {
   const points = stats.growth;
   const line = (color: string) => ({
@@ -87,7 +90,7 @@ export function fileGrowthOption(stats: Pick<TableStatistics, 'growth'>, palette
         ),
       },
       {
-        ...line(palette.series[2]),
+        ...line(palette.series[1]),
         type: 'line',
         name: 'Files',
         yAxisIndex: 1,

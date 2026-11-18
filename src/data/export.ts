@@ -1,6 +1,6 @@
 import { scrubbed } from '../duckdb/messages';
 import { AantjeError } from '../errors';
-import { copyStatement, fileWriteFailure, needsColumns } from '../export/copy';
+import { copyStatement, countQuery, fileWriteFailure, needsColumns } from '../export/copy';
 import type { ExportTarget } from '../export/copy';
 import { withWholeRelation } from './engine';
 import { secretsOf } from './errors';
@@ -10,7 +10,8 @@ import type { DataAccess, TableRef } from './types';
 /**
  * Export: writes all rows of a table or view at the snapshot of `access` to the file of the target, in the read-only
  * engine of the data preview with its checks; the rows written. The file is written by the engine; the lake stays as it
- * was. CSV for Excel binds the relation first (`LIMIT 0`) to find its text columns.
+ * was. A CSV file holds every value as DuckDB writes it. Markdown binds the relation first (`LIMIT 0`) to find its
+ * columns.
  */
 export function exportRelation(
   access: DataAccess,
@@ -32,5 +33,13 @@ export function exportRelation(
       const failure = fileWriteFailure(line, target.path);
       throw failure ? new AantjeError('QUERY_FAILED', failure, { cause: new Error(line) }) : cause;
     }
+  });
+}
+
+/** The rows of a table or view at the snapshot of `access`, counted before a Markdown file is written. */
+export function countRelation(access: DataAccess, table: TableRef, signal?: AbortSignal): Promise<number> {
+  return withWholeRelation(access, table, signal, async (connection, relation) => {
+    const counted = await connection.runAndReadAll(countQuery(`SELECT * FROM ${relation}`));
+    return Number(counted.getRowsJson()[0]?.[0] ?? 0);
   });
 }

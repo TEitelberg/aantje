@@ -1,8 +1,11 @@
-import type { Palette } from '../shell/palette';
+import type { ReportPalette } from '../shell/house-colors';
 import type { PointKind } from './model';
 
-/** The colour of a kind of change in the charts; a chart that marks the kinds by shape too says so with them. */
-export function colorOf(kind: PointKind, palette: Palette): string {
+/**
+ * The colour of a kind of change in the charts: the first four colours of aantje, maintenance in the muted colour. A
+ * chart that marks the kinds by shape too says so with them.
+ */
+export function colorOf(kind: PointKind, palette: ReportPalette): string {
   switch (kind) {
     case 'insert':
       return palette.series[0];
@@ -13,6 +16,6 @@ export function colorOf(kind: PointKind, palette: Palette): string {
     case 'ddl':
       return palette.series[3];
     case 'maintenance':
-      return palette.foreground;
+      return palette.muted;
   }
 }

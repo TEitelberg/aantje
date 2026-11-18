@@ -1,5 +1,5 @@
 import type { CatalogProperties } from '../catalog/model';
-import { capRows, code, markdownTable, reportTitle } from '../markdown';
+import { capRows, code, markdownTable, reportHeadingLine } from '../markdown';
 import { METADATA_ROWS, matchingMetadata, propertiesSummary, scopeText } from './model';
 
 /** The Markdown of a connection's Properties document: catalog summary and `ducklake_metadata` rows; all values are escaped. */
@@ -20,7 +20,7 @@ export function propertiesMarkdown(
     entry.scope === null ? 'global' : code(scopeText(entry)),
   ]);
   return [
-    reportTitle('Properties of', connectionName),
+    reportHeadingLine('Properties', connectionName),
     '',
     ...markdownTable(['Property', 'Value'], summary),
     '',

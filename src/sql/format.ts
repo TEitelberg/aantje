@@ -1,5 +1,6 @@
 import { format } from 'sql-formatter';
 import { messageOf } from '../errors';
+import { findPlaceholders, withoutDefault } from './parameters';
 import type { SqlToken } from './tokens';
 
 export type KeywordCase = 'upper' | 'lower' | 'preserve';
@@ -16,6 +17,15 @@ export function keywordCaseOf(value: unknown): KeywordCase {
   return value === 'lower' || value === 'preserve' ? value : 'upper';
 }
 
+// The placeholders of the parameters (`parameters.ts`) as parameters of sql-formatter, which keeps each as written:
+// `$name{default}` (a quoted text in it may hold a brace), `$name` (not the `$tag$` of a dollar-quoted string) and
+// `{{name}}`. Its DuckDB dialect knows no `$name` at all.
+const PLACEHOLDERS = [
+  String.raw`\$[A-Za-z_]\w*\{(?:'(?:[^'\r\n]|'')*'|"(?:[^"\r\n]|"")*"|[^{}'"\r\n;]|\{[^{}\r\n;]*\})*\}`,
+  String.raw`\$[A-Za-z_]\w*(?![\p{L}\p{N}_$])`,
+  String.raw`\{\{\s*[A-Za-z_]\w*\s*\}\}`,
+].map((regex) => ({ regex }));
+
 /** The SQL formatted with sql-formatter's DuckDB dialect, or the reason it could not be formatted. */
 export function formatSql(
   text: string,
@@ -29,6 +39,7 @@ export function formatSql(
         useTabs: options.useTabs,
         keywordCase: options.keywordCase,
         linesBetweenQueries: 1,
+        paramTypes: { custom: PLACEHOLDERS },
       }),
     };
   } catch (error) {
@@ -54,4 +65,24 @@ export function sameTokens(before: readonly SqlToken[], after: readonly SqlToken
       (UNQUOTED.test(token.word) && other.word.toUpperCase() === token.word.toUpperCase())
     );
   });
+}
+
+/** A text with DuckDB's tokens. */
+interface Tokenized {
+  readonly text: string;
+  readonly tokens: readonly SqlToken[];
+}
+
+/**
+ * Whether the formatted SQL keeps the placeholders of the parameters: the same in the same order, none split or joined
+ * (`$a {1}` is no inline default, `{ {b} }` no `{{b}}`), which the tokens alone cannot tell.
+ */
+export function samePlaceholders(before: Tokenized, after: Tokenized): boolean {
+  const shape = ({ text, tokens }: Tokenized): string[] =>
+    findPlaceholders(text, tokens).map(
+      (placeholder) =>
+        `${placeholder.kind}:${placeholder.name}:${withoutDefault(placeholder) !== undefined}:${placeholder.inlineDefault?.value ?? ''}`,
+    );
+  const [was, is] = [shape(before), shape(after)];
+  return was.length === is.length && was.every((placeholder, index) => placeholder === is[index]);
 }

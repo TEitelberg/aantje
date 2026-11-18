@@ -19,6 +19,8 @@ export interface Statement {
   readonly summary: string;
   readonly elapsedMs: number | undefined;
   readonly error: { readonly message: string; readonly position?: ResultsRange } | undefined;
+  /** A query in which nothing writes: the summary of its columns and Aggregate in DuckDB may run it again. */
+  readonly readsOnly?: boolean;
 }
 
 export interface ResultsRange {
@@ -91,10 +93,23 @@ export interface ResultsRunState {
   readonly built?: boolean;
 }
 
-export type TabId = 'messages' | number;
+/** The tab of the chart of a result set, right after the tab of its rows. */
+export type ChartTabId = `chart-${number}`;
+
+/** Messages, a result set by its place, or the chart of a result set. */
+export type TabId = 'messages' | number | ChartTabId;
+
+export const chartTab = (set: number): ChartTabId => `chart-${set}`;
+
+/** The result set whose chart a tab shows; undefined for any other tab. */
+export function chartSetOf(id: TabId | undefined): number | undefined {
+  if (typeof id !== 'string' || !id.startsWith('chart-')) return undefined;
+  const set = Number(id.slice('chart-'.length));
+  return Number.isInteger(set) && set >= 0 ? set : undefined;
+}
 
 const MESSAGE_CHARS = 80;
-/** The text above a result grid: the whole statement on one line. */
+/** The script on one line, the text of a statement that never started. */
 export const HEADER_CHARS = 200;
 /** The tooltip of the statement text. */
 export const TITLE_CHARS = 1000;
@@ -162,6 +177,7 @@ export function applyEvent(run: ResultsRunState, event: SqlEvent): ResultsRunSta
         summary: '',
         elapsedMs: undefined,
         error: undefined,
+        ...(event.readsOnly ? { readsOnly: true } : {}),
       });
     case 'resultSet':
       return {
@@ -289,41 +305,65 @@ interface Tab {
   readonly label: string;
 }
 
-/** `Result 1 (1,234 rows)`, `Result 1 (10,000 of more rows)`, `Execution Plan`, or the label of a text or profile view. Never the statement text. */
-function tabLabel(set: ResultSet, number: number): string {
-  if (set.view !== undefined) return set.label ?? `Result ${number}`;
+/** A result set of rows: no plan, no profile, no tips. */
+const isRows = (set: ResultSet): boolean => set.view === undefined && !isPlan(set);
+
+/** `Result`, or `Result 2` when the run has several result sets of rows; `Execution Plan`, or the label of a view. */
+function tabLabel(set: ResultSet, number: number | undefined): string {
+  if (set.view !== undefined) return set.label ?? 'Result';
   if (isPlan(set)) return 'Execution Plan';
-  const rows = set.truncated
-    ? `${count(set.rows.length)} of more rows`
-    : groupedPlural(set.rows.length, 'row');
-  return `Result ${number} (${rows})`;
+  return number === undefined ? 'Result' : `Result ${number}`;
 }
 
-/** The Messages tab first, so that it keeps its place while result sets arrive. */
+/** Rows that are no plan: they have a chart, in a tab of its own right after theirs. A profile, the tips, none. */
+export function hasChart(set: ResultSet | undefined): boolean {
+  return set !== undefined && isRows(set) && set.rows.length > 0;
+}
+
+/**
+ * The Messages tab first, so that it keeps its place while result sets arrive; each result set of rows is followed by
+ * the tab of its chart: `Result` and `Chart`, numbered (`Result 2`, `Chart 2`) only when the run has several result
+ * sets of rows. The row count is in the status line of the grid, not in the tab.
+ */
 export function tabsOf(run: ResultsRunState): readonly Tab[] {
+  const numbered = run.resultSets.filter(isRows).length > 1;
+  let position = 0;
   return [
     { id: 'messages', label: 'Messages' },
-    ...run.resultSets.map((set, index): Tab => ({ id: index, label: tabLabel(set, index + 1) })),
+    ...run.resultSets.flatMap((set, index): Tab[] => {
+      const number = numbered && isRows(set) ? ++position : undefined;
+      const suffix = number === undefined ? '' : ` ${number}`;
+      return [
+        { id: index, label: tabLabel(set, number) },
+        ...(hasChart(set) ? [{ id: chartTab(index), label: `Chart${suffix}` }] : []),
+      ];
+    }),
   ];
+}
+
+/** Whether the tab exists in the run. */
+function exists(run: ResultsRunState, id: TabId): boolean {
+  if (id === 'messages') return true;
+  if (typeof id === 'number') return run.resultSets[id] !== undefined;
+  const set = chartSetOf(id);
+  return set !== undefined && hasChart(run.resultSets[set]);
 }
 
 /**
  * Messages while the run goes on or has no result set; else, unless the user chose a tab, what the run was for: the
- * text that aantje added (the profile of Statistics) before the rows of its statement, otherwise the first result set.
+ * text that aantje added (the profile of Statistics) before the rows of its statement, otherwise the first result set,
+ * or its chart when `chart` (the chart was the tab chosen last).
  */
-export function selectedTab(run: ResultsRunState, chosen: TabId | undefined): TabId {
-  if (chosen === 'messages' || (chosen !== undefined && run.resultSets[chosen])) {
+export function selectedTab(run: ResultsRunState, chosen: TabId | undefined, chart = false): TabId {
+  if (chosen !== undefined && exists(run, chosen)) {
     return chosen;
   }
   if (!run.end || run.resultSets.length === 0) {
     return 'messages';
   }
   const table = run.resultSets.findIndex((set) => set.view === 'table');
-  return table >= 0 ? table : 0;
-}
-
-export function truncatedBanner(set: ResultSet): string {
-  return `Only the first ${count(set.rows.length)} rows were read; sorting and filtering apply to these rows only; Export CSV exports these rows`;
+  const first = table >= 0 ? table : 0;
+  return chart && hasChart(run.resultSets[first]) ? chartTab(first) : first;
 }
 
 /** Where "Go to statement" leads: the position of the error, else the statement. Undefined for a statement that is not known. */

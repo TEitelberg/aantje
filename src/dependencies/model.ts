@@ -2,6 +2,7 @@ import { groupBy } from '../order';
 import { count } from '../shell/model';
 import type { Card } from '../shell/model';
 import type { ReportScope } from '../shell/scope';
+import type { ReportLineage } from './columns';
 import type {
   BrokenReference,
   DependencyEdge,
@@ -9,11 +10,12 @@ import type {
   DependencyNode,
   NodeKind,
   Unresolved,
-  UnresolvedReason,
 } from './graph';
 
 /** The graph of the objects that matter for the report, and what it is about. */
-export interface DependenciesData extends DependencyGraph {
+export interface DependenciesData extends Omit<DependencyGraph, 'lineage'> {
+  /** The column lineage around the object of the report; none for the lake or a schema. */
+  readonly lineage?: ReportLineage | undefined;
   readonly connection: string;
   /** The lake, or one schema: the report then lists its objects and their direct neighbours in other schemas. */
   readonly scope: ReportScope;
@@ -24,10 +26,11 @@ export interface DependenciesData extends DependencyGraph {
   readonly isolated: number;
 }
 
-/** Whose dependencies a list shows: the objects that use this one, or the objects that this one uses. */
+/** Whose dependencies a table shows: the objects that this one uses, or the objects that use this one. */
 export type Direction = 'usedBy' | 'dependsOn';
 
-export const DIRECTIONS: readonly Direction[] = ['usedBy', 'dependsOn'];
+/** In the order of the tables of an object: what it depends on, then what uses it. */
+export const DIRECTIONS: readonly Direction[] = ['dependsOn', 'usedBy'];
 export const DIRECTION_LABEL: Readonly<Record<Direction, string>> = {
   usedBy: 'Used by',
   dependsOn: 'Depends on',
@@ -36,10 +39,8 @@ export const DIRECTION_LABEL: Readonly<Record<Direction, string>> = {
 export const MAX_DEPTH = 5;
 export const DEPTHS: readonly number[] = [1, 2, 3, 4, 5];
 
-// Rows of a list shown at most; a filter or a smaller depth reaches the others.
+// Rows of a table of an object shown at most; a smaller depth reaches the others.
 const MAX_ROWS = 500;
-export const MAX_LAKE_ROWS = 200;
-export const MAX_ISSUES = 100;
 
 export const DEPENDENCIES_KIND_LABEL: Readonly<Record<NodeKind, string>> = {
   table: 'table',
@@ -166,25 +167,6 @@ export function brokenName(broken: BrokenReference): string {
     : `${broken.schema === '' ? '' : `${broken.schema}.`}${broken.name}()`;
 }
 
-export const BROKEN_KIND: Readonly<Record<BrokenReference['kind'], string>> = {
-  relation: 'table or view',
-  scalarMacro: 'macro or unknown function',
-  tableMacro: 'table macro or unknown function',
-};
-
-/** Why an object could not be followed; the detail after it is catalog text. */
-export const REASON_TEXT: Readonly<Record<UnresolvedReason, string>> = {
-  dialect: 'Stored in another SQL dialect, which is not read:',
-  tooLong: 'Too long to read:',
-  syntax: 'DuckDB cannot parse the text:',
-  unsupported: 'DuckDB cannot read the text as a SELECT:',
-  callerSchema:
-    'Names an object that only the schema of this macro has; a macro finds names in the schema of its caller:',
-  catalog: 'Reads another catalog than the lake:',
-  file: 'Reads a file or a URL:',
-  dynamic: 'Looks up a table at run time with',
-};
-
 export function cards(data: DependenciesData): Card[] {
   const issues = issuesOf(data);
   const problems: Card[] = [
@@ -243,19 +225,27 @@ interface LakeRow {
   readonly dependsOn: number;
 }
 
-/** Whether the name or the kind of an object contains the filter `text`, ignoring case; an empty text keeps all. */
-export function matchesFilter(node: DependencyNode, text: string): boolean {
+/**
+ * Whether the name or the kind of an object contains the filter `text`, ignoring case; an empty text keeps all. The
+ * filter box of the table of the page finds the same rows: it looks in the name and in the kind.
+ */
+function matchesFilter(node: DependencyNode, text: string): boolean {
   const needle = text.trim().toLowerCase();
   return (
-    needle === '' || `${nodeName(node)} ${DEPENDENCIES_KIND_LABEL[node.kind]}`.toLowerCase().includes(needle)
+    needle === '' ||
+    nodeName(node).toLowerCase().includes(needle) ||
+    DEPENDENCIES_KIND_LABEL[node.kind].toLowerCase().includes(needle)
   );
 }
 
-/** The lake's objects that match the filter `text`, most used first. */
+/**
+ * The objects of the lake or schema that match the filter `text`, with the number of direct users and of direct
+ * dependencies: most used first, then in node order (by schema and name). At most `limit` when one is given.
+ */
 export function lakeRows(
   data: DependenciesData,
   text: string,
-  limit = MAX_LAKE_ROWS,
+  limit?: number,
 ): { readonly rows: LakeRow[]; readonly omitted: number } {
   const used = new Map<number, number>();
   const uses = new Map<number, number>();
@@ -268,8 +258,7 @@ export function lakeRows(
     .filter(({ node }) => matchesFilter(node, text))
     .map(({ index }) => ({ node: index, usedBy: used.get(index) ?? 0, dependsOn: uses.get(index) ?? 0 }))
     .sort((a, b) => b.usedBy - a.usedBy || a.node - b.node);
-  return { rows: all.slice(0, limit), omitted: Math.max(all.length - limit, 0) };
+  return limit === undefined
+    ? { rows: all, omitted: 0 }
+    : { rows: all.slice(0, limit), omitted: Math.max(all.length - limit, 0) };
 }
-
-export const edgeVerb = (via: DependencyEdge['kind'], direction: Direction): string =>
-  direction === 'usedBy' ? (via === 'reads' ? 'reads' : 'calls') : via === 'reads' ? 'read by' : 'called by';

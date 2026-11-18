@@ -1,7 +1,7 @@
 import { firstIndex, tip } from '../shell/chart-option';
 import type { ChartOption } from '../shell/chart-option';
 import { formatUtc, plural, whoText } from '../shell/model';
-import type { Palette } from '../shell/palette';
+import type { ReportPalette } from '../shell/house-colors';
 import { METRIC_LABEL, formatDelta, formatMetric, formatStep } from './model';
 import type { Metric, Step, GrowthXAxis } from './model';
 
@@ -31,8 +31,11 @@ function tooltipOf(metric: Metric, step: Step | undefined, before: Step | undefi
   ]);
 }
 
-/** One line with a mark per snapshot that changed the selection; the tooltip reads the step by point index. */
-export function growthOption(chart: GrowthChart, palette: Palette): ChartOption {
+/**
+ * One line with a mark per snapshot that changed the selection, the selected snapshot larger and in the accent of
+ * aantje; the tooltip reads the step by point index.
+ */
+export function growthOption(chart: GrowthChart, palette: ReportPalette): ChartOption {
   const { steps, metric, axis, contrast } = chart;
   const times = steps.map((step) => Date.parse(step.time));
   const size = contrast ? 11 : 8;
@@ -44,6 +47,7 @@ export function growthOption(chart: GrowthChart, palette: Palette): ChartOption 
       value: point,
       symbol: step.changed || picked ? (step.approximate ? 'emptyCircle' : 'circle') : 'none',
       symbolSize: picked ? size + 6 : size,
+      ...(picked ? { itemStyle: { color: palette.accent } } : {}),
     };
   });
   return {

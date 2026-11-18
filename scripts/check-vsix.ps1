@@ -34,7 +34,7 @@ function Assert-VsixContents([string] $Vsix, [string] $Platform) {
         'extension/LICENSE.txt', 'extension/THIRD-PARTY-NOTICES.md'
         'extension/dist/extension.js', 'extension/dist/sql-wasm.wasm', 'extension/dist/grid-client.js'
         'extension/dist/report-client.js', 'extension/dist/plan-client.js', 'extension/dist/mcp-bridge.js'
-        'extension/dist/aws-sdk.js', 'extension/dist/rds-ca-bundle.pem'
+        'extension/dist/aws-sdk.js', 'extension/dist/rds-ca-bundle.pem', 'extension/media/logo.png'
         'extension/node_modules/@duckdb/node-bindings/duckdb.js'
         "extension/node_modules/$binding/duckdb.node"
     )

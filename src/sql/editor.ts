@@ -1,12 +1,28 @@
 import { openingSignature } from '../connections/profile';
 import type { ConnectionProfile } from '../connections/profile';
 import { AantjeError, userMessageOf } from '../errors';
-import type { GridValue } from '../data/types';
+import type { GridColumn, GridValue } from '../data/types';
+import { queryCancelled } from '../catalog/drivers/limits';
 import { RunRecord } from './history';
 import type { QueryHistory } from './history';
+import {
+  defaultsOf,
+  findPlaceholders,
+  initialValues,
+  ParameterMemory,
+  parseParameterHeader,
+  runParameters,
+  scriptParameters,
+  usageProblem,
+} from './parameters';
+import type { RunParameters, ScriptParameter } from './parameters';
 import { MAX_RESULT_CELLS } from './results';
-import type { ResultsTarget, ResultsView, RunSummary } from './results';
+import type { ResultsView, RunSummary } from './results';
+import { DEFAULT_RUN_SETTINGS, runGuards } from './run-guards';
+import type { CommitMessageStore, GuardUi, RunSettings } from './run-guards';
 import type { SessionMode, SqlEvent, SqlSession, TransactionState } from './session';
+import type { SqlToken } from './tokens';
+import { RunTracker } from './run-tracker';
 
 /** A script for a run: its text, where it starts in the document, and whether aantje built it (a CTE on its own). */
 export interface RunScript {
@@ -16,10 +32,23 @@ export interface RunScript {
   readonly built?: boolean;
   /** Its statements go into the Query History: Run Query, Run Statement and Execute; not Explain, Analysis, Statistics. */
   readonly record?: boolean;
+  /** The `COPY` of Run to File: it writes a local file and changes no lake, so the run asks for no commit message. */
+  readonly toFile?: boolean;
 }
 
 /** Runs SQL on the session without showing it; the rows of the last result set, or throws. */
 export type QuietRun = (sql: string) => Promise<readonly (readonly GridValue[])[]>;
+
+/** One result set of a statement that `QueryEditors.quiet` ran. */
+export interface QuietResult {
+  readonly columns: readonly GridColumn[];
+  readonly rows: readonly (readonly GridValue[])[];
+  /** More rows than `QUIET_MAX_ROWS` came back; the rest was not read. */
+  readonly truncated: boolean;
+}
+
+/** Most rows that a statement of `QueryEditors.quiet` returns: its statements aggregate. */
+export const QUIET_MAX_ROWS = 10_000;
 
 /**
  * Statements around a script on the same session, hidden from the results; Statistics uses it for the profiler, Run to
@@ -44,6 +73,8 @@ export interface RunAround {
 export interface EditorRef {
   readonly key: string;
   readonly name: string;
+  /** The whole text of the document, whose header declares the parameters; without it the script's own header counts. */
+  text?(): string;
 }
 
 /** The explorer, as far as the editor needs it. */
@@ -56,12 +87,20 @@ export interface ExplorerPort {
   refresh(connectionId: string): void;
 }
 
-export interface QueryUi {
+export interface QueryUi extends GuardUi {
   info(message: string): void;
   /** The id of the chosen connection, or undefined when the user cancels. */
   pickConnection(profiles: readonly ConnectionProfile[]): Promise<string | undefined>;
   /** Shows progress with a Cancel button that aborts the task's signal. */
   withProgress<T>(title: string, task: (cancel: AbortSignal) => Promise<T>): Promise<T>;
+  /**
+   * The dialog of the parameters (`parameters.vscode.ts`): the values by name, or undefined when cancelled. Without it a
+   * run asks for none, and DuckDB reports a placeholder that has no value.
+   */
+  askParameters?(
+    parameters: readonly ScriptParameter[],
+    initial: Readonly<Record<string, string>>,
+  ): Promise<Record<string, string> | undefined>;
 }
 
 /**
@@ -91,9 +130,21 @@ interface QueryEditorDeps {
   /** Read at every run, so a setting change applies to the next run. */
   maxRows(): number;
   now?(): number;
-  /** Where the statements of a run with `record` go. */
-  readonly history?: Pick<QueryHistory, 'record'>;
+  /** Where the statements of a run with `record` go; it keeps the last commit messages of a connection too. */
+  readonly history?: Pick<QueryHistory, 'record'> & CommitMessageStore;
+  /** DuckDB's tokens of a text (the language service), for the placeholders of a run; without it a run asks for none. */
+  readonly tokenize?: (text: string) => Promise<readonly SqlToken[]>;
+  /** The settings of the questions before a change (`run-guards.ts`), read at every run; all on without it. */
+  readonly runSettings?: () => RunSettings;
 }
+
+/** The values a run got from the dialog: those of the session, and the answers by name for the Query History. */
+interface Asked {
+  readonly parameters?: RunParameters;
+  readonly answers?: Readonly<Record<string, string>>;
+}
+
+const NO_PARAMETERS: Asked = {};
 
 interface QueryEditorState {
   readonly connectionId: string;
@@ -121,6 +172,8 @@ interface Entry {
   override?: SessionMode;
   session?: SqlSession;
   run?: AbortController;
+  /** Statements that aantje runs on the session for itself (`quiet`); a run of the user cancels them. */
+  quiet?: { readonly control: AbortController; readonly done: Promise<unknown> };
   /** The explorer let go of the file for the session and connects again when the session closes. */
   reconnect: boolean;
   /** Where the script that ran last starts in the document. */
@@ -131,12 +184,16 @@ interface Entry {
   pending?: RunAround;
   /** A connection the session attaches as well, with its opening signature; a change of it closes the session. */
   attach?: SessionAttachment & { signature: string };
+  /** "Run Anyway for This Session" of an UPDATE or DELETE without WHERE; the next session asks again. */
+  writesConfirmed: { value: boolean };
 }
 
 /** The SQL editor without the VS Code API: one session per document, opened at the first run. */
 export class QueryEditors {
   private readonly entries = new Map<string, Entry>();
   private readonly listeners = new Set<(change: QueryEditorChange) => void>();
+  /** The last values of the parameters per document. */
+  private readonly memory = new ParameterMemory();
 
   constructor(private readonly deps: QueryEditorDeps) {}
 
@@ -158,7 +215,7 @@ export class QueryEditors {
       connectionName: profile.name,
       mode: modeOf(entry, profile),
       switchable: hasReadOnlySessions(profile),
-      running: entry.run !== undefined,
+      running: entry.run !== undefined || entry.quiet !== undefined,
       sessionOpen: entry.session !== undefined,
       inTransaction: entry.session?.inTransaction ?? 'none',
     };
@@ -193,23 +250,156 @@ export class QueryEditors {
       signature: openingSignature(profile),
       reconnect: false,
       base: 0,
+      writesConfirmed: { value: false },
       ...(attach && attached ? { attach: { ...attach, signature: openingSignature(attached) } } : {}),
     });
     this.fire({ key: editor.key, association: true });
   }
 
-  /** Runs the script on the document's connection (asked for first if missing); undefined when nothing ran. */
+  /**
+   * Runs the script on the document's connection (asked for first if missing), after asking for the values of its
+   * placeholders; undefined when nothing ran.
+   */
   async run(editor: EditorRef, script: RunScript, around?: RunAround): Promise<RunSummary | undefined> {
     if (!this.entries.has(editor.key) && !(await this.choose(editor))) return undefined;
     const entry = this.entries.get(editor.key);
-    const profile = entry && this.deps.profiles.get(entry.connectionId);
-    if (!entry || !profile) return undefined;
-    entry.name = editor.name;
-    if (entry.run) {
-      this.deps.ui.info('A query is already running in this editor.');
+    if (!entry || this.refusedWhileRunning(entry)) return undefined;
+    // Without the dialog the run starts at once.
+    const asked =
+      this.deps.tokenize && this.deps.ui.askParameters
+        ? await this.askParameters(editor, script.text)
+        : NO_PARAMETERS;
+    // The dialog takes time: the document may have lost its connection, or started a run, meanwhile.
+    const profile = this.deps.profiles.get(entry.connectionId);
+    if (!asked || !profile || this.entries.get(editor.key) !== entry || this.refusedWhileRunning(entry)) {
       return undefined;
     }
-    return this.execute(editor.key, entry, profile, script, around);
+    // What aantje runs for itself (a summary of the columns) gives way to the user's run.
+    if (entry.quiet) await stopQuiet(entry);
+    if (this.entries.get(editor.key) !== entry || this.refusedWhileRunning(entry)) {
+      return undefined;
+    }
+    entry.name = editor.name;
+    return this.execute(editor.key, entry, profile, script, around, asked);
+  }
+
+  /**
+   * Set Parameters...: asks for the values of the placeholders of the whole document and keeps them for its next runs,
+   * without a run. False when the document has none or the dialog was cancelled.
+   */
+  async setParameters(editor: EditorRef): Promise<boolean> {
+    const text = editor.text?.() ?? '';
+    const asked = await this.askParameters(editor, text);
+    if (asked === NO_PARAMETERS) {
+      this.deps.ui.info('This document has no parameters: write $name for a value or {{name}} for text.');
+    }
+    return asked !== undefined && asked !== NO_PARAMETERS;
+  }
+
+  private refusedWhileRunning(entry: Entry): boolean {
+    if (entry.run) this.deps.ui.info('A query is already running in this editor.');
+    return entry.run !== undefined;
+  }
+
+  /**
+   * The values of the placeholders of a text, asked for in the dialog and remembered for the document. `NO_PARAMETERS`
+   * without placeholders (or without the dialog); undefined when the dialog was cancelled or a value cannot be used.
+   */
+  private async askParameters(editor: EditorRef, text: string): Promise<Asked | undefined> {
+    const { tokenize, ui } = this.deps;
+    // Without tokens (no language service) the run goes ahead, and DuckDB names a placeholder without a value.
+    const tokens = tokenize && ui.askParameters && (await tokenize(text).catch(() => undefined));
+    const placeholders = tokens ? findPlaceholders(text, tokens) : [];
+    if (!tokenize || !ui.askParameters || placeholders.length === 0) return NO_PARAMETERS;
+    const document = editor.text?.() ?? text;
+    const header = parseParameterHeader(document);
+    const [skipped] = header.problems;
+    if (skipped !== undefined) ui.info(`A parameter line of the header is skipped: ${skipped}.`);
+    // The inline defaults of the whole document count, also when only some of its statements run.
+    const all = document === text ? tokens : await tokenize(document).catch(() => undefined);
+    const defaults = all ? findPlaceholders(document, all) : placeholders;
+    const parameters = scriptParameters(header.declarations, placeholders, defaults);
+    const unusable = parameters.map(usageProblem).find((problem) => problem !== undefined);
+    if (unusable !== undefined) {
+      ui.info(unusable);
+      return undefined;
+    }
+    const answers = await ui.askParameters(
+      parameters,
+      initialValues(parameters, this.memory.get(editor.key), this.memory.defaults(editor.key)),
+    );
+    if (!answers) return undefined;
+    this.memory.remember(editor.key, answers, defaultsOf(parameters));
+    const checked = runParameters(parameters, answers);
+    if ('problem' in checked) {
+      ui.info(checked.problem);
+      return undefined;
+    }
+    return { parameters: checked.parameters, answers };
+  }
+
+  /**
+   * Runs statements of aantje on the session of the editor, hidden from the results and the Query History: the summary
+   * of the columns, Aggregate in DuckDB, the count before a Markdown file. `work` gets a function that runs one statement
+   * and returns its result set (at most `QUIET_MAX_ROWS` rows). It opens the session when none is open, refuses while a
+   * run of the editor is active, and gives way to a later call or run, which cancels it. `progress` shows a notification
+   * with Cancel. Throws `ABORTED` when cancelled, `QUERY_FAILED` with the session's message when a statement fails.
+   */
+  async quiet<T>(
+    key: string,
+    work: (run: (sql: string) => Promise<QuietResult>) => Promise<T>,
+    options: { readonly signal?: AbortSignal; readonly progress?: string } = {},
+  ): Promise<T> {
+    const entry = this.entries.get(key);
+    const profile = entry && this.deps.profiles.get(entry.connectionId);
+    if (!entry || !profile) {
+      throw new AantjeError('QUERY_FAILED', 'This editor has no connection (any more). Run the query again.');
+    }
+    await stopQuiet(entry);
+    if (entry.run) {
+      throw new AantjeError(
+        'QUERY_FAILED',
+        'A query is running in this editor. Wait for it, then try again.',
+      );
+    }
+    const control = new AbortController();
+    const outer = options.signal;
+    const abort = (): void => control.abort();
+    outer?.addEventListener('abort', abort, { once: true });
+    if (outer?.aborted) abort();
+    const task = async (cancel?: AbortSignal): Promise<T> => {
+      cancel?.addEventListener('abort', abort, { once: true });
+      if (cancel?.aborted) abort();
+      const session = await this.sessionOf(entry, profile, control.signal);
+      return work(async (sql) => {
+        if (control.signal.aborted) throw queryCancelled();
+        let result: QuietResult | undefined;
+        for await (const event of session.run(sql, { signal: control.signal, maxRows: QUIET_MAX_ROWS })) {
+          if (event.kind === 'error') {
+            throw control.signal.aborted ? queryCancelled() : new AantjeError('QUERY_FAILED', event.message);
+          }
+          if (event.kind === 'resultSet') {
+            result = { columns: event.columns, rows: event.rows, truncated: event.truncated };
+          }
+        }
+        return result ?? { columns: [], rows: [], truncated: false };
+      });
+    };
+    const done = options.progress === undefined ? task() : this.deps.ui.withProgress(options.progress, task);
+    entry.quiet = { control, done: done.catch(() => undefined) };
+    this.fire({ key, association: false });
+    try {
+      return await done;
+    } finally {
+      outer?.removeEventListener('abort', abort);
+      if (entry.quiet?.control === control) entry.quiet = undefined;
+      this.fire({ key, association: false });
+    }
+  }
+
+  /** Lets the user choose the connection of an editor that has none; false when it still has none. */
+  async ensureConnection(editor: EditorRef): Promise<boolean> {
+    return this.entries.has(editor.key) || (await this.choose(editor));
   }
 
   /** The script that ran last in the editor, for Open as New Query of a built statement. */
@@ -219,7 +409,9 @@ export class QueryEditors {
 
   /** Cancels the running statement and the ones after it. */
   cancel(key: string): void {
-    this.entries.get(key)?.run?.abort();
+    const entry = this.entries.get(key);
+    entry?.run?.abort();
+    entry?.quiet?.control.abort();
   }
 
   /** Switches the session mode (the profile stays the default); the next run opens the new session. */
@@ -261,6 +453,7 @@ export class QueryEditors {
   }
 
   async documentClosed(key: string): Promise<void> {
+    this.memory.forget(key);
     const entry = this.entries.get(key);
     if (!entry) return;
     this.entries.delete(key);
@@ -339,6 +532,7 @@ export class QueryEditors {
     profile: ConnectionProfile,
     script: RunScript,
     around: RunAround | undefined,
+    asked: Asked,
   ): Promise<RunSummary> {
     const { results, ui } = this.deps;
     const now = (): number => this.deps.now?.() ?? Date.now();
@@ -346,7 +540,7 @@ export class QueryEditors {
       target: { key, title: `${entry.name} · ${profile.name}` },
       results,
       now,
-      record: script.record && this.deps.history ? new RunRecord(script.text, now) : undefined,
+      record: script.record && this.deps.history ? new RunRecord(script.text, now, asked.answers) : undefined,
       changed: () => this.fire({ key, association: false }),
     });
     entry.run = run.control;
@@ -363,7 +557,7 @@ export class QueryEditors {
         results.reveal(run.target);
         this.fire({ key, association: false });
         await ui.withProgress(`Running SQL on ${profile.name}...`, (cancel) =>
-          this.runInSession({ entry, profile, script, around, run }, cancel),
+          this.runInSession({ entry, profile, script, around, run, parameters: asked.parameters }, cancel),
         );
       } catch (error) {
         run.forward({ kind: 'error', index: 0, message: userMessageOf(error) });
@@ -377,7 +571,7 @@ export class QueryEditors {
 
   // Opens or reuses the session and runs the script with the statements around it; their settings always go back.
   private async runInSession(
-    { entry, profile, script, around, run }: RunInSession,
+    { entry, profile, script, around, run, parameters }: RunInSession,
     cancel: AbortSignal,
   ): Promise<void> {
     const { control } = run;
@@ -385,8 +579,24 @@ export class QueryEditors {
     if (cancel.aborted) control.abort();
     const session = await this.sessionOf(entry, profile, control.signal);
     run.session = session;
-    const options = { signal: control.signal, maxRows: this.deps.maxRows(), maxCells: MAX_RESULT_CELLS };
-    const quiet = quietRun(session);
+    const options = {
+      signal: control.signal,
+      maxRows: this.deps.maxRows(),
+      maxCells: MAX_RESULT_CELLS,
+      ...(parameters && { parameters }),
+      ...runGuards({
+        ui: this.deps.ui,
+        settings: this.deps.runSettings?.() ?? DEFAULT_RUN_SETTINGS,
+        session,
+        control,
+        confirmed: entry.writesConfirmed,
+        commits: !script.toFile,
+        profile,
+        messages: this.deps.history,
+      }),
+    };
+    // The statements around the script (Run to File binds its query) see the same values.
+    const quiet = quietRun(session, parameters);
     try {
       await around?.before(quiet);
       const text = (await around?.script?.(quiet)) ?? script.text;
@@ -478,6 +688,7 @@ export class QueryEditors {
 
   private async closeSession(entry: Entry): Promise<void> {
     entry.run?.abort();
+    entry.quiet?.control.abort();
     // A closed session takes its settings with it; only the temporary files are left to delete.
     const { pending } = entry;
     entry.pending = undefined;
@@ -485,6 +696,7 @@ export class QueryEditors {
     const { session } = entry;
     if (!session) return;
     entry.session = undefined;
+    entry.writesConfirmed.value = false;
     const open = session.inTransaction !== 'none';
     await session.close();
     if (open) this.deps.ui.info(`Rolled back the open transaction of ${entry.name}`);
@@ -506,66 +718,27 @@ interface RunInSession {
   readonly script: RunScript;
   readonly around: RunAround | undefined;
   readonly run: RunTracker;
+  readonly parameters: RunParameters | undefined;
 }
 
-/** One run: it forwards the events to the results and the history, and notes a failure and a committed change. */
-class RunTracker {
-  readonly control = new AbortController();
-  readonly target: ResultsTarget;
-  readonly record: RunRecord | undefined;
-  readonly startedAt: number;
-  /** The session of the run, once it is open. */
-  session: SqlSession | undefined;
-  failed = false;
-  /** A statement that may change the catalog completed outside a transaction, or a COMMIT did. */
-  catalogChanged = false;
-  // The statement that started last may change the catalog.
-  private changing = false;
-
-  constructor(
-    private readonly ports: {
-      readonly target: ResultsTarget;
-      readonly results: ResultsView;
-      readonly now: () => number;
-      readonly record: RunRecord | undefined;
-      /** The editor's state changed: a failure or a transaction may show. */
-      readonly changed: () => void;
-    },
-  ) {
-    this.target = ports.target;
-    this.record = ports.record;
-    this.startedAt = ports.now();
-  }
-
-  elapsed(): number {
-    return this.ports.now() - this.startedAt;
-  }
-
-  forward(event: SqlEvent): void {
-    this.failed ||= event.kind === 'error';
-    this.record?.event(event, this.control.signal.aborted);
-    this.ports.results.event(this.target, event);
-    this.ports.changed();
-  }
-
-  /** An event of the script: a statement that ends well notes its change, unless a transaction holds it back. */
-  statementEvent(event: SqlEvent): void {
-    if (event.kind === 'start') {
-      this.changing = event.changesCatalog;
-    } else if (event.kind !== 'error') {
-      // Inside a transaction the change becomes visible at COMMIT, which counts as a change itself.
-      if (this.changing && this.session?.inTransaction === 'none') this.catalogChanged = true;
-      this.changing = false;
-    }
-    this.forward(event);
+/** Cancels what aantje runs on the session for itself and waits until it stopped, also for one that started meanwhile. */
+async function stopQuiet(entry: Entry): Promise<void> {
+  while (entry.quiet) {
+    const { quiet } = entry;
+    quiet.control.abort();
+    await quiet.done;
+    if (entry.quiet === quiet) entry.quiet = undefined;
   }
 }
 
-/** Runs SQL on the session without a signal (so a cancel of the script cannot stop it) and without showing it. */
-function quietRun(session: SqlSession): QuietRun {
+/**
+ * Runs SQL on the session without a signal (so a cancel of the script cannot stop it) and without showing it, with the
+ * values of the run's parameters.
+ */
+function quietRun(session: SqlSession, parameters?: RunParameters): QuietRun {
   return async (sql) => {
     let rows: readonly (readonly GridValue[])[] = [];
-    for await (const event of session.run(sql)) {
+    for await (const event of session.run(sql, parameters && { parameters })) {
       if (event.kind === 'error') throw new AantjeError('QUERY_FAILED', event.message);
       if (event.kind === 'resultSet') rows = event.rows;
     }

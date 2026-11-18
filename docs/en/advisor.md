@@ -8,7 +8,7 @@ It is a report on the [report shell](reports.md).
 
 - **Where.** The **Reports** submenu of an open connection or of a schema. The command needs a node, so it is hidden from the Command Palette.
 - **Snapshot.** Always the newest: the dry runs act on the newest state, and the catalog facts are read at the same snapshot. The tree may show another one; the report says `Snapshot @130`.
-- **One panel per connection and scope**, titled `Maintenance Advisor · <connection>` or `Maintenance Advisor · <connection> · schema <schema>`. The command again reveals it with fresh data.
+- **One panel per connection and scope**, titled `Maintenance Advisor · <connection>` or `Maintenance Advisor: <schema> · <connection>`. The command again reveals it with fresh data.
 - **Progress with Cancel.** The notification `Measuring the maintenance of "Lake"...` has a Cancel button. Cancelling interrupts the running statement and ends the command with `The query was cancelled.`; an open panel keeps what it showed.
 - **Closed connection.** `Connect to a catalog first to show its maintenance advice.` A refresh after the connection was removed says `The connection of this maintenance advisor was removed. Close the report.`
 
@@ -80,7 +80,8 @@ The header has the title, a summary (`Snapshot @130 · Lake · read 2026-10-31 1
 1. **Key figures.** Snapshots to expire, files to clean up, orphaned files, reclaimable space (cleanup plus orphans; `at least` when something was skipped or sized in part) and the merge, rewrite and flush candidates. A skipped measurement reads `not measured` with the reason. The hint of **Snapshots to expire** and a row of the document say how many snapshots are expirable now and how many are younger than the age (`100 snapshots expirable now, 19 younger than 30 days`), counted from `ducklake_snapshot` with the options (`expirableSnapshots(metadata)` of the reader, one read of the options for all); the note says when the lake sets no `expire_older_than`, so that Expire Snapshots as generated names the age.
 2. **Recommendations** as expandable cards, the first open, with the buttons below.
 3. **Not measured**, only when something was skipped: the reason, and **Open script** for the failed dry run so the user can run it and read the error.
-4. **Policy** with this lake's values.
+4. **Large tables without partitioning**, only when there are some: the tables of the scope of 1 GB or more (`LARGE_TABLE_BYTES`) that have no partitioning at the newest snapshot, the largest first, at most 20, each with **Suggest Partitioning...** ([Suggest Partitioning](partitioning.md)). They are read from the catalog (`largeUnpartitioned` in `src/advisor/partitioning.ts`), not measured; no recommendation counts them.
+5. **Policy** with this lake's values.
 
 ## Actions
 
@@ -95,6 +96,7 @@ The page asks for an action by id and, for a table, by catalog id; it never name
 | `showStorage`                                    |         | **Show Storage Report** of the connection.                                                |
 | `maintenanceScript`                              |         | **Create maintenance script** ([below](#the-maintenance-script-for-all-recommendations)). |
 | `checkHealth`                                    |         | **Check Health** of the connection, or of the schema in a schema report.                  |
+| `suggestPartitioning`                            | `table` | **Suggest Partitioning...** on the table's node, for a large table without partitioning.  |
 
 The scripts are those of the Maintenance menu (`maintenanceOf` in `src/maintenance/scripts.ts`). The document belongs to the connection, so F5 runs it there; opening never runs it. The scripts follow the options of the lake like those of the menu, see [Maintenance scripts](maintenance.md#expire-snapshots-and-delete-orphaned-files-which-age-the-script-uses): Expire Snapshots follows `expire_older_than` when the lake sets it and names the age of 30 days otherwise; Delete Orphaned Files follows `delete_older_than`.
 

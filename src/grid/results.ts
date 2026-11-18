@@ -1,5 +1,5 @@
 import type { SqlEvent } from '../sql/session';
-import type { ResultsMessage } from './protocol';
+import type { ResultsMessage, ResultsUpdate } from './protocol';
 import { applyEvent, beginRun, endRun, revealRange } from './results-model';
 import type { ResultsRange, ResultsRunState, ResultsRunSummary } from './results-model';
 
@@ -7,8 +7,14 @@ import type { ResultsRange, ResultsRunState, ResultsRunSummary } from './results
 export class ResultsRun {
   private run: ResultsRunState | undefined;
   private ready = false;
+  private begun = 0;
 
-  constructor(private readonly send: (message: ResultsMessage) => void) {}
+  constructor(private readonly send: (message: ResultsMessage | ResultsUpdate) => void) {}
+
+  /** Counts the runs: what was computed for one run must not reach the page of the next. */
+  get generation(): number {
+    return this.begun;
+  }
 
   /** The run as the page has it; only the tests read it. */
   get state(): ResultsRunState | undefined {
@@ -17,6 +23,7 @@ export class ResultsRun {
 
   /** A new run replaces the last one; `built` marks a statement that aantje built. */
   begin(script: string, built = false): void {
+    this.begun++;
     this.run = beginRun(script, built);
     this.post({ type: 'results-begin', script: this.run.script, ...(built ? { built: true } : {}) });
   }
@@ -54,7 +61,12 @@ export class ResultsRun {
     return this.run && revealRange(this.run, index);
   }
 
-  private post(message: ResultsMessage): void {
+  /** What the extension computed for a result set of this run; a page that is not ready gets it never. */
+  update(update: ResultsUpdate): void {
+    this.post(update);
+  }
+
+  private post(message: ResultsMessage | ResultsUpdate): void {
     if (this.ready) {
       this.send(message);
     }

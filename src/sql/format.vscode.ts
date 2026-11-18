@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import type { Logger } from '../log';
 import { failureLog, withFallback } from '../log-once';
-import { formatSql, keywordCaseOf, sameTokens } from './format';
+import { formatSql, keywordCaseOf, samePlaceholders, sameTokens } from './format';
 import { SQL_SELECTOR } from './glue.vscode';
 import type { LanguageService } from './language';
 
@@ -38,7 +38,11 @@ export function registerSqlFormatting(env: FormatEnv): vscode.Disposable[] {
       undefined,
     );
     if (!tokens) return refuse('DuckDB could not check the formatted text. See the aantje log.');
-    if (!sameTokens(...tokens)) {
+    const [before, after] = tokens;
+    if (
+      !sameTokens(before, after) ||
+      !samePlaceholders({ text, tokens: before }, { text: result.text, tokens: after })
+    ) {
       logger.info('Formatting was refused: the formatted SQL had other tokens than the original.');
       void vscode.window.showWarningMessage(
         'aantje left the SQL as it was: formatted, it would differ in more than blanks and the case of keywords.',

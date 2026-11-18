@@ -15,6 +15,11 @@ export class IcebergTargetStore {
     private readonly secrets: SecretsPort,
     /** Called with every secret read or written, so the log redactor knows it. */
     private readonly registerSecret: (value: string) => void = () => undefined,
+    /**
+     * The token of the Microsoft account for a target that signs in with `entra` (a Fabric lakehouse); `silent` never
+     * asks the user. Without it such a target has no token.
+     */
+    private readonly entraToken?: (target: IcebergTarget, silent: boolean) => Promise<string>,
   ) {}
 
   list(): IcebergTarget[] {
@@ -29,8 +34,16 @@ export class IcebergTargetStore {
     return parseTargets(this.settings.read()).problems;
   }
 
-  /** The secret, but only when it was stored for this endpoint and client. */
-  async secret(target: IcebergTarget): Promise<string | undefined> {
+  /**
+   * The secret, but only when it was stored for this endpoint and client. For `entra` the token of the Microsoft
+   * account: with `signIn` the editor may ask the user to sign in (and a refusal throws); without it undefined when
+   * there is no session.
+   */
+  async secret(target: IcebergTarget, signIn = false): Promise<string | undefined> {
+    if (target.signIn === 'entra') {
+      if (!this.entraToken) return undefined;
+      return signIn ? this.entraToken(target, false) : this.entraToken(target, true).catch(() => undefined);
+    }
     if (!usesSecret(target)) return undefined;
     const raw = await this.secrets.get(secretKey(target.id));
     if (raw === undefined) return undefined;

@@ -1,22 +1,43 @@
 /// <reference lib="dom" />
-// The results page of the SQL editor: a tab for the messages and one for each result set. The rules (which tab is
-// selected, the texts) are in results-model.ts; the views of the tabs are in results-views.ts.
+// The results page of the SQL editor: a tab for the messages, one for each result set and one for the chart of each
+// result set of rows. The rules (which tab is selected, the texts) are in results-model.ts; the views of the tabs are
+// in results-views.ts.
 import { el } from '../shell/dom';
 import { tabAfterKey } from '../shell/blocks';
+import { chartMemory, rememberChart } from './chart-view';
+import type { ChartViewTab } from './chart-view';
 import type { HostPort } from './grid-view';
-import type { ResultsMessage } from './protocol';
+import type { GridRequest, ResultsMessage, ResultsUpdate } from './protocol';
+import { handOver } from './result-tab';
 import type { ResultTab } from './result-tab';
-import { applyMessage, endText, selectedTab, tabsOf, transactionText } from './results-model';
+import {
+  applyMessage,
+  chartSetOf,
+  endText,
+  hasChart,
+  selectedTab,
+  tabsOf,
+  transactionText,
+} from './results-model';
 import type { ResultsRunState, TabId } from './results-model';
-import { messagesView, resultView } from './results-views';
+import { chartTabView, messagesView, resultView } from './results-views';
 import type { MessagesView } from './results-views';
 
-/** Builds the page in `app`; the result takes each results message of the extension and shows it. */
-export function resultsPage(app: HTMLElement, host: HostPort): (message: ResultsMessage) => void {
+/** The results page: it shows each message of the run, and hands what the extension computed to its result set. */
+export interface ResultsPage {
+  show(message: ResultsMessage): void;
+  update(update: ResultsUpdate): void;
+  /** A copy of the context menu, or the format of Export as File, for the grid of a result set. */
+  request(request: GridRequest): void;
+}
+
+/** Builds the page in `app`. */
+export function resultsPage(app: HTMLElement, host: HostPort): ResultsPage {
   let run: ResultsRunState | undefined;
   let chosen: TabId | undefined;
-  // Built when its tab is first selected and kept, so that sort and filters stay.
-  let grids = new Map<number, ResultTab>();
+  // Built when its tab is first selected and kept, so that sort, filters and the chart stay.
+  let views = new Map<TabId, ResultTab>();
+  let charts = new Map<number, ChartViewTab>();
   let shown: TabId | undefined;
   // Kept for the whole run: a script of thousands of statements sends two events for each, and each one renders.
   let messages: MessagesView | undefined;
@@ -39,37 +60,65 @@ export function resultsPage(app: HTMLElement, host: HostPort): (message: Results
   pane.setAttribute('role', 'tabpanel');
   app.replaceChildren(bar, pane);
 
+  const selected = (current: ResultsRunState): TabId =>
+    selectedTab(current, chosen, chartMemory(host)?.open === true);
+
+  /**
+   * The user chose a tab. Between the rows of a result set and its chart, the one chosen last is noted with the chart,
+   * so that the next run opens it again.
+   */
+  function choose(id: TabId): void {
+    chosen = id;
+    render();
+    const set = chartSetOf(id);
+    if (set !== undefined) {
+      const choice = charts.get(set)?.choice();
+      if (choice) rememberChart(host, { choice, open: true });
+    } else if (typeof id === 'number' && hasChart(run?.resultSets[id])) {
+      const choice = charts.get(id)?.choice() ?? chartMemory(host)?.choice;
+      if (choice) rememberChart(host, { choice, open: false });
+    }
+  }
+
   tablist.addEventListener('keydown', (event) => {
     const ids = run ? tabsOf(run).map((tab) => tab.id) : [];
-    const current = run ? ids.indexOf(selectedTab(run, chosen)) : 0;
+    const current = run ? ids.indexOf(selected(run)) : 0;
     const position = tabAfterKey(event.key, current, ids.length);
-    if (position !== undefined) {
+    const id = position === undefined ? undefined : ids[position];
+    if (position !== undefined && id !== undefined) {
       event.preventDefault();
-      chosen = ids[position];
-      render();
+      choose(id);
       buttons[position]?.focus();
     }
   });
 
-  function renderTabs(current: ResultsRunState, selected: TabId): void {
+  function renderTabs(current: ResultsRunState, on: TabId): void {
     buttons = tabsOf(current).map((tab) => {
-      const on = tab.id === selected;
       let button = tabButtons.get(tab.id);
       if (!button) {
         button = el('button', undefined, tab.label);
         button.setAttribute('role', 'tab');
-        button.addEventListener('click', () => {
-          chosen = tab.id;
-          render();
-        });
+        button.addEventListener('click', () => choose(tab.id));
         tabButtons.set(tab.id, button);
       }
-      button.className = on ? 'tab selected' : 'tab';
-      button.setAttribute('aria-selected', String(on));
-      button.tabIndex = on ? 0 : -1;
+      // `Result` becomes `Result 1` once a second result set of the run arrives.
+      if (button.textContent !== tab.label) button.textContent = tab.label;
+      button.className = tab.id === on ? 'tab selected' : 'tab';
+      button.setAttribute('aria-selected', String(tab.id === on));
+      button.tabIndex = tab.id === on ? 0 : -1;
       return button;
     });
     tablist.replaceChildren(...buttons);
+  }
+
+  /** The view of a tab other than Messages, made when the tab is first shown. */
+  function viewOf(current: ResultsRunState, id: Exclude<TabId, 'messages'>): ResultTab {
+    const set = chartSetOf(id);
+    if (set === undefined) return resultView(host, current, typeof id === 'number' ? id : -1);
+    const chart = chartTabView(host, current, set);
+    if (!chart) return resultView(host, current, -1);
+    charts.set(set, chart);
+    return chart;
   }
 
   function render(): void {
@@ -77,43 +126,53 @@ export function resultsPage(app: HTMLElement, host: HostPort): (message: Results
       return;
     }
     const current = run;
-    const selected = selectedTab(current, chosen);
-    renderTabs(current, selected);
+    const on = selected(current);
+    renderTabs(current, on);
     runLine.textContent = [endText(current.end), transactionText(current.end)]
       .filter((part) => part !== '')
       .join(' · ');
     open.hidden = current.built !== true;
-    if (selected === 'messages') {
+    if (on === 'messages') {
       messages ??= messagesView(host);
       messages.update(current);
-      if (shown !== selected) {
+      if (shown !== on) {
         pane.replaceChildren(messages.element);
-        shown = selected;
+        shown = on;
       }
-    } else if (shown !== selected) {
-      let grid = grids.get(selected);
-      if (!grid) {
-        grid = resultView(host, current, selected);
-        grids.set(selected, grid);
+    } else if (shown !== on) {
+      let view = views.get(on);
+      if (!view) {
+        view = viewOf(current, on);
+        views.set(on, view);
       }
-      pane.replaceChildren(...grid.elements);
-      grid.placed();
-      shown = selected;
+      pane.replaceChildren(...view.elements);
+      view.placed();
+      shown = on;
     }
   }
 
-  return (message) => {
-    if (message.type === 'results-begin') {
-      chosen = undefined;
-    }
-    if (message.type === 'results-begin' || message.type === 'results-state') {
-      for (const grid of grids.values()) grid.dispose?.();
-      grids = new Map();
-      shown = undefined;
-      messages = undefined;
-      tabButtons.clear();
-    }
-    run = applyMessage(run, message);
-    render();
+  return {
+    show: (message) => {
+      if (message.type === 'results-begin') {
+        chosen = undefined;
+      }
+      if (message.type === 'results-begin' || message.type === 'results-state') {
+        for (const view of views.values()) view.dispose?.();
+        views = new Map();
+        charts = new Map();
+        shown = undefined;
+        messages = undefined;
+        tabButtons.clear();
+      }
+      run = applyMessage(run, message);
+      render();
+    },
+    update: (update) => {
+      if (update.type === 'results-summary') views.get(update.set)?.grid?.summary(update.state);
+      else charts.get(update.set)?.receive(update.choice, update.state);
+    },
+    request: (request) => {
+      if (request.set !== undefined) handOver(views.get(request.set)?.grid, request);
+    },
   };
 }

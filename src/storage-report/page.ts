@@ -8,7 +8,8 @@ import type { Frame } from '../shell/chart-set';
 import { el } from '../shell/dom';
 import { formatUtc, plural } from '../shell/model';
 import { reportPage } from '../shell/report-page';
-import { scopeSuffix } from '../shell/scope';
+import { reportHeading } from '../shell/report-heading';
+import { scopeSchema } from '../shell/scope';
 import { readTheme } from '../shell/theme';
 import { storageTablesOption } from './chart-options';
 import { DEFAULT_SORT, barEntries } from './model';
@@ -109,7 +110,7 @@ export const storagePage = reportPage<StorageData>(
       const frame: Frame = { theme: readTheme(), charts };
       const storage = data;
       const header = pageHeader(context, {
-        title: `Storage${scopeSuffix(storage.scope)}`,
+        title: reportHeading('Storage Report', scopeSchema(storage.scope)),
         subtitle: `Snapshot @${storage.snapshot} · ${storage.connection} · read ${formatUtc(storage.readAt)}`,
         refresh: 'Read the storage again at the snapshot that the tree shows',
         view: (): StorageView => ({ filter }),

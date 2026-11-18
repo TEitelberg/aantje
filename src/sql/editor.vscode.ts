@@ -7,12 +7,20 @@ import type { Logger } from '../log';
 import { withCancel } from '../progress.vscode';
 import { scriptOf } from '../script-templates';
 import { openScript } from '../script.vscode';
+import { maxRowsOf } from '../data/settings';
 import type { CatalogTree } from '../tree/model';
-import { holdsFileExclusively } from './editor';
-import type { QueryEditors, QueryUi, SessionAttachment } from './editor';
+import { holdsFileExclusively, QueryEditors } from './editor';
+import type { ExplorerPort, QueryUi, SessionAttachment } from './editor';
 import { queryMenuItems, queryStatusContent } from './editor-status';
 import { activeSqlEditor, documentKey, documentOfKey, editorOf } from './glue.vscode';
+import { askParameterValues } from './parameters.vscode';
+import type { QueryHistory } from './history';
+import type { LanguageService } from './language';
+import type { ResultsView } from './results';
+import { runSettingsOf } from './run-guards';
+import { guardUi } from './run-guards.vscode';
 import { scriptToRun } from './script';
+import { openEditorSession } from './session';
 
 interface QueryEnv {
   readonly editors: QueryEditors;
@@ -61,6 +69,8 @@ export function createQueryUi(): QueryUi {
       return picked?.id;
     },
     withProgress: withCancel,
+    askParameters: (parameters, initial) => askParameterValues(parameters, initial, 'Parameters of the run'),
+    ...guardUi(),
   };
 }
 
@@ -186,6 +196,11 @@ export function registerQueryEditor(env: QueryEnv): vscode.Disposable[] {
 
     // aantje.runStatement is in lens.vscode.ts: the lens calls it with a statement.
 
+    register('aantje.setQueryParameters', async () => {
+      const document = activeSqlEditor()?.document;
+      if (document) await editors.setParameters(editorOf(document));
+    }),
+
     register('aantje.cancelQuery', () => {
       const document = vscode.window.activeTextEditor?.document;
       if (document) editors.cancel(documentKey(document));
@@ -224,4 +239,40 @@ export function registerQueryEditor(env: QueryEnv): vscode.Disposable[] {
       else if (choice?.action === 'close') await editors.closeSessionOf(key);
     }),
   ];
+}
+
+/**
+ * The editors of a window: the profiles and the data access of the connections, the results panel that the window
+ * shows now, and the settings of a run as VS Code holds them.
+ */
+export function createQueryEditors(
+  {
+    store,
+    dataAccess,
+    history,
+  }: {
+    readonly store: Pick<ConnectionStore, 'list' | 'get'>;
+    readonly dataAccess: Parameters<typeof openEditorSession>[0];
+    readonly history: QueryHistory;
+  },
+  results: { current: ResultsView },
+  service: Pick<LanguageService, 'tokenize'>,
+  explorer: ExplorerPort,
+): QueryEditors {
+  return new QueryEditors({
+    profiles: { list: () => store.list(), get: (id) => store.get(id) },
+    tokenize: (text) => service.tokenize(text),
+    openSession: (...args) => openEditorSession(dataAccess, ...args),
+    results: {
+      begin: (target, script) => results.current.begin(target, script),
+      event: (target, event) => results.current.event(target, event),
+      end: (target, summary) => results.current.end(target, summary),
+      reveal: (target) => results.current.reveal(target),
+    },
+    explorer,
+    ui: createQueryUi(),
+    maxRows: () => maxRowsOf(vscode.workspace.getConfiguration('aantje').get<unknown>('sql.maxRows')),
+    runSettings: () => runSettingsOf((key) => vscode.workspace.getConfiguration('aantje').get<unknown>(key)),
+    history,
+  });
 }

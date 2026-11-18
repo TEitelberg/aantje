@@ -43,11 +43,11 @@ The range itself has no limit. A range over millions of changes is read twice (r
 
 ## Export
 
-**Export...** in the context menu of a table or a view, next to Select Top 1000 Rows, writes the whole relation to a CSV or Parquet file, without the 1000 rows of the grid (`src/data/export.ts`, `src/data/export.vscode.ts`).
+**Export...** in the context menu of a table or a view, next to Select Top 1000 Rows, writes the whole relation to a CSV, Parquet, JSON or Markdown file, without the 1000 rows of the grid (`src/data/export.ts`, `src/data/export.vscode.ts`).
 
-1. A save dialog with the filters CSV and Parquet proposes `<schema>.<table>.csv` (made safe for a file name) in the first workspace folder, else in the home folder. The extension of the chosen file decides the format. For CSV the pick **For Excel (formulas neutralised)** or **Unchanged (for loading elsewhere)** follows. The file is the same as with Run to File in the SQL editor ([SQL editor](sql-editor.md#run-to-file)).
+1. A save dialog with the filters CSV, Parquet, JSON and Markdown proposes `<schema>.<table>.csv` (made safe for a file name) in the first workspace folder, else in the home folder. The extension of the chosen file decides the format. For `.json` the pick of the layout follows (one object per line, or one array); a CSV file holds every value as DuckDB writes it, without a question. The file is the same as with Run to File in the SQL editor ([SQL editor](sql-editor.md#run-to-file)). For Markdown a first read counts the rows (`countRelation`) and above 10,000 rows a modal dialog asks before the file is written.
 2. The relation is read at the snapshot that the tree shows: the engine attaches the lake with `SNAPSHOT_VERSION n`, as the preview does, which reads the same rows as `AT (VERSION => n)`.
-3. It runs in the one-shot engine of the preview, with its `READ_ONLY` attach, the locked configuration and the guard in the same transaction (`withWholeRelation` in `src/data/engine.ts`): a view needs the trust confirmation, its stored SQL must not call the maintenance functions, and the data files must be at home. Then it runs `COPY (SELECT * FROM lake."schema"."table") TO '<file>' (...)`; for Excel it binds the relation first (`LIMIT 0`) to find the text columns.
+3. It runs in the one-shot engine of the preview, with its `READ_ONLY` attach, the locked configuration and the guard in the same transaction (`withWholeRelation` in `src/data/engine.ts`): a view needs the trust confirmation, its stored SQL must not call the maintenance functions, and the data files must be at home. Then it runs `COPY (SELECT * FROM lake."schema"."table") TO '<file>' (...)`; for Markdown it binds the relation first (`LIMIT 0`) to find the columns.
 4. A notification with Cancel shows the progress; at the end a message names the rows written and the file.
 
 What DuckDB 2.0 does with the `COPY`:
@@ -57,6 +57,10 @@ What DuckDB 2.0 does with the `COPY`:
 - **Cancel** interrupts the statement and releases the command at once. DuckDB deletes the file it was writing; aantje deletes it too, with a few retries while the engine closes, but only when there was no file before. DuckDB writes over an existing file through a temporary file, so a cancelled export keeps the old file.
 - **Quack.** The `COPY` runs in the DuckDB of aantje on this machine; the Quack server only serves the catalog. The file is written locally.
 - **A file that cannot be written** (access denied, open in another program, folder gone) fails with a message that names the file, not with the advice for a data file of the lake.
+
+## The statistics of the columns
+
+**Column Statistics** of the data preview ([Data grid](grid.md#the-statistics-of-the-columns)) asks for the statistics of the whole table or view: `summarizeRelation` (`src/data/summary.ts`) describes `SELECT * FROM lake."schema"."table"` and runs one aggregate and one scan over it at the snapshot that the tree shows, in the one-shot engine of the preview with its checks (`withWholeRelation`), under a notification with Cancel. The line above the grid has its own Cancel as well. Nothing is read while the statistics are hidden.
 
 ## Two lakes in one engine
 

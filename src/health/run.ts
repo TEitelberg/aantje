@@ -88,7 +88,7 @@ function finish(ctx: RunContext, catalog: CatalogOutcome, started: number): Heal
   state.close();
   return {
     request: ctx.request,
-    ...(catalog.latest === undefined ? {} : { snapshot: catalog.latest }),
+    ...(catalog.latest === undefined ? {} : { snapshot: ctx.request.at ?? catalog.latest }),
     groups,
     findings,
     summary,

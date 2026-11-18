@@ -1,9 +1,8 @@
 import { addColumnDdl, qualifiedName, quoteIdentifier } from '../catalog/ddl';
 import type { ColumnInfo } from '../catalog/model';
-import { PREVIEW_LIMIT } from '../data/types';
 import { columnFragments, commented, fromCatalog } from '../ddl-script/check';
 import { commentStatement, dropColumnStatement } from '../ddl-script/statements';
-import { atVersion, newestNote, pinnedOf, timeTravelNote } from '../script';
+import { atVersion, LIMIT_CLAUSE, newestNote, pinnedOf, timeTravelNote } from '../script';
 import { catalogOf, COMMENTED_OUT, withDrop } from './common';
 import type { Ref, Tree } from './common';
 
@@ -119,7 +118,7 @@ export async function selectColumn(tree: Tree, ref: Ref<'column'>): Promise<stri
     ...timeTravelNote(pinned),
     `SELECT ${path.map(quoteIdentifier).join('.')}`,
     `FROM ${qualifiedName(ref.schema.name, ref.table.name)}${atVersion(pinned)}`,
-    `LIMIT ${PREVIEW_LIMIT};`,
+    `${LIMIT_CLAUSE};`,
   ].join('\n');
 }
 

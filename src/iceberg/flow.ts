@@ -1,17 +1,28 @@
 import type { PickItem, WizardUi } from '../connections/ports';
 import { validateRequired } from '../connections/profile';
-import { AantjeError, isAantjeError, isAborted } from '../errors';
+import { AantjeError, isAantjeError, isAborted, userMessageOf } from '../errors';
+import { validateLakehouseName } from '../fabric/api';
+import type { FabricApi, FabricLakehouseItem, FabricWorkspace } from '../fabric/api';
+import { validateTenantId } from '../storage/config';
 import type { CopyRequest, CopyResult, CopyScope, ExistingTables } from './copy';
-import { describeTarget, LAKE_COPY } from './copy';
+import { describeTarget, icebergNameOf, LAKE_COPY } from './copy';
 import type { TablePlan } from './mapping';
 import type { IcebergCopies, IcebergCopyRecord } from './records';
 import type { IcebergTargetStore } from './store';
-import { DEFAULT_REGION, idOf, usesSecret, validateEndpoint } from './target';
+import { DEFAULT_REGION, fabricTarget, idOf, targetPlace, usesSecret, validateEndpoint } from './target';
 import type { IcebergSignIn, IcebergTarget } from './target';
+
+/** The Fabric API for the tenant of a sign-in (undefined: the tenant of the Microsoft account). */
+export type FabricApiOf = (
+  tenant: string | undefined,
+) => Pick<FabricApi, 'workspace' | 'lakehouses' | 'createLakehouse'>;
 
 export interface IcebergFlowDeps {
   readonly targets: Pick<IcebergTargetStore, 'list' | 'add' | 'secret' | 'setSecret'>;
-  readonly copies: Pick<IcebergCopies, 'replaceAll' | 'replaceSchema' | 'save'>;
+  /** The Fabric API, for a new Fabric lakehouse target; without it only REST catalogs are offered. */
+  readonly fabric?: FabricApiOf;
+  readonly copies: Pick<IcebergCopies, 'replaceAll' | 'replaceSchema' | 'save'> &
+    Partial<Pick<IcebergCopies, 'rememberFailures'>>;
   /** The ids of the tables of the lake at a snapshot, by `schema.table`; the records keep them so that a rename is no drop. */
   readonly tableIds?: (snapshot: number) => Promise<ReadonlyMap<string, number>>;
   /**
@@ -21,6 +32,7 @@ export interface IcebergFlowDeps {
    */
   readonly plan?: (
     scope: CopyScope,
+    target: IcebergTarget,
   ) => Promise<{ readonly tables: readonly TablePlan[]; readonly partitions: ReadonlyMap<string, string> }>;
   /** Runs the copy under a notification with Cancel. */
   readonly copy: (request: Omit<CopyRequest, 'access' | 'report'>, title: string) => Promise<CopyResult>;
@@ -49,8 +61,26 @@ export interface IcebergCopied {
 }
 
 const NEW_TARGET = 'new';
+const NEW_FABRIC_TARGET = 'new-fabric';
+const NEW_LAKEHOUSE = 'new-lakehouse';
 
-const SIGN_IN_ITEMS: readonly PickItem<IcebergSignIn>[] = [
+/** The letters, digits and underscores that Fabric allows in the name of a schema. */
+const FABRIC_SCHEMA_NAME = /^[A-Za-z0-9_]+$/;
+
+const KIND_ITEMS: readonly PickItem<'rest' | 'fabric'>[] = [
+  {
+    label: 'Iceberg REST catalog',
+    description: 'Polaris, Lakekeeper or another catalog at its endpoint',
+    value: 'rest',
+  },
+  {
+    label: 'Microsoft Fabric lakehouse',
+    description: 'Through the Iceberg catalog of OneLake, with your Microsoft account',
+    value: 'fabric',
+  },
+];
+
+const SIGN_IN_ITEMS: readonly PickItem<Exclude<IcebergSignIn, 'entra'>>[] = [
   {
     label: 'OAuth2 client credentials',
     description: 'A client ID and a client secret (Polaris, Lakekeeper)',
@@ -143,41 +173,214 @@ export async function addIcebergTargetFlow(
   return target;
 }
 
+/** A new target: asks for the kind when Fabric is offered, then for the target of that kind. */
+export async function addTargetFlow(
+  ui: WizardUi,
+  deps: Pick<IcebergFlowDeps, 'targets' | 'fabric'>,
+): Promise<IcebergTarget | undefined> {
+  if (!deps.fabric) return addIcebergTargetFlow(ui, deps);
+  const kind = await ui.pick('Add Iceberg Target: which kind of catalog?', KIND_ITEMS);
+  if (kind === undefined) return undefined;
+  return kind === 'fabric'
+    ? addFabricTargetFlow(ui, { targets: deps.targets, fabric: deps.fabric })
+    : addIcebergTargetFlow(ui, deps);
+}
+
+/**
+ * Asks for a lakehouse of Microsoft Fabric and saves it as a target: the tenant (empty for the one of the account), the
+ * workspace by name or ID, then a lakehouse of it or a new one with schemas, which aantje creates through the Fabric API.
+ * The target keeps the ids, so a renamed workspace or lakehouse stays the same target.
+ */
+export async function addFabricTargetFlow(
+  ui: WizardUi,
+  deps: { readonly targets: Pick<IcebergTargetStore, 'list' | 'add'>; readonly fabric: FabricApiOf },
+): Promise<IcebergTarget | undefined> {
+  const title = 'Add Fabric Lakehouse Target';
+  const tenantText = await ui.input({
+    title: `${title} (1/4)`,
+    prompt: 'Directory (tenant) ID of Fabric; leave it empty for the tenant of your Microsoft account',
+    validate: validateTenantId,
+  });
+  if (tenantText === undefined) return undefined;
+  const tenant = tenantText.trim() === '' ? undefined : tenantText.trim().toLowerCase();
+  const api = deps.fabric(tenant);
+
+  const workspace = await askWorkspace(ui, api, `${title} (2/4)`);
+  if (!workspace) return undefined;
+  const chosen = await askLakehouse(ui, api, workspace, `${title} (3/4)`);
+  if (!chosen) return undefined;
+  const { lakehouse, created } = chosen;
+
+  // A new lakehouse names the target: its name was typed a moment ago. Asked only when another target has that name.
+  const existing = deps.targets.list();
+  const taken = (value: string): boolean =>
+    existing.some((target) => target.name.toLowerCase() === value.trim().toLowerCase());
+  const name =
+    created && !taken(lakehouse.name)
+      ? lakehouse.name
+      : await ui.input({
+          title: `${title} (4/4)`,
+          prompt: 'Name of the target, as shown when you sync a lake',
+          value: taken(lakehouse.name) ? `${lakehouse.name} (${workspace.name})` : lakehouse.name,
+          validate: (value) =>
+            validateRequired('Name')(value) ??
+            (taken(value) ? 'An Iceberg target with this name already exists.' : undefined),
+        });
+  if (name === undefined) return undefined;
+  const target = fabricTarget(idOf(name, existing), name.trim(), {
+    workspace: workspace.id.toLowerCase(),
+    lakehouse: lakehouse.id.toLowerCase(),
+    workspaceName: workspace.name,
+    lakehouseName: lakehouse.name,
+    ...(tenant === undefined ? {} : { tenant }),
+    schemas: lakehouse.schemas,
+  });
+  await deps.targets.add(target);
+  return target;
+}
+
+/** The workspace, asked again until Fabric knows it and it has a capacity; undefined when the user cancels. */
+async function askWorkspace(
+  ui: WizardUi,
+  api: ReturnType<FabricApiOf>,
+  title: string,
+): Promise<FabricWorkspace | undefined> {
+  let typed = '';
+  for (;;) {
+    const text = await ui.input({
+      title,
+      prompt: 'Name or ID of the Fabric workspace',
+      value: typed,
+      validate: validateRequired('Workspace'),
+    });
+    if (text === undefined) return undefined;
+    typed = text.trim();
+    try {
+      const found = await ui.withProgress('Looking up the Fabric workspace...', () => api.workspace(typed));
+      if (found.capacityId !== undefined) return found;
+      ui.error(
+        `The workspace "${found.name}" has no Fabric capacity, so it can hold no lakehouse. Give it a capacity in Fabric or enter another workspace.`,
+      );
+    } catch (error) {
+      // A refused sign-in ends the wizard; a workspace that is not found is asked again.
+      if (isAborted(error) || (isAantjeError(error) && error.code === 'AUTH_FAILED')) throw error;
+      ui.error(userMessageOf(error));
+    }
+  }
+}
+
+/**
+ * A lakehouse of the workspace, or a new one with schemas that is created now (`created`); undefined when the user
+ * cancels.
+ */
+async function askLakehouse(
+  ui: WizardUi,
+  api: ReturnType<FabricApiOf>,
+  workspace: FabricWorkspace,
+  title: string,
+): Promise<{ readonly lakehouse: FabricLakehouseItem; readonly created: boolean } | undefined> {
+  const lakehouses = await ui.withProgress(`Reading the lakehouses of "${workspace.name}"...`, () =>
+    api.lakehouses(workspace.id),
+  );
+  const picked = await ui.pick(`${title}: which lakehouse of "${workspace.name}"?`, [
+    ...lakehouses.map((lakehouse) => ({
+      label: lakehouse.name,
+      description: lakehouse.schemas ? 'with schemas' : 'without schemas: every table goes to dbo',
+      value: lakehouse.id,
+    })),
+    {
+      label: 'New lakehouse...',
+      description: 'aantje creates a lakehouse with schemas',
+      value: NEW_LAKEHOUSE,
+    },
+  ]);
+  if (picked === undefined) return undefined;
+  const chosen = lakehouses.find((lakehouse) => lakehouse.id === picked);
+  if (chosen) return { lakehouse: chosen, created: false };
+  const name = await ui.input({
+    title,
+    prompt: `Name of the new lakehouse in "${workspace.name}"`,
+    value: 'aantje',
+    validate: (value) =>
+      validateLakehouseName(value) ??
+      (lakehouses.some((lakehouse) => lakehouse.name.toLowerCase() === value.trim().toLowerCase())
+        ? 'The workspace has a lakehouse of this name.'
+        : undefined),
+  });
+  if (name === undefined) return undefined;
+  const confirmed = await ui.confirm(
+    `Create the lakehouse "${name.trim()}" with schemas in the Fabric workspace "${workspace.name}"? It uses the capacity of the workspace.`,
+    'Create',
+  );
+  if (!confirmed) return undefined;
+  const lakehouse = await ui.withProgress(`Creating the Fabric lakehouse "${name.trim()}"...`, (report) =>
+    api.createLakehouse(workspace.id, name.trim(), report),
+  );
+  return { lakehouse, created: true };
+}
+
 /** The target to copy to: a saved one, or a new one that is asked for now. */
 async function chooseTarget(ui: WizardUi, deps: IcebergFlowDeps): Promise<IcebergTarget | undefined> {
   const targets = deps.targets.list();
-  if (targets.length === 0) return addIcebergTargetFlow(ui, deps);
+  if (targets.length === 0) return addTargetFlow(ui, deps);
   const items: PickItem<string>[] = [
-    ...targets.map((target) => ({
-      label: target.name,
-      description: `${target.warehouse} at ${target.endpoint}`,
-      value: target.id,
-    })),
+    ...targets.map((target) => ({ label: target.name, description: targetPlace(target), value: target.id })),
     { label: 'New Iceberg target...', description: 'Another REST catalog', value: NEW_TARGET },
+    ...(deps.fabric
+      ? [
+          {
+            label: 'New Fabric lakehouse...',
+            description: 'A lakehouse of Microsoft Fabric, with your Microsoft account',
+            value: NEW_FABRIC_TARGET,
+          },
+        ]
+      : []),
   ];
   const picked = await ui.pick('Sync to Iceberg: which catalog?', items);
   if (picked === undefined) return undefined;
-  return picked === NEW_TARGET
-    ? addIcebergTargetFlow(ui, deps)
-    : targets.find((target) => target.id === picked);
+  if (picked === NEW_TARGET) return addIcebergTargetFlow(ui, deps);
+  if (picked === NEW_FABRIC_TARGET && deps.fabric) {
+    return addFabricTargetFlow(ui, { targets: deps.targets, fabric: deps.fabric });
+  }
+  return targets.find((target) => target.id === picked);
 }
 
-/** The scope of a copy: for a schema the namespace, for a table the namespace and the name, asked with defaults. */
-async function scopeOf(ui: WizardUi, source: CopySource): Promise<CopyScope | undefined> {
+/**
+ * The scope of a copy: for a schema the namespace, for a table the namespace and the name, asked with defaults. A
+ * Fabric lakehouse without schemas has only `dbo`; one with schemas takes letters, digits and _ in a schema name.
+ */
+async function scopeOf(
+  ui: WizardUi,
+  source: CopySource,
+  target: IcebergTarget,
+): Promise<CopyScope | undefined> {
   if (source.kind === 'lake') return LAKE_COPY;
-  const namespace = await ui.input({
-    title: 'Sync to Iceberg: namespace',
-    prompt: 'The Iceberg namespace to write to',
-    value: source.schema,
-    validate: validateRequired('Namespace'),
-  });
+  const onlyDbo = target.fabric !== undefined && !target.fabric.schemas;
+  const namespace = onlyDbo
+    ? 'dbo'
+    : await ui.input({
+        title: 'Sync to Iceberg: namespace',
+        prompt: target.fabric
+          ? 'The schema of the lakehouse to write to'
+          : 'The Iceberg namespace to write to',
+        value: source.schema,
+        validate: (value) =>
+          validateRequired('Namespace')(value) ??
+          (target.fabric && !FABRIC_SCHEMA_NAME.test(value.trim())
+            ? 'Fabric allows letters, digits and _ in a schema name.'
+            : undefined),
+      });
   if (namespace === undefined) return undefined;
   if (source.kind === 'schema') return { kind: 'schema', schema: source.schema, namespace: namespace.trim() };
   const name = await ui.input({
     title: 'Sync to Iceberg: table name',
     prompt: 'The name of the Iceberg table',
     value: source.table,
-    validate: validateRequired('Table name'),
+    validate: (value) =>
+      validateRequired('Table name')(value) ??
+      (target.fabric && /\s/.test(value.trim())
+        ? 'Fabric shows no table whose name has a space.'
+        : undefined),
   });
   if (name === undefined) return undefined;
   return { ...source, namespace: namespace.trim(), name: name.trim() };
@@ -218,6 +421,31 @@ export function planText(tables: readonly TablePlan[]): string {
 }
 
 /**
+ * What a Fabric lakehouse will not take, said before the copy: schema names with other characters than letters, digits
+ * and _ (those tables fail), and table names with a space (Fabric does not show them).
+ */
+export function fabricNameNotes(
+  tables: readonly { readonly schema: string; readonly table: string }[],
+  scope: CopyScope,
+): string {
+  const names = tables.map((table) => icebergNameOf(scope, table));
+  const schemas = [...new Set(names.map((name) => name.namespace))].filter(
+    (namespace) => !FABRIC_SCHEMA_NAME.test(namespace),
+  );
+  const spaced = names.filter((name) => /\s/.test(name.name)).map((name) => `${name.namespace}.${name.name}`);
+  const listed = (items: readonly string[]): string =>
+    `${items.slice(0, 3).join(', ')}${items.length > 3 ? ` and ${items.length - 3} more` : ''}`;
+  return [
+    ...(schemas.length === 0
+      ? []
+      : [
+          `Fabric allows only letters, digits and _ in a schema name: the tables of ${listed(schemas.map((schema) => `"${schema}"`))} will fail.`,
+        ]),
+    ...(spaced.length === 0 ? [] : [`Fabric shows no table whose name has a space (${listed(spaced)}).`]),
+  ].join(' ');
+}
+
+/**
  * Sync to Iceberg for a lake, a schema or a table: asks for the target (a saved one or a new one), the namespace and
  * name where the copy goes, what to do with tables that exist and a confirmation that says what does not map one to one;
  * copies the tables at one snapshot and remembers each copy. Returns the target and the result, or undefined when the
@@ -232,35 +460,72 @@ export async function copyToIcebergFlow(
 ): Promise<IcebergCopied | undefined> {
   const target = await chooseTarget(ui, deps);
   if (!target) return undefined;
-  let secret = await deps.targets.secret(target);
-  if (usesSecret(target) && secret === undefined) {
-    secret = await ui.input({
-      title: `Sign in to "${target.name}"`,
-      prompt: target.signIn === 'oauth2' ? `Client secret of ${target.clientId}` : 'Token',
-      password: true,
-      validate: validateRequired(target.signIn === 'oauth2' ? 'Client secret' : 'Token'),
-    });
-    if (secret === undefined) return undefined;
-    await deps.targets.setSecret(target, secret);
-  }
+  const signedIn = await signInTo(ui, deps, target);
+  if (!signedIn) return undefined;
+  const { secret } = signedIn;
   const covered = await deps.syncCovered?.(target, secret, source);
   if (covered === 'synced') return { target };
   if (covered === 'cancelled') return undefined;
-  const scope = await scopeOf(ui, source);
+  const { fabric } = target;
+  if (fabric && !fabric.schemas && source.kind === 'lake') {
+    ui.error(
+      `The lakehouse "${fabric.lakehouseName ?? fabric.lakehouse}" has no schemas, so all of its tables are in dbo. Sync one schema or one table of "${lake.name}" at a time: it goes to dbo.`,
+    );
+    return undefined;
+  }
+  const scope = await scopeOf(ui, source, target);
   if (!scope) return undefined;
   const existing = await ui.pick('Sync to Iceberg: if the catalog has a table already', EXISTING_ITEMS);
   if (existing === undefined) return undefined;
-  const plan = await deps.plan?.(scope).catch(() => undefined);
-  const at = snapshot === undefined ? 'the newest snapshot' : `snapshot ${snapshot}`;
-  const notes = plan ? planText(plan.tables) : '';
-  const confirmed = await ui.confirm(
-    `Sync ${whatText(scope, lake.name)} at ${at} to ${describeTarget(target)}${whereText(scope)}? The data is read here and written to the storage of the Iceberg catalog; views and macros are not copied.${notes === '' ? '' : ` ${notes}`}`,
-    'Sync',
-  );
+  const plan = await deps.plan?.(scope, target).catch(() => undefined);
+  const confirmed = await ui.confirm(confirmText(lake, snapshot, target, scope, plan?.tables), 'Sync');
   if (!confirmed) return undefined;
 
   const result = await copyAndRecord(ui, deps, lake, target, secret, existing, scope, plan?.partitions);
   return { target, result };
+}
+
+/**
+ * The secret of the target: the stored one, else asked once and stored; a Fabric lakehouse signs in with the Microsoft
+ * account now (the editor asks only when there is no session). Undefined when the user cancels.
+ */
+async function signInTo(
+  ui: WizardUi,
+  deps: IcebergFlowDeps,
+  target: IcebergTarget,
+): Promise<{ readonly secret: string | undefined } | undefined> {
+  const stored = await deps.targets.secret(target, true);
+  if (!usesSecret(target) || stored !== undefined) return { secret: stored };
+  const secret = await ui.input({
+    title: `Sign in to "${target.name}"`,
+    prompt: target.signIn === 'oauth2' ? `Client secret of ${target.clientId}` : 'Token',
+    password: true,
+    validate: validateRequired(target.signIn === 'oauth2' ? 'Client secret' : 'Token'),
+  });
+  if (secret === undefined) return undefined;
+  await deps.targets.setSecret(target, secret);
+  return { secret };
+}
+
+/** The question before a first sync: what goes where, and what does not map one to one. */
+function confirmText(
+  lake: { readonly name: string },
+  snapshot: number | undefined,
+  target: IcebergTarget,
+  scope: CopyScope,
+  tables: readonly TablePlan[] | undefined,
+): string {
+  const at = snapshot === undefined ? 'the newest snapshot' : `snapshot ${snapshot}`;
+  const notes = [
+    ...(tables ? [planText(tables)] : []),
+    ...(tables && target.fabric ? [fabricNameNotes(tables, scope)] : []),
+  ]
+    .filter((note) => note !== '')
+    .join(' ');
+  const where = target.fabric
+    ? 'The data is read here and written to OneLake; Fabric shows the tables within about two minutes. Views and macros are not copied.'
+    : 'The data is read here and written to the storage of the Iceberg catalog; views and macros are not copied.';
+  return `Sync ${whatText(scope, lake.name)} at ${at} to ${describeTarget(target)}${whereText(scope)}? ${where}${notes === '' ? '' : ` ${notes}`}`;
 }
 
 /** Runs the copy, remembers every table that was copied and tells what happened. */
@@ -313,6 +578,19 @@ async function copyAndRecord(
   else if (scope.kind === 'schema')
     await deps.copies.replaceSchema(lake.id, target.id, scope.schema, records);
   else await deps.copies.save(records);
+  // The tables it could not write: the report shows them as errors until a later sync writes them.
+  await deps.copies.rememberFailures?.(lake.id, target.id, {
+    failed: result.tables
+      .filter((table) => table.status === 'failed')
+      .map((table) => ({
+        schema: table.schema,
+        table: table.table,
+        error: table.error ?? 'failed',
+        snapshot: result.snapshot,
+        failedAt: copiedAt,
+      })),
+    written: records,
+  });
   ui[result.tables.some((table) => table.status === 'failed') ? 'error' : 'info'](
     resultText(result, records.length, lake.name, target.name),
   );
@@ -355,16 +633,14 @@ export async function removeIcebergTargetFlow(
   }
   const picked = await ui.pick(
     'Remove Iceberg Target',
-    targets.map((target) => ({
-      label: target.name,
-      description: `${target.warehouse} at ${target.endpoint}`,
-      value: target.id,
-    })),
+    targets.map((target) => ({ label: target.name, description: targetPlace(target), value: target.id })),
   );
   const target = targets.find((candidate) => candidate.id === picked);
   if (!target) return false;
   const confirmed = await ui.confirm(
-    `Remove the Iceberg target "${target.name}"? Its stored sign-in and aantje's records of the copies are deleted; the Iceberg tables stay in the catalog.`,
+    target.fabric
+      ? `Remove the Iceberg target "${target.name}"? aantje's records of the copies are deleted; the lakehouse and its tables stay in Fabric.`
+      : `Remove the Iceberg target "${target.name}"? Its stored sign-in and aantje's records of the copies are deleted; the Iceberg tables stay in the catalog.`,
     'Remove',
   );
   if (!confirmed) return false;

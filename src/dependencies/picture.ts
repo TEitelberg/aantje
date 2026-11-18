@@ -1,16 +1,22 @@
 import { groupBy } from '../order';
 import type { DependencyEdge, NodeKind } from './graph';
-import { DIRECTIONS, brokenName, nameAt, traverse } from './model';
+import { brokenName, nameAt } from './model';
 import type { DependenciesData } from './model';
 
 /** What the graph of one object shows: the objects connected to it, or every object with dependencies. */
 export type GraphReach = 'connected' | 'all';
 export const GRAPH_REACHES: readonly GraphReach[] = ['connected', 'all'];
 
+/** What the graph draws: the objects, or their columns (an object report with a column lineage). */
+export type GraphMode = 'objects' | 'columns';
+
 export interface PictureInput {
-  /** How many levels the graph of an object follows, on each side of it. */
-  readonly depth: number;
   readonly reach: GraphReach;
+  /**
+   * The selected object of the graph of the lake or a schema: what is not connected to it is faint. The graph of an
+   * object is about that object and ignores it.
+   */
+  readonly focus?: number | undefined;
 }
 
 /** A box of the graph: an object of the data, or a name that no object has. */
@@ -23,7 +29,7 @@ export interface PictureItem {
   readonly column: number;
   /** Centred on 0 in its column. */
   readonly row: number;
-  /** Not connected to the object of the report; drawn faint on Show all. */
+  /** Not connected to the object of the report or the selected one; drawn faint. */
   readonly faint: boolean;
 }
 
@@ -40,18 +46,33 @@ export interface Picture {
 }
 
 /**
- * The objects that the graph of an object connects: the object, what it uses and what uses it, each up to `depth`.
- * The problem tables cover the same objects. Undefined for a lake or a schema.
+ * The objects connected to `start` by dependencies in either direction, over any number of steps: what it uses and
+ * what uses it, what those use and what uses them, and so on; `start` included. Each object is visited once, so a cycle
+ * ends where it comes back.
  */
-export function connectedObjects(data: DependenciesData, depth: number): ReadonlySet<number> | undefined {
-  const start = data.target;
-  if (start === null) return undefined;
-  return new Set([
-    start,
-    ...DIRECTIONS.flatMap((direction) =>
-      traverse(data, start, direction, depth).rows.map(({ node }) => node),
-    ),
-  ]);
+export function connectedComponent(
+  edges: readonly Pick<DependencyEdge, 'from' | 'to'>[],
+  start: number,
+): ReadonlySet<number> {
+  const next = groupBy(
+    edges.flatMap(({ from, to }): (readonly [number, number])[] => [
+      [from, to],
+      [to, from],
+    ]),
+    ([at]) => at,
+    ([, other]) => other,
+  );
+  const found = new Set([start]);
+  const open = [start];
+  for (let at = open.pop(); at !== undefined; at = open.pop()) {
+    for (const other of next.get(at) ?? []) {
+      if (!found.has(other)) {
+        found.add(other);
+        open.push(other);
+      }
+    }
+  }
+  return found;
 }
 
 // The column of each box: one more than the largest column of what it uses. An edge back into a cycle is ignored.
@@ -91,15 +112,23 @@ function rowsOf(columns: readonly number[], uses: ReadonlyMap<number, readonly n
   return rows;
 }
 
+// The object whose connected objects stand out: the object of the report, or the selected one of the lake or a schema.
+function startOf(data: DependenciesData, input: PictureInput): number | undefined {
+  if (data.target !== null) return data.target;
+  return input.focus !== undefined && data.nodes[input.focus] !== undefined ? input.focus : undefined;
+}
+
 /**
- * The graph as boxes in columns along the data flow. For the lake or a schema it holds every object of the data; for
- * an object what it uses and what uses it, each up to the depth, or every object on Show all. The names that no object
+ * The graph as boxes in columns along the data flow. For an object it holds every object connected to it
+ * (`connectedComponent`), and on Show all every other object of the data, faint. For the lake or a schema it holds every
+ * object of the data; with a selected object (`focus`), what is not connected to it is faint. The names that no object
  * has hang on the objects that name them.
  */
 export function picture(data: DependenciesData, input: PictureInput): Picture {
-  const near = connectedObjects(data, input.depth);
+  const start = startOf(data, input);
+  const near = start === undefined ? undefined : connectedComponent(data.edges, start);
   const shown =
-    near && input.reach === 'connected'
+    near && data.target !== null && input.reach === 'connected'
       ? [...near].sort((a, b) => a - b)
       : data.nodes.map((_, index) => index);
   const itemOf = new Map(shown.map((node, item) => [node, item]));
@@ -119,11 +148,16 @@ export function picture(data: DependenciesData, input: PictureInput): Picture {
     if (user === undefined) continue;
     const name = brokenName(broken);
     const key = `${broken.kind}:${name}`;
+    const faint = boxes[user]?.faint ?? false;
     let item = missing.get(key);
+    const box = item === undefined ? undefined : boxes[item];
     if (item === undefined) {
       item = boxes.length;
       missing.set(key, item);
-      boxes.push({ node: undefined, kind: 'missing', name, faint: boxes[user]?.faint ?? false });
+      boxes.push({ node: undefined, kind: 'missing', name, faint });
+    } else if (box && !faint) {
+      // A name stands out as soon as one object that stands out names it.
+      boxes[item] = { ...box, faint: false };
     }
     edges.push({ from: item, to: user, kind: 'missing' });
   }

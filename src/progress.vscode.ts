@@ -2,15 +2,19 @@ import * as vscode from 'vscode';
 import { runCancellable } from './cancel';
 import { queryCancelled } from './catalog/drivers/limits';
 
-/** Runs `run` under a notification with Cancel; cancelling or `outer` aborts what the engine can stop. */
+/**
+ * Runs `run` under a notification with Cancel; cancelling or `outer` aborts what the engine can stop. `report` puts a
+ * line under the title, for example the step that runs now.
+ */
 export async function withCancel<T>(
   title: string,
-  run: (signal: AbortSignal) => Promise<T>,
+  run: (signal: AbortSignal, report: (message: string) => void) => Promise<T>,
   outer?: AbortSignal,
 ): Promise<T> {
   return await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title, cancellable: true },
-    (_progress, token) => runCancellable(token, run, outer),
+    (progress, token) =>
+      runCancellable(token, (signal) => run(signal, (message) => progress.report({ message })), outer),
   );
 }
 

@@ -99,6 +99,8 @@ export function registerSqlLanguage(deps: SqlLanguageDeps): vscode.Disposable {
     '"',
     // Opens the snapshot times inside `TIMESTAMP => '`; elsewhere a string gets nothing.
     "'",
+    // The parameters that the header declares, after `$`.
+    '$',
   );
 
   const hover = vscode.languages.registerHoverProvider(SQL_SELECTOR, {

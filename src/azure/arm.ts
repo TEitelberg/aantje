@@ -13,6 +13,9 @@ export const ARM_SCOPE = 'https://management.azure.com/.default';
 /** The scope of the token that Azure Storage accepts (Entra access to the data files). */
 export const STORAGE_SCOPE = 'https://storage.azure.com/.default';
 
+/** The scope of the token that the Fabric REST API accepts (workspaces and lakehouses of Microsoft Fabric). */
+export const FABRIC_SCOPE = 'https://api.fabric.microsoft.com/.default';
+
 /** The scope of the token that Azure Database for PostgreSQL accepts as the password of an Entra user. */
 export const POSTGRES_SCOPE = 'https://ossrdbms-aad.database.windows.net/.default';
 

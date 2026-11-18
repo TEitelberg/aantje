@@ -2,32 +2,21 @@
 // DOM builders of the snapshot report; user input comes back through callbacks.
 import {
   actionButton,
-  dataTable,
   kindBoxes,
   modeGroup,
-  pickCell,
   rangeFields,
-  tableRow,
-  toolbar as filterBar,
+  toolbar as filterToolbar,
   withMembers,
 } from '../shell/blocks';
-import type { ListRow } from '../shell/blocks';
 import { el } from '../shell/dom';
-import { whoText, withoutUtc } from '../shell/model';
 import type { SnapshotActionRequest } from '../snapshot-changes/actions';
 import { detailPane } from '../snapshot-changes/detail';
-import {
-  KIND_LABEL,
-  OTHER_LABEL,
-  OTHER_LANE,
-  POINT_KINDS,
-  detailOf,
-  summaryOf,
-} from '../snapshot-changes/model';
+import { KIND_LABEL, OTHER_LABEL, OTHER_LANE, POINT_KINDS } from '../snapshot-changes/model';
 import type { Model, PointKind } from '../snapshot-changes/model';
 import type { SnapshotReportXAxis } from './chart-options';
 import { snapshotReportTableChoices } from './model';
 import type { SnapshotReportView } from './model';
+import type { TabId } from './state';
 
 const LANE_PX = 28;
 const CHART_EXTRA_PX = 140;
@@ -38,6 +27,8 @@ interface DetailView {
   readonly latest: number;
   readonly selected: number | undefined;
   readonly other: number | undefined;
+  /** The tab that shows the pane: its hints name the chart or the table. */
+  readonly tab: TabId;
 }
 
 interface DetailHandlers {
@@ -53,20 +44,34 @@ export interface Choices {
   readonly axis: SnapshotReportXAxis;
 }
 
-interface ToolbarHandlers {
+interface FilterHandlers {
   readonly onChange: (next: Choices) => void;
+}
+
+interface ChartHandlers {
+  readonly onAxis: (axis: SnapshotReportXAxis) => void;
   readonly onAction: (request: SnapshotActionRequest) => void;
 }
 
+const HINT: Readonly<Record<TabId, string>> = {
+  chart: 'Select a snapshot in the chart to see what it changed.',
+  snapshots: 'Select a snapshot in the table to see what it changed.',
+};
+
+const SECOND_HINT: Readonly<Record<TabId, string>> = {
+  chart: 'Ctrl-click another snapshot in the chart to compare with it.',
+  snapshots: 'Ctrl-click another snapshot in the table, or press Ctrl and Enter on it, to compare with it.',
+};
+
 export function emptyPlot(snapshotCount: number): HTMLElement {
-  return el(
-    'p',
-    'empty',
-    snapshotCount === 0
-      ? 'This catalog has no snapshots.'
-      : 'No snapshot in this range changed the chosen tables with the chosen kinds of change.',
-  );
+  return el('p', 'empty', emptyText(snapshotCount));
 }
+
+/** Why nothing is drawn or listed: the catalog has no snapshots, or the filters leave none. */
+export const emptyText = (snapshotCount: number): string =>
+  snapshotCount === 0
+    ? 'This catalog has no snapshots.'
+    : 'No snapshot in this range changed the chosen tables with the chosen kinds of change.';
 
 /** The height of the chart: a row per lane plus the legend, the axis and the zoom. */
 export const chartHeight = (laneCount: number): number =>
@@ -83,48 +88,11 @@ export function columnAt(view: SnapshotReportView, axis: SnapshotReportXAxis, x:
   }, undefined)?.id;
 }
 
-export function snapshotList(
-  view: SnapshotReportView,
-  model: Model,
-  latest: number,
-  onSelect: (id: number, extend: boolean) => void,
-): { readonly children: HTMLElement[]; readonly rows: Map<number, ListRow> } {
-  const rows = new Map<number, ListRow>();
-  const body = view.columns.toReversed().flatMap((column) => {
-    const snapshot = detailOf(model, latest, column.id);
-    if (!snapshot) {
-      return [];
-    }
-    const { cell, pick } = pickCell(
-      `@${snapshot.id}`,
-      `Snapshot ${snapshot.id}. Press Ctrl and Enter to choose it as the second snapshot of a comparison.`,
-      (event) => onSelect(snapshot.id, event.ctrlKey || event.metaKey),
-    );
-    const row = tableRow([
-      cell,
-      withoutUtc(snapshot.timeText),
-      el('td', 'who', whoText(snapshot.author, snapshot.message)),
-      summaryOf(snapshot),
-    ]);
-    rows.set(snapshot.id, { row, pick });
-    return [row];
-  });
-  return {
-    children: [
-      el('h2', undefined, 'Snapshots'),
-      dataTable(['Snapshot', 'Time (UTC)', 'Author and message', 'Changes'], body),
-    ],
-    rows,
-  };
-}
-
 /** The pane of the selected snapshot, or the hint to select one. */
 export function detailChildren(view: DetailView, on: DetailHandlers): HTMLElement[] {
   const second = el('p', 'note');
   second.append(
-    view.other === undefined
-      ? 'Ctrl-click another snapshot in the chart, or press Ctrl and Enter on it in the list, to compare with it.'
-      : `Second snapshot for comparisons: @${view.other}. `,
+    view.other === undefined ? SECOND_HINT[view.tab] : `Second snapshot for comparisons: @${view.other}. `,
   );
   if (view.other !== undefined) {
     const clear = el('button', 'action', 'Clear');
@@ -136,13 +104,13 @@ export function detailChildren(view: DetailView, on: DetailHandlers): HTMLElemen
       ...view,
       tableQueries: true,
       notes: [second],
-      hint: 'Select a snapshot in the chart or in the list to see what it changed.',
+      hint: HINT[view.tab],
     },
     on.onAction,
   );
 }
 
-function tablesFilter(model: Model, current: () => Choices, on: ToolbarHandlers): HTMLElement {
+function tablesFilter(model: Model, current: () => Choices, on: FilterHandlers): HTMLElement {
   const filter = el('details', 'filter');
   const summary = el('summary');
   const body = el('div', 'choices');
@@ -197,11 +165,14 @@ function tablesFilter(model: Model, current: () => Choices, on: ToolbarHandlers)
   return filter;
 }
 
-/** `current` is read on every change: the toolbar outlives the choices it was built with. */
-export function toolbar(model: Model, current: () => Choices, on: ToolbarHandlers): HTMLElement {
+/**
+ * The filters above the tabs, which the chart and the table both follow: tables, kinds of change and the range.
+ * `current` is read on every change: the bar outlives the choices it was built with.
+ */
+export function filterBar(model: Model, current: () => Choices, on: FilterHandlers): HTMLElement {
   const first = model.snapshots[0]?.id ?? 0;
   const last = model.snapshots.at(-1)?.id ?? 0;
-  return filterBar(
+  return filterToolbar(
     tablesFilter(model, current, on),
     kindBoxes(
       POINT_KINDS,
@@ -215,16 +186,24 @@ export function toolbar(model: Model, current: () => Choices, on: ToolbarHandler
       (end) => current().range[end],
       (end, next) => on.onChange({ ...current(), range: { ...current().range, [end]: next } }),
     ),
+  );
+}
+
+/** What belongs to the chart only: its x axis, and Show latest snapshot. */
+export function chartBar(axis: SnapshotReportXAxis, on: ChartHandlers): HTMLElement {
+  const bar = filterToolbar(
     modeGroup(
       'X axis',
       [
         { value: 'order' as const, text: 'Order' },
         { value: 'time' as const, text: 'Time' },
       ],
-      current().axis,
-      (axis) => on.onChange({ ...current(), axis }),
+      axis,
+      on.onAxis,
       { className: 'axis', shown: true },
     ),
     actionButton('Show latest snapshot', () => on.onAction({ action: 'showLatest' })),
   );
+  bar.setAttribute('aria-label', 'Chart');
+  return bar;
 }

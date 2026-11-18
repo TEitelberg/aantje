@@ -1,8 +1,7 @@
 import { qualifiedName, quoteLiteral } from '../catalog/ddl';
 import { LAKE } from '../data/attach';
-import { PREVIEW_LIMIT } from '../data/types';
 import { commented } from '../ddl-script/check';
-import { atVersion, newestComment, newestNote, pinnedOf } from '../script';
+import { atVersion, LIMIT_CLAUSE, newestComment, newestNote, pinnedOf } from '../script';
 import type { ChangedTable } from '../tree/refs';
 import { blocks, catalogOf } from './common';
 import type { Folder, Ref, Tree } from './common';
@@ -39,10 +38,10 @@ export function selectHistory(tree: Tree, ref: Folder<'history'>): string {
     `ducklake_table_${name}(${lake}, ${quoteLiteral(ref.schema.name)}, ${quoteLiteral(ref.table.name)}, 0, ${snapshot})`;
   return [
     `-- What the snapshots up to @${snapshot} changed in the table`,
-    `SELECT * FROM ${changes('changes')} LIMIT ${PREVIEW_LIMIT};`,
+    `SELECT * FROM ${changes('changes')} ${LIMIT_CLAUSE};`,
     '-- Only the rows that were inserted, or only those that were deleted',
-    commented(`SELECT * FROM ${changes('insertions')} LIMIT ${PREVIEW_LIMIT};`),
-    commented(`SELECT * FROM ${changes('deletions')} LIMIT ${PREVIEW_LIMIT};`),
+    commented(`SELECT * FROM ${changes('insertions')} ${LIMIT_CLAUSE};`),
+    commented(`SELECT * FROM ${changes('deletions')} ${LIMIT_CLAUSE};`),
   ].join('\n');
 }
 
@@ -50,7 +49,7 @@ export function selectChange(ref: Ref<'detail'> & { readonly change: ChangedTabl
   const { snapshot, table } = ref.change;
   return [
     `-- What snapshot @${snapshot} changed in the table (its names at that snapshot)`,
-    `SELECT * FROM ducklake_table_changes(${lake}, ${quoteLiteral(table.schema)}, ${quoteLiteral(table.table)}, ${snapshot}, ${snapshot}) LIMIT ${PREVIEW_LIMIT};`,
+    `SELECT * FROM ducklake_table_changes(${lake}, ${quoteLiteral(table.schema)}, ${quoteLiteral(table.table)}, ${snapshot}, ${snapshot}) ${LIMIT_CLAUSE};`,
   ].join('\n');
 }
 

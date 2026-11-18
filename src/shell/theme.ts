@@ -1,18 +1,21 @@
 /// <reference lib="dom" />
+import { housePalette } from './house-colors';
+import type { ReportPalette } from './house-colors';
 import { chartTheme, modeOf, readPalette } from './palette';
-import type { ColorMode, Palette } from './palette';
+import type { ColorMode } from './palette';
 import type { Severity } from './model';
 
 /** The colours of the current VS Code theme, read when a page is built. */
 export interface Theme {
   readonly mode: ColorMode;
-  readonly palette: Palette;
+  /** The background, text, lines and font of the theme, and the colours of aantje on its background. */
+  readonly palette: ReportPalette;
   readonly chart: Record<string, unknown>;
 }
 
 export function readTheme(): Theme {
   const mode = modeOf(document.body.className);
-  const palette = readPalette(getComputedStyle(document.body), mode);
+  const palette = housePalette(readPalette(getComputedStyle(document.body), mode), mode);
   return { mode, palette, chart: chartTheme(palette, mode) };
 }
 

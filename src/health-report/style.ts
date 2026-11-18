@@ -3,8 +3,8 @@ import { SHELL_CSS } from '../shell/style';
 export const HEALTH_CSS = `${SHELL_CSS}
 .run { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: var(--aantje-control-gap) 0; }
 .run input[type="number"] { width: 6em; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); font: inherit; }
-button.primary { margin: 2px 4px 2px 0; padding: 2px 12px; color: var(--vscode-button-foreground); background: var(--vscode-button-background); border: 1px solid var(--vscode-contrastBorder, transparent); font: inherit; cursor: pointer; }
-button.primary:hover { background: var(--vscode-button-hoverBackground); }
+button.primary { margin: 2px 4px 2px 0; padding: 2px 12px; color: var(--aantje-on-primary); background: var(--aantje-primary); border: 1px solid var(--vscode-contrastBorder, transparent); font: inherit; cursor: pointer; }
+button.primary:hover:not(:disabled) { filter: brightness(1.15); }
 button.primary:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
 button:disabled { opacity: 0.5; cursor: default; }
 .groups { margin: 8px 0; padding: 0; list-style: none; }
@@ -22,9 +22,9 @@ button:disabled { opacity: 0.5; cursor: default; }
 .filters .set-label { margin-right: 4px; color: var(--vscode-descriptionForeground); }
 .filters input[type="search"] { width: 18em; max-width: 100%; color: var(--vscode-input-foreground); background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); font: inherit; }
 .health-finding { margin: var(--aantje-control-gap) 0; border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border)); border-left-width: 4px; border-radius: 4px; }
-.health-finding.error { border-left-color: var(--vscode-editorError-foreground); }
-.health-finding.warning { border-left-color: var(--vscode-editorWarning-foreground); }
-.health-finding.info { border-left-color: var(--vscode-editorInfo-foreground); }
+.health-finding.error { border-left-color: var(--aantje-error); }
+.health-finding.warning { border-left-color: var(--aantje-warning); }
+.health-finding.info { border-left-color: var(--aantje-info); }
 .health-finding summary { padding: 6px 10px; cursor: pointer; }
 .health-finding summary:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
 .health-finding .sev { margin-right: 6px; font-weight: 600; }

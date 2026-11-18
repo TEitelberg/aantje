@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import { rootOf } from '../actions';
 import { openReport } from '../shell/host.vscode';
-import { scopeKey, scopeOfNode, scopeSuffix } from '../shell/scope';
+import { reportHeading } from '../shell/report-heading';
+import { scopeKey, scopeOfNode, scopeSchema } from '../shell/scope';
 import type { ReportScope } from '../shell/scope';
 import { reportPortOf } from '../shell/report-port.vscode';
 import type { ReportCommandEnv } from '../shell/report-port.vscode';
@@ -26,13 +27,14 @@ export function registerActivityCommand(env: ReportCommandEnv): vscode.Disposabl
     open: (reader, profile, { scope }) => ({
       progress: `Reading the activity of "${profile.name}"...`,
       read: (signal) => readActivity(reader, profile.name, signal, scope),
-      title: () => `Activity · ${profile.name}${scopeSuffix(scope)}`,
+      title: () => `${reportHeading('Activity', scopeSchema(scope))} · ${profile.name}`,
     }),
-    planAction: planActivityAction,
+    planAction: (_data, request) => planActivityAction(request),
     perform: (plan, profile) =>
-      performActivityAction(plan, reportPortOf(env, profile), async () => {
-        const node = rootOf(tree, profile.id);
-        await vscode.commands.executeCommand('aantje.showSnapshotReport', node);
+      performActivityAction(plan, reportPortOf(env, profile), {
+        showSnapshotReport: async () => {
+          await vscode.commands.executeCommand('aantje.showSnapshotReport', rootOf(tree, profile.id));
+        },
       }),
   });
 

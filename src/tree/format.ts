@@ -21,7 +21,7 @@ import { codeBlock, inlineCode, markdownText, withoutInvisible } from '../markdo
 import { count, formatBytes, formatDuration } from '../shell/numbers';
 import { describeAction } from '../catalog/changes';
 import { describeChanges, formatUtc } from '../snapshot';
-import type { HistoryEntry, HistoryStatus } from '../sql/history';
+import type { Favorite, HistoryEntry, HistoryStatus } from '../sql/history';
 import type { ConnectionNotice, ConnectionState } from './refs';
 
 // Descriptions and Markdown tooltips of the explorer nodes; pure.
@@ -261,6 +261,9 @@ function snapshotFacts(
 export const QUERY_HISTORY_TOOLTIP =
   'The statements that this aantje ran on this connection in the SQL editor, on this machine, newest first. Queries of other users and tools are not in it.';
 
+export const FAVORITES_TOOLTIP =
+  'The statements of the Query History that you kept as favourites. They stay when the history rotates or is cleared.';
+
 // The longest label of a statement; the tooltip has all of it.
 const QUERY_LABEL_LENGTH = 80;
 
@@ -273,6 +276,11 @@ export function queryLabel(sql: string): string {
   return characters.length > QUERY_LABEL_LENGTH
     ? `${characters.slice(0, QUERY_LABEL_LENGTH - 1).join('')}…`
     : line;
+}
+
+/** The label of a favourite: its name of its own, else its statement, both as `queryLabel` shows them. */
+export function favoriteLabel(favorite: Pick<Favorite, 'sql' | 'label'>): string {
+  return queryLabel(favorite.label ?? favorite.sql);
 }
 
 const pad = (value: number): string => String(value).padStart(2, '0');
@@ -308,6 +316,9 @@ export function queryTooltip(entry: HistoryEntry): string {
       `Duration: ${formatDuration(entry.elapsedMs)}`,
       ...rows,
       ...(entry.changed === undefined ? [] : [`Rows changed: ${count(entry.changed)}`]),
+      ...Object.entries(entry.parameters ?? {}).map(
+        ([name, value]) => `Parameter ${inlineCode(name)}: ${value === '' ? '(empty)' : inlineCode(value)}`,
+      ),
       `Status: ${STATUS_TEXT[entry.status]}`,
     ]),
     entry.error && `Error: ${markdownText(entry.error)}`,

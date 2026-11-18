@@ -1,6 +1,7 @@
 import type * as vscode from 'vscode';
 import { openReport } from '../shell/host.vscode';
 import { reportPortOf } from '../shell/report-port.vscode';
+import { reportHeading } from '../shell/report-heading';
 import type { ReportCommandEnv } from '../shell/report-port.vscode';
 import { planSnapshotAction } from '../snapshot-changes/actions';
 import { performSnapshotAction } from '../snapshot-changes/execute';
@@ -20,7 +21,7 @@ export function registerSnapshotReportCommand(env: ReportCommandEnv): vscode.Dis
     open: (reader, profile) => ({
       progress: `Reading the snapshots of "${profile.name}"...`,
       read: async (signal) => ({ connection: profile.name, ...(await readNewest(reader, signal)) }),
-      title: () => `Snapshot Report · ${profile.name}`,
+      title: () => `${reportHeading('Snapshot Report')} · ${profile.name}`,
     }),
     planAction: planSnapshotAction,
     perform: (plan, profile) =>

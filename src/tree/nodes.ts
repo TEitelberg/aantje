@@ -7,15 +7,17 @@ import { fileTypeOf } from '../files/kinds';
 import type { FileEntry } from '../files/listing';
 import type { IcebergRow } from '../iceberg/service';
 import { visibleLine as shown } from '../markdown';
-import type { HistoryEntry, HistoryStatus } from '../sql/history';
+import type { Favorite, HistoryEntry, HistoryStatus } from '../sql/history';
 import {
   columnDescription,
   columnTooltip,
   connectionDescription,
   connectionTooltip,
+  favoriteLabel,
   fileDescription,
   fileRootTooltip,
   fileTooltip,
+  FAVORITES_TOOLTIP,
   FILES_TOOLTIP,
   macroDescription,
   macroTooltip,
@@ -95,6 +97,7 @@ const FOLDERS = {
   tags: { label: 'Tags', segment: 'tags', contextValue: 'folder.tags' },
   snapshots: { label: 'Snapshots', segment: 'snapshots', contextValue: 'folder.snapshots' },
   queryHistory: { label: 'Query History', segment: 'queries', contextValue: 'folder.queryHistory' },
+  favorites: { label: 'Favorites', segment: 'favorites', contextValue: 'folder.favorites' },
   files: { label: 'Files', segment: 'files', contextValue: 'folder.files' },
   iceberg: { label: 'Iceberg', segment: 'iceberg', contextValue: 'folder.iceberg' },
 } as const;
@@ -105,7 +108,18 @@ const FILE_NODES = {
   folder: { icon: 'folder', contextValue: 'fileFolder' },
   file: { icon: 'file', contextValue: 'file' },
   importable: { icon: 'file', contextValue: 'file.importable' },
+  parquet: { icon: 'file', contextValue: 'file.importable.parquet' },
 } as const;
+
+// A Parquet file can also be inspected.
+const fileNodeKind = (name: string): (typeof FILE_NODES)['file' | 'importable' | 'parquet'] => {
+  const kind = fileTypeOf(name)?.kind;
+  return kind === undefined
+    ? FILE_NODES.file
+    : kind === 'parquet'
+      ? FILE_NODES.parquet
+      : FILE_NODES.importable;
+};
 
 // A failed and a cancelled statement have icons of their own.
 const QUERY_ICONS: Readonly<Record<HistoryStatus, string>> = {
@@ -218,6 +232,7 @@ export function folderNode(parent: TreeNode, folder: FolderRef): TreeNode {
       icon: 'history',
       command: { id: 'aantje.showSchemaHistory', title: 'Show History' },
     }),
+    ...(folder.folder === 'favorites' && { icon: 'star-full' }),
   };
 }
 
@@ -234,6 +249,8 @@ function folderPresentation(folder: FolderRef): Pick<TreeNode, 'description' | '
       };
     case 'queryHistory':
       return { tooltip: QUERY_HISTORY_TOOLTIP, hasChildren: true };
+    case 'favorites':
+      return { tooltip: FAVORITES_TOOLTIP, hasChildren: true };
     case 'files':
       return { tooltip: FILES_TOOLTIP, hasChildren: true };
     case 'iceberg':
@@ -384,18 +401,53 @@ export function columnNode(
   return member ? { ...node, contextValue: 'column.member' } : node;
 }
 
-/** The statements below the folder Query History, newest first; a click opens one as a new query. */
-export function queryNodes(parent: TreeNode, entries: readonly HistoryEntry[], now: number): TreeNode[] {
-  if (entries.length === 0) return [messageNode(parent, 'No queries yet.', 'info')];
-  return entries.map((entry) => ({
-    id: `${parent.id}/q${entry.seq}`,
-    ref: { kind: 'query', connectionId: parent.ref.connectionId, entry },
-    label: queryLabel(entry.sql),
-    description: queryDescription(entry, now),
-    tooltip: queryTooltip(entry),
-    icon: QUERY_ICONS[entry.status],
-    contextValue: 'query',
-    command: { id: 'aantje.openQueryHistoryEntry', title: 'Open as New Query' },
+/**
+ * The internal command of the row of a statement or favourite: VS Code runs it on every click, and it opens the
+ * statement as a new query on a double-click (`aantje.openQueryHistoryEntry`, Open as New Query in the menu).
+ */
+export const CLICK_QUERY = '_aantje.clickQueryHistoryEntry';
+
+const OPEN_QUERY = { id: CLICK_QUERY, title: 'Open as New Query' } as const;
+
+/**
+ * The children of the folder Query History: the folder Favorites while the connection has any, then the statements,
+ * newest first; a double-click opens one as a new query.
+ */
+export function queryNodes(
+  parent: TreeNode,
+  entries: readonly HistoryEntry[],
+  now: number,
+  favorites = 0,
+): TreeNode[] {
+  return [
+    ...(favorites > 0 ? [folderNode(parent, { folder: 'favorites' })] : []),
+    ...(entries.length === 0
+      ? [messageNode(parent, 'No queries yet.', 'info')]
+      : entries.map((entry): TreeNode => ({
+          id: `${parent.id}/q${entry.seq}`,
+          ref: { kind: 'query', connectionId: parent.ref.connectionId, entry },
+          label: queryLabel(entry.sql),
+          description: queryDescription(entry, now),
+          tooltip: queryTooltip(entry),
+          icon: QUERY_ICONS[entry.status],
+          contextValue: 'query',
+          command: OPEN_QUERY,
+          hasChildren: false,
+        }))),
+  ];
+}
+
+/** The favourites below the folder Favorites, newest first: as a statement of the history, with the user's label. */
+export function favoriteNodes(parent: TreeNode, favorites: readonly Favorite[], now: number): TreeNode[] {
+  return favorites.map((favorite) => ({
+    id: `${parent.id}/f${favorite.id}`,
+    ref: { kind: 'query', connectionId: parent.ref.connectionId, entry: favorite, favorite },
+    label: favoriteLabel(favorite),
+    description: queryDescription(favorite, now),
+    tooltip: queryTooltip(favorite),
+    icon: QUERY_ICONS[favorite.status],
+    contextValue: 'query.favorite',
+    command: OPEN_QUERY,
     hasChildren: false,
   }));
 }
@@ -439,7 +491,7 @@ export function fileEntryNode(parent: TreeNode, place: FilePlace, entry: FileEnt
     label: shown(entry.name),
     description: fileDescription(entry),
     tooltip: fileTooltip(entry),
-    ...(fileTypeOf(entry.name) ? FILE_NODES.importable : FILE_NODES.file),
+    ...fileNodeKind(entry.name),
     hasChildren: false,
   };
 }

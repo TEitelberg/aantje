@@ -1,13 +1,25 @@
 /// <reference lib="dom" />
 // Browser side of the Maintenance Advisor; DOM only, the logic is in model.ts and recommend.ts.
-import { actionButton, cardGrid, empty, findingCard, note, pageHeader } from '../shell/blocks';
+import {
+  actionButton,
+  cardGrid,
+  dataTable,
+  empty,
+  findingCard,
+  note,
+  pageHeader,
+  tableRow,
+} from '../shell/blocks';
 import { MAINTENANCE_LABEL } from '../maintenance/labels';
 import { el } from '../shell/dom';
-import { formatUtc, tableLabel } from '../shell/model';
+import { count, formatBytes, formatUtc, tableLabel } from '../shell/model';
+import { reportHeading } from '../shell/report-heading';
+import { scopeSchema } from '../shell/scope';
 import { reportPage } from '../shell/report-page';
 import { readTheme, severityColor } from '../shell/theme';
 import { CANDIDATE_LIMIT, INLINED_FAILED_NOTE, advisorCards, policyLines, skippedMeasures } from './model';
 import type { AdvisorData } from './model';
+import { UNPARTITIONED_NOTE } from './partitioning';
 import { isAdvisorMessage } from './protocol';
 import { levelText, recommendationsOf, riskText } from './recommend';
 import type { Recommendation, RecommendationKind } from './recommend';
@@ -20,6 +32,33 @@ const SCRIPT_ACTION = {
   rewrite: 'scriptRewrite',
   flush: 'scriptFlush',
 } as const satisfies Record<RecommendationKind, string>;
+
+/** The large tables without a partitioning, each with Suggest Partitioning...; nothing when there is none. */
+function unpartitionedSection(
+  advisor: AdvisorData,
+  act: (action: string, table: number) => void,
+): HTMLElement[] {
+  if (!advisor.unpartitioned) return [];
+  return [
+    el('h2', undefined, 'Large tables without partitioning'),
+    note(UNPARTITIONED_NOTE),
+    dataTable(
+      ['Table', 'Size', 'Rows', ''],
+      advisor.unpartitioned.map((entry) => {
+        const name = tableLabel(entry.table);
+        const action = el('td');
+        action.append(
+          actionButton(
+            'Suggest Partitioning...',
+            () => act('suggestPartitioning', entry.table.id),
+            `Suggest a partitioning for ${name}`,
+          ),
+        );
+        return tableRow([name, formatBytes(entry.sizeBytes), count(entry.rows), action]);
+      }),
+    ),
+  ];
+}
 
 export const advisorPage = reportPage<AdvisorData>('advisor', isAdvisorMessage, ({ context, mount }) => {
   let data: AdvisorData;
@@ -80,10 +119,7 @@ export const advisorPage = reportPage<AdvisorData>('advisor', isAdvisorMessage, 
     const advisor = data;
     const recommendations = recommendationsOf(advisor);
     const header = pageHeader(context, {
-      title:
-        advisor.scope.kind === 'schema'
-          ? `Maintenance Advisor · schema ${advisor.scope.name}`
-          : 'Maintenance Advisor',
+      title: reportHeading('Maintenance Advisor', scopeSchema(advisor.scope)),
       subtitle: `Snapshot @${advisor.snapshot} · ${advisor.connection} · read ${formatUtc(advisor.readAt)} · dry runs only, nothing is changed`,
       refresh: 'Measure again at the newest snapshot',
       actions: [
@@ -120,6 +156,7 @@ export const advisorPage = reportPage<AdvisorData>('advisor', isAdvisorMessage, 
         ? [note(`The lists of tables were cut at ${CANDIDATE_LIMIT} per kind; more tables may qualify.`)]
         : []),
       ...(advisor.inlinedFailed ? [note(INLINED_FAILED_NOTE, 'warning')] : []),
+      ...unpartitionedSection(advisor, act),
     );
     if (skipped.length > 0) {
       const section = el('div', 'skipped');

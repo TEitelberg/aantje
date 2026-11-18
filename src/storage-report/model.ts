@@ -34,6 +34,7 @@ export type StorageActionId =
   | 'revealTable'
   | 'scriptMerge'
   | 'scriptRewrite'
+  | 'inspectFiles'
   | 'scriptCleanup'
   | 'scriptExpire'
   | 'showProperties';

@@ -1,6 +1,7 @@
 import { quoteIdentifier } from '../catalog/ddl';
 import { commentName, commentText } from '../ddl-script/names';
 import { atVersion } from '../script';
+import { commitMessageLine } from '../sql/commit-message';
 import { isCast } from './model';
 import type { ColumnPlan, CompareCounts, CompareSide, MatchedColumn } from './model';
 
@@ -27,6 +28,11 @@ function sourceRelation({ source, sourceAlias }: ScriptInput, alias?: string): s
 }
 
 const targetRelation = ({ target }: ScriptInput): string => `${q(target.schema)}.${q(target.table)}`;
+
+const updateMessage = ({ source, target }: ScriptInput): string =>
+  commitMessageLine(
+    `Data Compare: ${commentName(target.schema, target.table)} like ${commentName(source.schema, source.table)} @${source.snapshot}`,
+  );
 
 // A value of the target in the terms of the compare: cast to the type of the source where the types differ.
 const targetValue = (column: MatchedColumn, alias: string): string =>
@@ -94,6 +100,7 @@ function keyedStatements(input: ScriptInput): string[] {
         ];
   return [
     'BEGIN TRANSACTION;',
+    updateMessage(input),
     `MERGE INTO ${targetRelation(input)} AS t`,
     `USING (SELECT ${sourceList} FROM ${sourceRelation(input)}) AS s`,
     `ON ${matches('s', 't')}`,
@@ -111,6 +118,7 @@ function replaceStatements(input: ScriptInput): string[] {
   const { plan } = input;
   return [
     'BEGIN TRANSACTION;',
+    updateMessage(input),
     `-- Warning: this replaces the content of the target: it deletes all its rows (${input.counts.onlyInTarget + input.counts.equal} at the compare) and inserts the rows of the source.`,
     `DELETE FROM ${targetRelation(input)};`,
     `INSERT INTO ${targetRelation(input)} (${plan.compared.map((column) => q(column.target)).join(', ')})`,

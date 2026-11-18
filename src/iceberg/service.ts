@@ -7,6 +7,7 @@ import type { IcebergCheck } from './read';
 import type { IcebergCopies, IcebergCopyRecord } from './records';
 import { summaryOf, tableLine } from './status';
 import type { IcebergTargetStore } from './store';
+import { targetPlace } from './target';
 import type { IcebergTarget } from './target';
 
 /** One row of the tree: a target that a connection was copied to. */
@@ -171,7 +172,10 @@ export class IcebergStatuses {
   ): IcebergRow {
     const result = this.results.get(keyOf(connectionId, target.id));
     const name = `Iceberg · ${target.name}`;
-    const copied = `Synced ${records.length} ${records.length === 1 ? 'table' : 'tables'} to ${inlineCode(target.warehouse)} at ${inlineCode(target.endpoint)}. Click for the report.`;
+    const where = target.fabric
+      ? `the ${markdownText(targetPlace(target))}`
+      : `${inlineCode(target.warehouse)} at ${inlineCode(target.endpoint)}`;
+    const copied = `Synced ${records.length} ${records.length === 1 ? 'table' : 'tables'} to ${where}. Click for the report.`;
     if (result === undefined || result.state === 'checking') {
       return { targetId: target.id, name, color: 'none', description: 'checking...', tooltip: copied };
     }

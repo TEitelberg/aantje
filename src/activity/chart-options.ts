@@ -1,7 +1,7 @@
 import { firstIndex, tip } from '../shell/chart-option';
 import type { ChartOption } from '../shell/chart-option';
 import { count, plural } from '../shell/model';
-import type { Palette } from '../shell/palette';
+import type { ReportPalette } from '../shell/house-colors';
 import { colorOf } from '../snapshot-changes/colors';
 import { KIND_LABEL, POINT_KINDS } from '../snapshot-changes/model';
 import type { Day, TableRow } from './model';
@@ -12,7 +12,7 @@ const base = { animation: false, tooltip: { confine: true } };
 const changes = (value: number): string => plural(value, 'change', 'changes');
 
 /** The commits of each day that has any, as bars. */
-export function commitsOption(days: readonly Day[], palette: Palette): ChartOption {
+export function commitsOption(days: readonly Day[], palette: ReportPalette): ChartOption {
   return {
     ...base,
     aria: {
@@ -44,7 +44,7 @@ export function commitsOption(days: readonly Day[], palette: Palette): ChartOpti
 }
 
 /** Changes per day, stacked by kind; high contrast themes tell the kinds apart by pattern. */
-export function kindsOption(days: readonly Day[], palette: Palette): ChartOption {
+export function kindsOption(days: readonly Day[], palette: ReportPalette): ChartOption {
   return {
     ...base,
     aria: {
@@ -83,12 +83,12 @@ export function kindsOption(days: readonly Day[], palette: Palette): ChartOption
 }
 
 /** The most changed tables, the busiest on top. */
-export function activityTablesOption(tables: readonly TableRow[], palette: Palette): ChartOption {
+export function activityTablesOption(tables: readonly TableRow[], palette: ReportPalette): ChartOption {
   return {
     ...base,
     aria: {
       label: {
-        description: `Bar chart of the ${plural(tables.length, 'most changed table', 'most changed tables')}. The table beside it has the same information.`,
+        description: `Bar chart of the ${plural(tables.length, 'most changed table', 'most changed tables')}. The tab Table changes lists the same tables.`,
       },
     },
     tooltip: {
@@ -107,8 +107,9 @@ export function activityTablesOption(tables: readonly TableRow[], palette: Palet
           : '';
       },
     },
-    grid: { left: 8, right: 24, top: 8, bottom: 8, containLabel: true },
-    xAxis: { type: 'value', name: 'Changes', minInterval: 1 },
+    // The name of the axis goes below it: at its end it would be cut off at the right edge.
+    grid: { left: 8, right: 24, top: 8, bottom: 24, containLabel: true },
+    xAxis: { type: 'value', name: 'Changes', nameLocation: 'middle', nameGap: 28, minInterval: 1 },
     yAxis: {
       type: 'category',
       inverse: true,

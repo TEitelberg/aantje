@@ -18,6 +18,20 @@ HAVING SUM(${small}) > 0`,
   };
 }
 
+/** The delete files per table that are visible at the snapshot, of the lake or of the tables in `scope`. */
+export function deleteFilesAt(snapshot: number, scope: HealthScopeRef = {}): Query {
+  const only = inScope('d.table_id', scope);
+  return {
+    sql: `${WITH_SNAPSHOT}
+SELECT d.table_id, CAST(COUNT(*) AS BIGINT) AS file_count
+FROM snap
+CROSS JOIN ducklake_delete_file d
+WHERE ${visible('d')}${only ? ` AND ${only.sql}` : ''}
+GROUP BY d.table_id`,
+    params: [snapshot, ...(only?.params ?? [])],
+  };
+}
+
 // Rows that break each check as `table_id`, `kind`, `id`, `value` (see `ConsistencySample`); `lakeOnly` cannot be
 // scoped to a table.
 const CONSISTENCY_SQL: Record<ConsistencyCheck, { readonly rows: string; readonly lakeOnly?: true }> = {
@@ -130,27 +144,93 @@ FROM (
 ) y
 WHERE y.previous_end > y.row_id_start`,
   },
+  // Ids at or beyond the counters of the newest snapshot (`next_catalog_id`, `next_file_id`): no snapshot ever had
+  // them, so a row that has one, or points to one, came from no writer of this catalog.
+  'ids-never-allocated': {
+    rows: `SELECT CAST(NULL AS BIGINT) AS table_id, 'schema' AS kind, s.schema_id AS id, s.schema_id AS value
+FROM ducklake_schema s
+WHERE s.schema_id >= (SELECT MAX(n.next_catalog_id) FROM ducklake_snapshot n)
+UNION ALL
+SELECT DISTINCT t.table_id, 'table', t.table_id, t.schema_id
+FROM ducklake_table t
+WHERE t.table_id >= (SELECT MAX(n.next_catalog_id) FROM ducklake_snapshot n)
+  OR t.schema_id >= (SELECT MAX(n.next_catalog_id) FROM ducklake_snapshot n)
+UNION ALL
+SELECT DISTINCT CAST(NULL AS BIGINT), 'view', v.view_id, v.schema_id
+FROM ducklake_view v
+WHERE v.view_id >= (SELECT MAX(n.next_catalog_id) FROM ducklake_snapshot n)
+  OR v.schema_id >= (SELECT MAX(n.next_catalog_id) FROM ducklake_snapshot n)
+UNION ALL
+SELECT f.table_id, 'data-file', f.data_file_id, f.table_id
+FROM ducklake_data_file f
+WHERE f.data_file_id >= (SELECT MAX(n.next_file_id) FROM ducklake_snapshot n)
+  OR f.table_id >= (SELECT MAX(n.next_catalog_id) FROM ducklake_snapshot n)
+UNION ALL
+SELECT d.table_id, 'delete-file', d.delete_file_id, d.data_file_id
+FROM ducklake_delete_file d
+WHERE d.delete_file_id >= (SELECT MAX(n.next_file_id) FROM ducklake_snapshot n)
+  OR d.data_file_id >= (SELECT MAX(n.next_file_id) FROM ducklake_snapshot n)
+  OR d.table_id >= (SELECT MAX(n.next_catalog_id) FROM ducklake_snapshot n)`,
+  },
+  // Columns and statistics of a table that has no row in any snapshot.
+  'rows-without-table': {
+    rows: `SELECT DISTINCT c.table_id AS table_id, 'column' AS kind, c.column_id AS id, CAST(NULL AS BIGINT) AS value
+FROM ducklake_column c
+WHERE NOT EXISTS (SELECT 1 FROM ducklake_table t WHERE t.table_id = c.table_id)
+UNION ALL
+SELECT s.table_id, 'table', s.table_id, CAST(NULL AS BIGINT)
+FROM ducklake_table_stats s
+WHERE NOT EXISTS (SELECT 1 FROM ducklake_table t WHERE t.table_id = s.table_id)
+UNION ALL
+SELECT s.table_id, 'column', s.column_id, CAST(NULL AS BIGINT)
+FROM ducklake_table_column_stats s
+WHERE NOT EXISTS (SELECT 1 FROM ducklake_table t WHERE t.table_id = s.table_id)`,
+  },
 };
 
-/** First `limit` rows by id that break a check, with the total in `total`; undefined when meaningless for a table. */
+// At an older snapshot the row ids of the files valid at it must not overlap; the snapshot is `snap.id`.
+const ROW_IDS_AT = CONSISTENCY_SQL['row-ids-overlap'].rows.replace(
+  'f.end_snapshot IS NULL AND',
+  `${visible('f', '(SELECT a.id FROM snap a)')} AND`,
+);
+
+// The rows of a check that the state of the snapshot `snap.id` uses: a file, table, view, schema or column valid at
+// it; for a partitioning or sort order, the table. A row of no snapshot (a file that does not exist) is left out.
+const VALID_AT = `(
+  (x.kind = 'data-file' AND EXISTS (SELECT 1 FROM ducklake_data_file v WHERE v.data_file_id = x.id AND ${visible('v')}))
+  OR (x.kind = 'delete-file' AND EXISTS (SELECT 1 FROM ducklake_delete_file v WHERE v.delete_file_id = x.id AND ${visible('v')}))
+  OR (x.kind = 'table' AND EXISTS (SELECT 1 FROM ducklake_table v WHERE v.table_id = x.id AND ${visible('v')}))
+  OR (x.kind = 'view' AND EXISTS (SELECT 1 FROM ducklake_view v WHERE v.view_id = x.id AND ${visible('v')}))
+  OR (x.kind = 'schema' AND EXISTS (SELECT 1 FROM ducklake_schema v WHERE v.schema_id = x.id AND ${visible('v')}))
+  OR (x.kind = 'column' AND EXISTS (SELECT 1 FROM ducklake_column v WHERE v.table_id = x.table_id AND v.column_id = x.id AND ${visible('v')}))
+  OR (x.kind IN ('partitioning', 'sort-order') AND EXISTS (SELECT 1 FROM ducklake_table v WHERE v.table_id = x.table_id AND ${visible('v')}))
+)`;
+
+/**
+ * First `limit` rows by id that break a check, with the total in `total`; undefined when meaningless for a table. With
+ * `at`, only the rows that the state of that snapshot uses.
+ */
 export function consistency(
   check: ConsistencyCheck,
   snapshot: number,
   scope: HealthScopeRef,
   limit: number,
+  at?: number,
 ): Query | undefined {
   const { rows, lakeOnly } = CONSISTENCY_SQL[check];
   const only = inScope('x.table_id', scope);
   if (only && lakeOnly) {
     return undefined;
   }
+  const conditions = [...(only ? [only.sql] : []), ...(at === undefined ? [] : [VALID_AT])];
   return {
     sql: `${WITH_SNAPSHOT}
 SELECT x.table_id, x.kind, x.id, x.value, CAST(COUNT(*) OVER () AS BIGINT) AS total
-FROM (${rows}) x${only ? `\nWHERE ${only.sql}` : ''}
+FROM snap
+CROSS JOIN (${at !== undefined && check === 'row-ids-overlap' ? ROW_IDS_AT : rows}) x${conditions.length > 0 ? `\nWHERE ${conditions.join(' AND ')}` : ''}
 ORDER BY x.id, x.kind, x.value
 LIMIT ${limit}`,
-    params: [snapshot, ...(only?.params ?? [])],
+    params: [at ?? snapshot, ...(only?.params ?? [])],
   };
 }
 

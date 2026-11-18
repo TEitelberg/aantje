@@ -18,7 +18,7 @@ import { failureMessageOf } from '../data/lake-session';
 import { PATH_MISSING } from './run-context';
 import type { CatalogOutcome, RunContext } from './run-context';
 import type { GroupResult } from './run-state';
-import { missingFinding } from './storage-checks';
+import { missingFinding, neededBy } from './storage-checks';
 
 interface FileFacts {
   readonly rows: number;
@@ -55,6 +55,7 @@ async function deepCheck(
     const { chosen, eligible } = chooseDeepFiles(
       places.files.filter((file) => isBelowDataPath(file.location ?? '', places.dataPath)),
       ctx.limits.deepFiles,
+      ctx.request.at,
     );
     const { opened, stopped } = await openFiles(ctx, catalog, session, chosen, reporter.report);
     if (!ctx.cancelled()) {
@@ -166,7 +167,7 @@ async function knownColumns(
 
 // Files the storage check reported lost are known, not "not checked".
 function notCheckedCount(ctx: RunContext, places: FileLocations, opened: number): number {
-  const current = places.files.filter((file) => file.endSnapshot === null);
+  const current = places.files.filter((file) => neededBy(file, ctx.request.at));
   return current.length - opened - current.filter((file) => ctx.missingIds.has(fileKey(file))).length;
 }
 
@@ -193,7 +194,7 @@ function deepFailure(
       return {
         findings: ctx.missingIds.has(fileKey(file))
           ? []
-          : [missingFinding(file, catalog.names, catalog.latest ?? 0)],
+          : [missingFinding(file, catalog.names, catalog.latest ?? 0, ctx.request.at)],
       };
     case 'unreadable': {
       const first = failure.timedOut

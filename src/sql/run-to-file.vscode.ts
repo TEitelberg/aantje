@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { registerGuarded } from '../command.vscode';
-import { chooseExportTarget } from '../export/save.vscode';
+import { chooseExportTarget, confirmMarkdownRows } from '../export/save.vscode';
 import type { Logger } from '../log';
 import type { EditorRef, QueryEditors } from './editor';
 import type { LanguageService } from './language';
@@ -15,8 +15,8 @@ interface RunToFileEnv {
 }
 
 /**
- * Run to File...: the statement at the cursor (or the selection, when it is one statement) written to a CSV or Parquet
- * file in the session of its editor, without the row limit of the grid (`run-to-file.ts`).
+ * Run to File...: the statement at the cursor (or the selection, when it is one statement) written to a CSV, Parquet,
+ * JSON or Markdown file in the session of its editor, without the row limit of the grid (`run-to-file.ts`).
  */
 export function registerRunToFile({ editors, service, logger, editorOf }: RunToFileEnv): vscode.Disposable {
   return registerGuarded(logger, 'aantje.runToFile', async () => {
@@ -28,6 +28,8 @@ export function registerRunToFile({ editors, service, logger, editorOf }: RunToF
       return;
     }
     const target = await chooseExportTarget('Run to File', 'result');
-    if (target) await runToFile(editors, editorOf(statement.document), statement, target);
+    if (target) {
+      await runToFile(editors, editorOf(statement.document), statement, target, confirmMarkdownRows);
+    }
   });
 }

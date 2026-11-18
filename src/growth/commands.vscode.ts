@@ -1,6 +1,7 @@
 import type * as vscode from 'vscode';
 import { openReport } from '../shell/host.vscode';
-import { LAKE_SCOPE, scopeKey, scopeOfNode, scopeSuffix } from '../shell/scope';
+import { reportHeading } from '../shell/report-heading';
+import { LAKE_SCOPE, scopeKey, scopeOfNode, scopeSchema } from '../shell/scope';
 import type { ReportScope } from '../shell/scope';
 import { reportPortOf } from '../shell/report-port.vscode';
 import type { ReportCommandEnv } from '../shell/report-port.vscode';
@@ -29,8 +30,7 @@ export function registerGrowthCommand(env: ReportCommandEnv): vscode.Disposable[
     open: (reader, profile, { focus, name, scope }) => ({
       progress: `Reading the growth of ${name ?? `"${profile.name}"`}...`,
       read: (signal) => readGrowth(reader, profile.name, focus, signal, undefined, scope),
-      title: () =>
-        `Growth${name === undefined ? '' : ` of ${name}`} · ${profile.name}${name === undefined ? scopeSuffix(scope) : ''}`,
+      title: () => `${reportHeading('Growth', name ?? scopeSchema(scope))} · ${profile.name}`,
     }),
     planAction: planGrowthAction,
     perform: (plan, profile) => performGrowthAction(plan, reportPortOf(env, profile)),

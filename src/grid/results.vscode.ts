@@ -1,11 +1,17 @@
 import * as vscode from 'vscode';
-import { messageOf } from '../errors';
+import { messageOf, userMessageOf } from '../errors';
+import type { QuietResult } from '../sql/editor';
 import { createPanel } from '../shell/host.vscode';
 import type { ResultsTarget, ResultsView } from '../sql/results';
 import type { SqlEvent } from '../sql/session';
-import { receiveFrom, transfer } from './grid.vscode';
+import { chooseExport, postSettings, receiveFrom, transfer } from './grid.vscode';
 import type { GridDeps } from './grid.vscode';
-import type { ExtensionMessage, WebviewMessage } from './protocol';
+import { aggregateQuery } from './chart-aggregate';
+import type { ColumnSummary, SummaryState } from './column-summary';
+import { summarizeLoaded } from './summary-engine';
+import { summarize } from './summary-queries';
+import type { AggregateState, ChartMemory, ExtensionMessage, WebviewMessage } from './protocol';
+import type { ChartChoice } from './result-chart';
 import { ResultsRun } from './results';
 import { decide } from './results-binding';
 import type { BindingAction, BindingSnapshot } from './results-binding';
@@ -24,16 +30,31 @@ interface ResultsHost {
   openQuery?(key: string, text?: string): void;
   /** Sets a window context key for `when` clauses. */
   setContext?(key: string, value: boolean): void;
+  /**
+   * Runs statements of aantje in the session of the editor of the key, hidden from the results and the history
+   * (`QueryEditors.quiet`): Aggregate in DuckDB.
+   */
+  quiet?<T>(
+    key: string,
+    work: (run: (sql: string) => Promise<QuietResult>) => Promise<T>,
+    signal: AbortSignal,
+  ): Promise<T>;
 }
 
 interface Entry {
   /** Absent while the group for it is made and while the results are collapsed; the run keeps what happens meanwhile. */
   panel?: vscode.WebviewPanel;
+  /** The id of the panel that the context menu of its page names (`GridPages`). */
+  panelId?: string;
   /** The group of the editor that the panel was placed for; none when no editor was found. */
   editorGroup?: vscode.TabGroup;
   collapsed: boolean;
   title: string;
   readonly run: ResultsRun;
+  /** The chart that the page chose last; a new page of the editor starts with it. */
+  chart?: ChartMemory;
+  /** What the page asked DuckDB to compute and that is still running. */
+  computing?: AbortController;
 }
 
 /** One user action fires a burst of events (a move closes a tab and opens one); they are decided on once. */
@@ -292,6 +313,9 @@ export class ResultsPanels implements ResultsView {
       css: GRID_CSS,
     });
     entry.panel = panel;
+    const { pages } = this.deps;
+    const id = pages?.add((message) => void panel.webview.postMessage(message));
+    entry.panelId = id;
     receiveFrom(panel, this.deps, (message) => void this.handle(key, entry, message));
     panel.onDidChangeViewState(({ webviewPanel }) => {
       if (!webviewPanel.visible) {
@@ -300,6 +324,7 @@ export class ResultsPanels implements ResultsView {
     });
     // Collapsing and closing with the editor take the panel first; a panel that the user closed forgets the run.
     panel.onDidDispose(() => {
+      if (id !== undefined) pages?.remove(id);
       if (entry.panel === panel) {
         entry.panel = undefined;
         this.forget(key, entry);
@@ -423,29 +448,151 @@ export class ResultsPanels implements ResultsView {
     }
   }
 
-  private async handle(key: string, { run }: Entry, message: WebviewMessage): Promise<void> {
+  /** The chart and the statistics of the page, and what it asks DuckDB to compute. */
+  private async compute(
+    key: string,
+    entry: Entry,
+    message: Extract<
+      WebviewMessage,
+      { type: 'chart' | 'aggregate' | 'cancelCompute' | 'summarize' | 'statistics' }
+    >,
+  ): Promise<void> {
+    if (message.type === 'chart') entry.chart = message.memory;
+    else if (message.type === 'statistics') this.deps.rememberStatistics?.(message.shown);
+    else if (message.type === 'cancelCompute') entry.computing?.abort();
+    else if (message.type === 'aggregate') await this.aggregate(key, entry, message.set, message.choice);
+    else if (message.set !== undefined) await this.summarize(key, entry, message.set);
+  }
+
+  /**
+   * The statistics of the columns of a result set. A statement that only reads, of a run that was not cancelled, runs
+   * again in the session of the editor under the aggregates of the statistics (its text from the extension's own state
+   * of the run); otherwise DuckDB summarizes the loaded rows in an engine of its own.
+   */
+  private async summarize(key: string, entry: Entry, set: number): Promise<void> {
+    const { run } = entry;
+    const state = run.state;
+    const result = state?.resultSets[set];
+    const statement = result && state.statements.find(({ index }) => index === result.statement);
+    if (!result || !statement) return;
+    const generation = run.generation;
+    const answer = (next: SummaryState): void => {
+      if (run.generation === generation) run.update({ type: 'results-summary', set, state: next });
+    };
+    entry.computing?.abort();
+    const control = new AbortController();
+    entry.computing = control;
+    answer({ status: 'running' });
+    try {
+      const { host } = this;
+      const again = statement.readsOnly === true && state.end?.cancelled !== true;
+      let summary: ColumnSummary;
+      if (again && host.quiet) {
+        const found = await host.quiet(
+          key,
+          (quiet) => summarize(async (sql) => (await quiet(sql)).rows, statement.sql, result.columns),
+          control.signal,
+        );
+        const sample = found.sample === undefined ? {} : { sample: found.sample };
+        summary = { cover: { kind: 'result', rows: found.rows, ...sample }, columns: found.columns };
+      } else {
+        const reason = statement.readsOnly === true ? 'cancelled' : 'writes';
+        summary = await summarizeLoaded(result.columns, result.rows, reason);
+      }
+      answer({ status: 'done', summary });
+    } catch (error) {
+      answer({ status: 'failed', message: userMessageOf(error) });
+    } finally {
+      if (entry.computing === control) entry.computing = undefined;
+    }
+  }
+
+  /**
+   * Aggregate in DuckDB: the statement of the result set, taken from the run that the extension keeps, never from the
+   * page, runs again aggregated by the X of the chart; only a statement that only reads.
+   */
+  private async aggregate(key: string, entry: Entry, set: number, choice: ChartChoice): Promise<void> {
+    const { run } = entry;
+    const state = run.state;
+    const result = state?.resultSets[set];
+    const statement = result && state.statements.find(({ index }) => index === result.statement);
+    if (!statement) return;
+    const answer = (next: AggregateState): void => {
+      // A new run replaced the one that was asked about.
+      if (run.state?.script === state.script && run.generation === generation) {
+        run.update({ type: 'results-aggregate', set, choice, state: next });
+      }
+    };
+    const generation = run.generation;
+    const sql = aggregateQuery(statement.sql, choice);
+    if (!statement.readsOnly || sql === undefined || !this.host.quiet) {
+      answer({
+        status: 'failed',
+        message: statement.readsOnly
+          ? 'This chart does not combine the rows of an X, so DuckDB has nothing to aggregate.'
+          : 'Aggregate in DuckDB runs the statement again, and this one does more than read, or aantje cannot tell that it only reads.',
+      });
+      return;
+    }
+    entry.computing?.abort();
+    const control = new AbortController();
+    entry.computing = control;
+    answer({ status: 'running' });
+    try {
+      const found = await this.host.quiet(key, (quiet) => quiet(sql), control.signal);
+      answer({ status: 'done', columns: found.columns, rows: found.rows, truncated: found.truncated });
+    } catch (error) {
+      answer({ status: 'failed', message: userMessageOf(error) });
+    } finally {
+      if (entry.computing === control) entry.computing = undefined;
+    }
+  }
+
+  /** Go to statement, Open as New Query and Open script of a tip. */
+  private goTo(
+    key: string,
+    run: ResultsRun,
+    message: Extract<WebviewMessage, { type: 'reveal' | 'openQuery' | 'openTipScript' }>,
+  ): void {
+    if (message.type === 'reveal') {
+      const range = run.revealRange(message.index);
+      if (range) this.host.revealStatement(key, range.offset, range.length);
+    } else if (message.type === 'openQuery') {
+      this.host.openQuery?.(key);
+    } else {
+      // The script comes from the extension's own state of the run, never from the page.
+      const script = run.state?.resultSets[message.set]?.tips?.[message.tip]?.script;
+      if (script !== undefined) this.host.openQuery?.(key, script);
+    }
+  }
+
+  private async handle(key: string, entry: Entry, message: WebviewMessage): Promise<void> {
+    const { run } = entry;
     switch (message.type) {
       case 'ready':
+        if (entry.panel) {
+          postSettings(entry.panel, this.deps, {
+            ...(entry.chart ? { chart: entry.chart } : {}),
+            ...(entry.panelId === undefined ? {} : { panel: entry.panelId }),
+          });
+        }
         run.pageReady();
         break;
-      case 'reveal': {
-        const range = run.revealRange(message.index);
-        if (range) {
-          this.host.revealStatement(key, range.offset, range.length);
-        }
+      case 'chart':
+      case 'aggregate':
+      case 'cancelCompute':
+      case 'summarize':
+      case 'statistics':
+        await this.compute(key, entry, message);
         break;
-      }
+      case 'chooseExport':
+        await chooseExport((answer) => void entry.panel?.webview.postMessage(answer), message.set);
+        break;
+      case 'reveal':
       case 'openQuery':
-        this.host.openQuery?.(key);
+      case 'openTipScript':
+        this.goTo(key, run, message);
         break;
-      case 'openTipScript': {
-        // The script comes from the extension's own state of the run, never from the page.
-        const script = run.state?.resultSets[message.set]?.tips?.[message.tip]?.script;
-        if (script !== undefined) {
-          this.host.openQuery?.(key, script);
-        }
-        break;
-      }
       case 'copy':
       case 'export':
         await transfer(this.deps, message);

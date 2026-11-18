@@ -33,25 +33,40 @@ interface PanelSpec {
   readonly column: Parameters<typeof vscode.window.createWebviewPanel>[2];
   /** The stylesheet of the page. */
   readonly css: string;
+  /** The page shows a picture of `media` (the logo on the Templates page), so it may load images from there too. */
+  readonly media?: true;
 }
 
-/** A panel whose page runs one script of `dist` under a fresh nonce; it may load resources from `dist` only. */
+/**
+ * A panel whose page runs one script of `dist` under a fresh nonce; it may load resources from `dist` only, and with
+ * `media` images from `media`.
+ */
 export function createPanel(extensionUri: vscode.Uri, spec: PanelSpec): vscode.WebviewPanel {
   const panel = vscode.window.createWebviewPanel(spec.viewType, spec.title, spec.column, {
     enableScripts: true,
-    localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'dist')],
+    localResourceRoots: [
+      vscode.Uri.joinPath(extensionUri, 'dist'),
+      ...(spec.media ? [vscode.Uri.joinPath(extensionUri, 'media')] : []),
+    ],
   });
   const uri = (script: string): string =>
     panel.webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'dist', script)).toString();
   panel.webview.html = webviewHtml({
     nonce: randomBytes(16).toString('base64'),
+    // A page that may show pictures of `media` gets the address of the logo of aantje, for the header of a report.
+    ...(spec.media ? { logo: logoUri(panel.webview, extensionUri) } : {}),
     scriptUri: uri(spec.script),
     ...(spec.before ? { scriptsBefore: spec.before.map(uri) } : {}),
     title: spec.title,
     css: spec.css,
+    ...(spec.media ? { imageSource: panel.webview.cspSource } : {}),
   });
   return panel;
 }
+
+/** The webview address of the logo of aantje (`media/logo.png`, in the VSIX). */
+const logoUri = (webview: vscode.Webview, extensionUri: vscode.Uri): string =>
+  webview.asWebviewUri(vscode.Uri.joinPath(extensionUri, 'media', 'logo.png')).toString();
 
 function webviewPanels(extensionUri: vscode.Uri): PanelFactory {
   return (kind, title) => {
@@ -61,6 +76,8 @@ function webviewPanels(extensionUri: vscode.Uri): PanelFactory {
       script: 'report-client.js',
       column: vscode.ViewColumn.Active,
       css: kind.css,
+      // The header of every report shows the logo of aantje.
+      media: true,
     });
     return {
       setTitle: (next) => void (panel.title = next),
@@ -112,8 +129,11 @@ function profileOf(
 
 interface Reading<Data> {
   readonly progress: string;
-  /** Null when the subject does not exist at the snapshot: then `absent` is shown, and no panel. */
-  readonly read: (signal: AbortSignal) => Promise<Data | null>;
+  /**
+   * Null when the subject does not exist at the snapshot: then `absent` is shown, and no panel. `report` puts a line
+   * under the title of the progress, the step that runs now.
+   */
+  readonly read: (signal: AbortSignal, report: (message: string) => void) => Promise<Data | null>;
   readonly title: (data: Data) => string;
   readonly absent?: string;
 }

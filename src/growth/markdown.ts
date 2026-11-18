@@ -1,6 +1,6 @@
 import { LIST_ROWS } from '../shell/model';
 import { scopeSchema } from '../shell/scope';
-import { capRows, code, markdownTable, reportTitle } from '../markdown';
+import { capRows, code, markdownTable, reportHeadingLine } from '../markdown';
 import { shortUtc } from '../shell/model';
 import {
   APPROXIMATE_NOTE,
@@ -9,8 +9,6 @@ import {
   METRIC_LABEL,
   METRICS,
   NO_DATA_NOTE,
-  EXPIRED_NOTE,
-  hasExpired,
   formatDelta,
   formatMetric,
   formatStep,
@@ -54,7 +52,7 @@ export function growthMarkdown(data: GrowthData, view?: GrowthMarkdownView): str
     LIST_ROWS,
   );
   return [
-    reportTitle('Growth of', data.connection, scopeSchema(data.scope)),
+    reportHeadingLine('Growth', data.connection, table?.label ?? scopeSchema(data.scope)),
     '',
     ...markdownTable(
       ['Property', 'Value'],
@@ -65,7 +63,7 @@ export function growthMarkdown(data: GrowthData, view?: GrowthMarkdownView): str
       ],
     ),
     '',
-    ...(data.more ? [growthOlderNote(data), ''] : hasExpired(data) ? [EXPIRED_NOTE, ''] : []),
+    ...(data.more ? [growthOlderNote(data), ''] : []),
     ...(data.inlinedMore ? [INLINED_NOTE, ''] : []),
     ...(data.inlinedFailed ? [INLINED_FAILED_NOTE, ''] : []),
     ...(steps.some(({ approximate }) => approximate) ? [APPROXIMATE_NOTE, ''] : []),

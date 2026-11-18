@@ -1,4 +1,5 @@
 // Markdown of catalog text that renders as written, and the building blocks of the Markdown documents of the reports.
+import { reportHeading } from './shell/report-heading';
 
 // Escapes catalog text so no Markdown renders. CommonMark allows a backslash before any ASCII punctuation,
 // which covers list markers, setext underlines, entities and bare URLs.
@@ -58,10 +59,13 @@ export function markdownTable(header: readonly string[], rows: readonly (readonl
   return [row(header), row(header.map(() => '---')), ...rows.map(row)];
 }
 
-/** The first line of a report: `# Properties of Lake`, or `# Storage of Lake · schema shop`; the names show literally, on one line. */
-export function reportTitle(title: string, connectionName: string, schema?: string): string {
+/**
+ * The first line of a report, its heading and the connection: `# Schema History: shop.orders · Lake`, `# Activity ·
+ * Lake`. The object and the connection name show literally, on one line.
+ */
+export function reportHeadingLine(name: string, connectionName: string, object?: string): string {
   const oneLine = (text: string): string => markdownText(text.replace(/\s+/g, ' ').trim());
-  return `# ${title} ${oneLine(connectionName)}${schema === undefined ? '' : ` · schema ${oneLine(schema)}`}`;
+  return `# ${reportHeading(name, object === undefined ? undefined : oneLine(object))} · ${oneLine(connectionName)}`;
 }
 
 /** At most `limit` rows, then a line counting the rest. */

@@ -12,11 +12,14 @@ import type { IcebergRow } from '../iceberg/service';
 import type { QueryHistory } from '../sql/history';
 import { tableTooltip } from './format';
 import { listsFiles, readFiles } from './files';
-import { readBelow } from './levels';
+import { filterDescription, ownFilter } from './filter';
+import type { Filters, TreeFilters } from './filter';
+import { readBelow, withFilter } from './levels';
 import type { ViewReader } from './levels';
 import {
   connectionNodeId,
   connectionPresentation,
+  favoriteNodes,
   folderId,
   applyIcebergRow,
   folderNode,
@@ -40,8 +43,8 @@ export interface CatalogTreeDeps {
     snapshot: SnapshotId,
     signal: AbortSignal,
   ) => Promise<readonly RelationColumn[]>;
-  /** The statements the SQL editor ran; without it, a connection has no folder Query History. */
-  queryHistory?: Pick<QueryHistory, 'shown' | 'entries'>;
+  /** The statements the SQL editor ran and the favourites; without it, a connection has no folder Query History. */
+  queryHistory?: Pick<QueryHistory, 'shown' | 'entries' | 'favorites'>;
   /** The storage of the lake; without it, a connection has no folder Files. A Quack connection never has one. */
   files?: FilesPort;
   /** The copies of a lake to Iceberg: their rows, the lines for the tooltips of copied tables, and the check that updates them. */
@@ -54,6 +57,8 @@ export interface CatalogTreeDeps {
     /** Tells when the rows or the state of a connection's copies changed. */
     onDidChange(listener: (connectionId: string) => void): { dispose(): void };
   };
+  /** The filters by name per connection; without it, nothing is filtered. */
+  filters?: Pick<TreeFilters, 'of'>;
   /** What a connection must show in any status (a delete of its lake that did not finish), and when that changes. */
   notices?: {
     of(connectionId: string): ConnectionNotice | undefined;
@@ -122,14 +127,22 @@ export class CatalogTree {
       return Promise.resolve([]);
     }
     const { cache } = conn;
+    // aantje's own record, read anew each time: it changes with every run, not with the catalog. A change event of the
+    // folder brings a new Favorites node, which VS Code may ask before or after the old one.
+    if (
+      node.ref.kind === 'folder' &&
+      (node.ref.folder === 'queryHistory' || node.ref.folder === 'favorites')
+    ) {
+      const children = this.historyChildren(node, node.ref.folder);
+      for (const child of children) {
+        cache.parents.set(child.id, node);
+        cache.nodes.set(child.id, child);
+      }
+      return Promise.resolve(children);
+    }
     // VS Code may still ask a node of a replaced cache; its data must not enter the new cache.
     if (node.ref.kind !== 'connection' && cache.nodes.get(node.id) !== node) {
       return Promise.resolve([]);
-    }
-    // aantje's own record, read anew each time: it changes with every run, not with the catalog.
-    if (node.ref.kind === 'folder' && node.ref.folder === 'queryHistory') {
-      const entries = this.deps.queryHistory?.entries(node.ref.connectionId) ?? [];
-      return Promise.resolve(queryNodes(node, entries, Date.now()));
     }
     let children = cache.children.get(node.id);
     if (!children) {
@@ -137,6 +150,15 @@ export class CatalogTree {
       cache.children.set(node.id, children);
     }
     return children;
+  }
+
+  private historyChildren(node: TreeNode, folder: 'queryHistory' | 'favorites'): TreeNode[] {
+    const history = this.deps.queryHistory;
+    const { connectionId } = node.ref;
+    const favorites = history?.favorites(connectionId) ?? [];
+    return folder === 'favorites'
+      ? favoriteNodes(node, favorites, Date.now())
+      : queryNodes(node, history?.entries(connectionId) ?? [], Date.now(), favorites.length);
   }
 
   /** The node this node was read from, while the cached children are valid. */
@@ -354,11 +376,25 @@ export class CatalogTree {
     });
   }
 
+  /** The filters by name of a connection. */
+  filtersOf(connectionId: string): Filters {
+    return this.deps.filters?.of(connectionId) ?? {};
+  }
+
   private present(conn: Connection): void {
     const { phase } = conn;
     const expandable = phase.status !== 'disconnected' || phase.autoConnect;
     const notice = this.deps.notices?.of(conn.profile.id);
-    Object.assign(conn.node, connectionPresentation(conn.profile, stateOf(conn), expandable, notice));
+    const presentation = connectionPresentation(conn.profile, stateOf(conn), expandable, notice);
+    // The status icon stays; the filter of the connection is named after its description.
+    const filter = ownFilter(this.filtersOf(conn.profile.id), conn.node.ref);
+    Object.assign(
+      conn.node,
+      presentation,
+      filter === undefined
+        ? {}
+        : { description: `${presentation.description} · ${filterDescription(filter)}` },
+    );
   }
 
   private changed(conn: Connection): void {
@@ -489,6 +525,7 @@ export class CatalogTree {
         snapshot: snapshotOf(conn.snapshot, phase.info),
         columnsOfView,
         azure: isAzureLake(conn.profile),
+        filters: this.filtersOf(conn.profile.id),
       },
       node,
     );
@@ -512,14 +549,18 @@ export class CatalogTree {
           phase.reader.schemas(snapshotOf(conn.snapshot, phase.info)),
           this.snapshotCount(conn.profile, phase.reader),
         ]);
+        const filters = this.filtersOf(conn.profile.id);
         return [
-          ...schemas.toSorted(byName).map((schema) => schemaNode(node, schema)),
+          ...schemas
+            .toSorted(byName)
+            .map((schema) => schemaNode(node, schema))
+            .map((schema) => withFilter(schema, ownFilter(filters, schema.ref))),
           folderNode(node, { folder: 'snapshots', total }),
-          ...(this.deps.queryHistory?.shown() ? [folderNode(node, { folder: 'queryHistory' })] : []),
           // Quack: the server reads the files, not aantje.
           ...(this.deps.files && conn.profile.kind !== 'quack'
             ? [folderNode(node, { folder: 'files' })]
             : []),
+          ...(this.deps.queryHistory?.shown() ? [folderNode(node, { folder: 'queryHistory' })] : []),
           ...(this.deps.iceberg?.rows(conn.profile.id) ?? []).map((row) => icebergNode(node, row)),
         ];
       }

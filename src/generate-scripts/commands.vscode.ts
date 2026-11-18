@@ -6,6 +6,8 @@ import type { SqlParser, SqlTokenizer } from '../dependencies/parser';
 import { readObjects } from '../dependencies/read';
 import type { Logger } from '../log';
 import { pickMany, pickOne } from '../pick.vscode';
+import { registerRenameCommands } from '../rename/commands.vscode';
+import type { RenameEnv } from '../rename/commands.vscode';
 import { cancellable } from '../progress.vscode';
 import type { CatalogTree } from '../tree/model';
 import type { NodeRef } from '../tree/refs';
@@ -23,6 +25,8 @@ interface GenerateScriptsEnv {
   readonly register: Register;
   /** Parses views and macros for their order and tokenizes the statements that copy catalog text; it runs nothing. */
   readonly parser: SqlParser & SqlTokenizer;
+  /** The syncs to Iceberg, which the script of Rename... speaks of. */
+  readonly iceberg?: RenameEnv['iceberg'];
 }
 
 const COMMAND = 'aantje.generateScripts';
@@ -137,7 +141,10 @@ async function run(env: GenerateScriptsEnv, ref: NodeRef | undefined): Promise<v
   report(folder, await writeFiles(chosenFolder(folder), scriptFiles(script), overwrite));
 }
 
-/** Generate Scripts: the DDL of the tables, views and macros of a connection or a schema, as a document or as files. */
+/**
+ * Generate Scripts: the DDL of the tables, views and macros of a connection or a schema, as a document or as files; and
+ * Rename..., which writes the DDL of the views and macros that a rename changes.
+ */
 export function registerGenerateScripts(env: GenerateScriptsEnv): vscode.Disposable[] {
-  return [env.register(COMMAND, (node) => run(env, node?.ref))];
+  return [env.register(COMMAND, (node) => run(env, node?.ref)), ...registerRenameCommands(env)];
 }

@@ -5,7 +5,18 @@ import type { FailureLog } from '../log-once';
 import type { SqlCatalog } from './catalog';
 import { completionsAt } from './completion';
 import type { Completions } from './completion';
+import { parameterCompletions } from './completion-parameters';
+import {
+  boundNames,
+  findPlaceholders,
+  parseParameterHeader,
+  replacePlaceholders,
+  unusedDefaults,
+  withoutDefault,
+} from './parameters';
+import type { Placeholder } from './parameters';
 import { statementSnapshot } from './context';
+import type { Diagnostic } from './syntax';
 import type { SqlToken } from './tokens';
 import { hoverAt, signatureAt } from './help';
 import type { Hover, SignatureHelp } from './help';
@@ -15,7 +26,7 @@ import type { ParsedText } from './parse';
 import { closeParserDuckdb, OnFirstUse, openParserDuckdb, serializeSql, tokenRows } from './parser-engine';
 import type { ParserDuckdb } from './parser-engine';
 import type { Problem } from './problems';
-import { utf16Offsets, withoutBom } from './script';
+import { textTokens, withoutBom } from './script';
 import { tokenWindow } from './token-window';
 import { unknownNames } from './unknown-names';
 import { loadVocabulary } from './vocabulary';
@@ -80,6 +91,18 @@ interface Ready extends ParserDuckdb {
   readonly system: ReadonlySet<string>;
 }
 
+/**
+ * A parsed text, the `{{name}}` placeholders that were parsed as names, the `$name` placeholders that stand where a name
+ * goes, and the inline defaults that are not used.
+ */
+interface Parsed {
+  readonly text: ParsedText;
+  readonly ready: Ready;
+  readonly placeholders: readonly Placeholder[];
+  readonly names: readonly Problem[];
+  readonly unused: readonly Problem[];
+}
+
 interface Job {
   readonly text: string;
   readonly catalog: SqlCatalog | undefined;
@@ -125,9 +148,13 @@ class DuckdbLanguageService implements LanguageService {
   }
 
   complete(text: string, offset: number, catalog: SqlCatalog): Promise<Completions | undefined> {
-    return this.atStatement(text, offset, catalog, (tokens, vocabulary, at) =>
-      completionsAt(tokens, offset, vocabulary, at),
-    );
+    // After `$` and inside `{{`: the parameters that the header declares. Inside the braces of `$name{default}`: nothing,
+    // the default is a value.
+    return this.atStatement(text, offset, catalog, async (tokens, vocabulary, at) => {
+      if (inDefault(text, tokens, offset)) return undefined;
+      const parameters = parameterCompletions(text, tokens, offset);
+      return parameters ?? completionsAt(tokens, offset, vocabulary, at);
+    });
   }
 
   hover(text: string, offset: number, catalog: SqlCatalog): Promise<Hover | undefined> {
@@ -201,11 +228,7 @@ class DuckdbLanguageService implements LanguageService {
 
   private async readTokens(plain: string): Promise<SqlToken[]> {
     const { connection } = await this.open();
-    const unitOf = utf16Offsets(plain);
-    return (await tokenRows(connection, plain)).map(({ start, type, word }) => {
-      const offset = unitOf(start);
-      return { start: offset, end: offset + word.length, type, word };
-    });
+    return textTokens(plain, await tokenRows(connection, plain));
   }
 
   // Parses one text at a time, oldest source first.
@@ -230,20 +253,52 @@ class DuckdbLanguageService implements LanguageService {
     }
   }
 
-  private async parse(text: string, withQueries: boolean): Promise<{ text: ParsedText; ready: Ready }> {
+  // A `{{name}}` of a template is no SQL until it is replaced: it is parsed as a quoted name of the same length, and
+  // `problems` reports nothing on it. The braces of `$name{default}` are parsed as blanks, as the session runs them.
+  private async parse(text: string, withQueries: boolean): Promise<Parsed> {
     const ready = await this.open();
     const parser = {
       serialize: (sql: string) => serializeSql(ready.connection, sql),
       tokens: (sql: string) => this.window.all(sql),
     };
-    return { text: await parseText(parser, withoutBom(text), withQueries), ready };
+    const plain = withoutBom(text);
+    const tokens = await this.window.all(plain);
+    const found = findPlaceholders(plain, tokens);
+    const masked = replacePlaceholders(plain, found, (placeholder) =>
+      placeholder.kind === 'text'
+        ? `"${'_'.repeat(placeholder.end - placeholder.start - 2)}"`
+        : withoutDefault(placeholder),
+    );
+    const warning = (diagnostic: Diagnostic): Problem => ({
+      ...diagnostic,
+      severity: 'warning',
+      replacements: [],
+    });
+    return {
+      text: await parseText(parser, masked.text, withQueries),
+      ready,
+      placeholders: found.filter(({ kind }) => kind === 'text'),
+      names: boundNames(tokens, found).map(warning),
+      unused: unusedDefaults(parseParameterHeader(plain).declarations, found).map(warning),
+    };
   }
 
   private async problems(
-    { text, ready }: { text: ParsedText; ready: Ready },
+    { text, ready, placeholders, names, unused }: Parsed,
     catalog: SqlCatalog | undefined,
   ): Promise<Problem[]> {
-    const errors = text.errors.map((error): Problem => ({ ...error, severity: 'error', replacements: [] }));
+    const outside = (problem: Problem): boolean =>
+      !placeholders.some(
+        ({ start, end }) => problem.offset < end && start < problem.offset + Math.max(problem.length, 1),
+      );
+    // DuckDB's syntax error on a `$name` where a name goes (at its `$`) says less than the warning on it, which takes
+    // its place, so that the warning is what the editor shows there.
+    const unexplained = (problem: Problem): boolean =>
+      !names.some(({ offset, length }) => offset <= problem.offset && problem.offset < offset + length);
+    const errors = text.errors
+      .map((error): Problem => ({ ...error, severity: 'error', replacements: [] }))
+      .filter((error) => outside(error) && unexplained(error))
+      .concat(names, unused);
     if (!catalog || text.queries.length === 0) return errors;
     const { queries, mentioned, qualifiedOnly } = text;
     const check = {
@@ -253,17 +308,33 @@ class DuckdbLanguageService implements LanguageService {
       mentioned,
       qualifiedOnly,
     };
-    const checked = unknownNames(queries, check).catch((cause: unknown) => {
-      this.failed?.('Checking the names of the SQL', cause);
-      return [];
-    });
+    const checked = unknownNames(queries, check).then(
+      (found) => found.filter(outside),
+      (cause: unknown) => {
+        this.failed?.('Checking the names of the SQL', cause);
+        return [];
+      },
+    );
     // A catalog that is still being read gives no warnings this time; its reads go on, for the next check.
     let timer: NodeJS.Timeout | undefined;
     const waited = new Promise<Problem[]>(
       (resolve) => (timer = setTimeout(() => resolve([]), CATALOG_WAIT_MS)),
     );
-    return Promise.race([checked, waited]).finally(() => clearTimeout(timer));
+    // A text with queries has no syntax errors: `errors` holds the warnings on placeholders only.
+    return Promise.race([checked, waited])
+      .then((found) => [...errors, ...found])
+      .finally(() => clearTimeout(timer));
   }
+}
+
+/** Whether the offset is inside the braces of an inline default (`$limit{1|000}`), where nothing is completed. */
+function inDefault(text: string, tokens: readonly SqlToken[], offset: number): boolean {
+  return findPlaceholders(text, tokens).some(
+    (placeholder) =>
+      withoutDefault(placeholder) !== undefined &&
+      placeholder.start + placeholder.name.length + 1 < offset &&
+      offset < placeholder.end,
+  );
 }
 
 // The views of DuckDB itself (`main.duckdb_tables`, `pg_catalog.pg_tables`, ...), which no catalog of the lake lists.

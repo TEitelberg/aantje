@@ -4,7 +4,7 @@ import { isIcebergAction } from './protocol';
 import type { IcebergAction } from './protocol';
 import { ICEBERG_CSS } from './style';
 
-/** The Iceberg report has no Open as Markdown; its header offers the copy and Forget Sync. */
+/** The Iceberg report has no Open as Markdown; its header offers Sync to Iceberg and Forget Iceberg Sync. */
 export const icebergKind: ReportKind<IcebergData, IcebergAction, never> = {
   viewType: 'aantje.iceberg',
   css: ICEBERG_CSS,

@@ -1,6 +1,7 @@
 import type * as vscode from 'vscode';
 import { openReport } from '../shell/host.vscode';
 import { tableLabel } from '../shell/model';
+import { reportHeading } from '../shell/report-heading';
 import { reportPortOf } from '../shell/report-port.vscode';
 import type { ReportCommandEnv } from '../shell/report-port.vscode';
 import { planSchemaHistoryAction } from './actions';
@@ -22,7 +23,7 @@ export function registerSchemaHistoryCommand(env: ReportCommandEnv): vscode.Disp
     open: (reader, profile, { tableId, name }) => ({
       progress: `Reading the schema history of ${name}...`,
       read: (signal) => readSchemaHistory(reader, profile.name, tableId, signal),
-      title: (data) => `Schema History of ${tableLabel(data)} · ${profile.name}`,
+      title: (data) => `${reportHeading('Schema History', tableLabel(data))} · ${profile.name}`,
     }),
     planAction: planSchemaHistoryAction,
     perform: (plan, profile) => performSchemaHistoryAction(plan, reportPortOf(env, profile)),

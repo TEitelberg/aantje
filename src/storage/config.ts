@@ -114,6 +114,9 @@ export function validateStorageAccountName(value: string): string | undefined {
     : 'A storage account name has 3 to 24 lowercase letters and digits.';
 }
 
+/** Whether the text is a GUID, as Entra and Fabric write their ids. */
+export const isGuid = (value: string): boolean => GUID.test(value.trim());
+
 /** An optional Entra tenant: empty, or its ID. */
 export function validateTenantId(value: string): string | undefined {
   const tenant = value.trim();

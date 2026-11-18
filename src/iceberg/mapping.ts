@@ -2,6 +2,7 @@
 // DuckDB's iceberg extension writes it) lacks some of DuckDB's types. Checked with DuckDB 2.0 against Polaris.
 import { quoteIdentifier, typeName } from '../catalog/ddl';
 import type { CatalogColumnEntry, PartitioningInfo } from '../catalog/model';
+import type { IcebergTarget } from './target';
 
 /**
  * The types aantje casts in the copy, by their DuckDB name: unsigned integers to the smallest signed type that holds
@@ -17,6 +18,20 @@ const CASTS: Readonly<Record<string, string>> = {
   TIMESTAMP_MS: 'TIMESTAMP',
   JSON: 'VARCHAR',
 };
+
+/**
+ * The casts for a Fabric lakehouse on top: Fabric reads its Iceberg tables as Delta, which has no time of day (Fabric
+ * drops the column) and no UUID (Fabric shows bytes). As text both stay readable. Only top-level columns are cast; a
+ * nested field of these types is written as it is.
+ */
+export const FABRIC_CASTS: Readonly<Record<string, string>> = {
+  TIME: 'VARCHAR',
+  UUID: 'VARCHAR',
+};
+
+/** The casts a target needs on top of the ones every copy makes. */
+export const extraCastsOf = (target: Pick<IcebergTarget, 'fabric'>): Readonly<Record<string, string>> =>
+  target.fabric ? FABRIC_CASTS : {};
 
 /** The types that the writer converts by itself. */
 const WIDENED: Readonly<Record<string, string>> = {
@@ -41,10 +56,14 @@ const UNWRITABLE: readonly RegExp[] = [
   /\bVARINT\b/,
 ];
 
-/** The type a column of this DuckDB type is written as, when aantje casts it; undefined when it is written as it is. */
-export function castOf(type: string): string | undefined {
+/**
+ * The type a column of this DuckDB type is written as, when aantje casts it; undefined when it is written as it is.
+ * `extra` are the casts of the target (`extraCastsOf`).
+ */
+export function castOf(type: string, extra: Readonly<Record<string, string>> = {}): string | undefined {
   const upper = type.trim().toUpperCase();
   if (CASTS[upper] !== undefined) return CASTS[upper];
+  if (extra[upper] !== undefined) return extra[upper];
   if (upper.startsWith('ENUM(')) return 'VARCHAR';
   // An array of fixed length is a list in Iceberg.
   const array = /^(.*)\[\d+\]$/.exec(type.trim());
@@ -59,14 +78,17 @@ export const isWritable = (type: string): boolean =>
  * The select list of a table from its DuckDB columns: `*`, or the columns with the casts; `converted` names every column
  * that Iceberg gets as another type, cast here or widened by the writer, for example `id: UBIGINT as DECIMAL(20,0)`.
  */
-export function selectList(columns: readonly (readonly [string, string])[]): {
+export function selectList(
+  columns: readonly (readonly [string, string])[],
+  extra: Readonly<Record<string, string>> = {},
+): {
   list: string;
   converted: string[];
 } {
   const converted: string[] = [];
   let cast = false;
   const parts = columns.map(([name, type]) => {
-    const to = castOf(type);
+    const to = castOf(type, extra);
     const widened = WIDENED[type.trim().toUpperCase()];
     if (to === undefined) {
       if (widened !== undefined) converted.push(`${name}: ${type} as ${widened}`);
@@ -93,6 +115,7 @@ export interface TablePlan {
 export function tablePlan(
   table: { readonly schema: string; readonly table: string },
   columns: readonly CatalogColumnEntry[],
+  extra: Readonly<Record<string, string>> = {},
 ): TablePlan {
   const converted: string[] = [];
   const unwritable: string[] = [];
@@ -100,7 +123,7 @@ export function tablePlan(
     const type = typeName(column.type);
     const name = column.path.join('.');
     const top = column.path.length === 1;
-    const to = top ? (castOf(type) ?? WIDENED[type.toUpperCase()]) : undefined;
+    const to = top ? (castOf(type, extra) ?? WIDENED[type.toUpperCase()]) : undefined;
     if (to !== undefined) converted.push(`${name}: ${type} as ${to}`);
     // A nested field is not cast: a type that needs a cast fails there as well.
     else if (!isWritable(type) || (!top && castOf(type) !== undefined)) unwritable.push(`${name}: ${type}`);

@@ -16,6 +16,8 @@ export interface HealthTarget {
   readonly connectionName: string;
   readonly scope: FindingScope;
   readonly snapshot: number;
+  /** The snapshot whose state is checked instead of the newest. */
+  readonly at?: number;
 }
 
 /** The part of `ReportPanels` that the controller uses. */
@@ -91,12 +93,13 @@ export function createHealthController(env: HealthControllerEnv): HealthControll
     const abort = new AbortController();
     session.abort = abort;
     session.pending = [];
-    session.data = freshData(target.connectionName, target.scope, choice, 'running');
-    env.panels.show(key, healthTitle(target.connectionName, target.scope), session.data);
+    session.data = freshData(target.connectionName, target.scope, choice, 'running', target.at);
+    env.panels.show(key, healthTitle(target.connectionName, target.scope, target.at), session.data);
     const request: HealthRequest = {
       scope: requestScope(target.scope),
       depth: choice.depth,
       snapshot: target.snapshot,
+      ...(target.at === undefined ? {} : { at: target.at }),
       ...(choice.depth === 'deep' ? { limits: { deepFiles: choice.deepFiles } } : {}),
     };
     try {
@@ -123,12 +126,12 @@ export function createHealthController(env: HealthControllerEnv): HealthControll
 
   return {
     open(target, options = {}) {
-      const key = healthKey(target.connectionId, target.scope);
+      const key = healthKey(target.connectionId, target.scope, target.at);
       const existing = sessions.get(key);
       if (existing) {
         existing.target = target;
         existing.data = { ...existing.data, connection: target.connectionName };
-        env.panels.show(key, healthTitle(target.connectionName, target.scope), existing.data);
+        env.panels.show(key, healthTitle(target.connectionName, target.scope, target.at), existing.data);
         if (options.run && existing.abort === undefined) {
           start(key, existing, { depth: 'quick', deepFiles: existing.data.deepFiles });
         }
@@ -137,14 +140,14 @@ export function createHealthController(env: HealthControllerEnv): HealthControll
       const choice = { depth: 'quick', deepFiles: DEFAULT_DEEP_FILES } as const;
       const session: Session = {
         target,
-        data: freshData(target.connectionName, target.scope, choice, 'idle'),
+        data: freshData(target.connectionName, target.scope, choice, 'idle', target.at),
         pending: [],
       };
       sessions.set(key, session);
       if (options.run) {
         start(key, session, choice);
       } else {
-        env.panels.show(key, healthTitle(target.connectionName, target.scope), session.data);
+        env.panels.show(key, healthTitle(target.connectionName, target.scope, target.at), session.data);
       }
     },
 

@@ -11,11 +11,14 @@ import { searchPickItems } from './search';
 import { LAKE_SCOPE, scopeOfNode } from './shell/scope';
 import type { StorageReport } from './storage-report/model';
 import type { CatalogTree } from './tree/model';
+import type { TreeFilters } from './tree/filter';
+import { registerFilterCommands } from './tree/filter.vscode';
 import type { TreeNode } from './tree/refs';
 
 interface CommandEnv {
   readonly tree: CatalogTree;
   readonly store: ConnectionStore;
+  readonly filters: TreeFilters;
   readonly view: vscode.TreeView<TreeNode>;
   readonly properties: PropertiesReport;
   readonly storage: StorageReport;
@@ -44,7 +47,7 @@ export function connectedTarget(
   return { profile, reader, state, snapshot };
 }
 
-/** Copy a name or DDL, the Properties and Storage reports, and the search of the explorer. */
+/** Copy a name or DDL, the Properties and Storage reports, the search and the filters of the explorer. */
 export function registerCommands(env: CommandEnv): vscode.Disposable[] {
   const { tree, view, register } = env;
 
@@ -56,6 +59,7 @@ export function registerCommands(env: CommandEnv): vscode.Disposable[] {
   const connected = (node: TreeNode | undefined, goal: string) => connectedTarget(env, node, goal);
 
   return [
+    ...registerFilterCommands({ tree, filters: env.filters, register }),
     register('aantje.copyName', async (node) => {
       const name = node && qualifiedNameOf(node.ref);
       if (name !== undefined) {
@@ -101,6 +105,11 @@ export function registerCommands(env: CommandEnv): vscode.Disposable[] {
       const node = choice && (await findEntryNode(tree, target.profile.id, choice.value));
       if (node) {
         await view.reveal(node, { select: true, focus: true });
+      } else if (choice && Object.keys(tree.filtersOf(target.profile.id)).length > 0) {
+        // The search lists every object; a filter of the tree may hide the one that was picked.
+        void vscode.window.showInformationMessage(
+          `A filter of the tree may hide "${choice.label}". Clear Filter shows the objects again.`,
+        );
       }
     }),
   ];

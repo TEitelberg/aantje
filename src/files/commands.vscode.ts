@@ -28,14 +28,14 @@ const ui: ImportUi = {
     });
     return chosen?.value;
   },
-  input: (title, prompt, value) =>
+  input: (title, prompt, value, validate) =>
     Promise.resolve(
       vscode.window.showInputBox({
         title,
         prompt,
         value,
         ignoreFocusOut: true,
-        validateInput: (text) => (text.trim() === '' ? 'Enter a name.' : undefined),
+        validateInput: (text) => (text.trim() === '' ? 'Enter a name.' : validate?.(text)),
       }),
     ),
   info: (message) => void vscode.window.showInformationMessage(message),

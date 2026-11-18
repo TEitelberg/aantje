@@ -482,6 +482,8 @@ export const CONSISTENCY_CHECKS = [
   'files-without-size',
   'snapshot-range-invalid',
   'row-ids-overlap',
+  'ids-never-allocated',
+  'rows-without-table',
 ] as const;
 
 export type ConsistencyCheck = (typeof CONSISTENCY_CHECKS)[number];
@@ -491,7 +493,8 @@ export interface ConsistencySample {
   /** The table the row belongs to; null for a view. */
   readonly tableId: number | null;
   /** What `id` is the id of. */
-  readonly kind: 'data-file' | 'delete-file' | 'table' | 'view' | 'partitioning' | 'sort-order';
+  readonly kind:
+    'data-file' | 'delete-file' | 'table' | 'view' | 'schema' | 'column' | 'partitioning' | 'sort-order';
   readonly id: number;
   /** The number that explains the row (the id it points to in vain, the count, the end of the earlier range). */
   readonly value: number | null;
@@ -623,6 +626,67 @@ export interface FileLocations {
   readonly shared: readonly string[];
 }
 
+/** The newest snapshot that changed a table, maintenance of its files left out (`lastTableChanges`). */
+export interface TableChange {
+  readonly tableId: number;
+  readonly snapshot: SnapshotId;
+  /** ISO 8601 UTC; null when the snapshot has expired. */
+  readonly time: string | null;
+  /** For an expired snapshot: the time of the next snapshot that is left, so the change was before it; else null. */
+  readonly before: string | null;
+  readonly author: string | null;
+  readonly commitMessage: string | null;
+}
+
+/** The engine of the database that holds a catalog: the `kind` of its connection. */
+export type CatalogEngine = 'postgres' | 'sqlite' | 'duckdb' | 'quack';
+
+/** One table of the catalog database (a `ducklake_*` table, inlined data included) with what its engine tells. */
+export interface CatalogDatabaseTable {
+  readonly name: string;
+  /** Exact rows (SQLite, DuckDB, Quack) or the estimate of the last analyze (PostgreSQL); null when unknown. */
+  readonly rows: number | null;
+  /** Table, indexes and TOAST together; null when the engine does not tell. */
+  readonly totalBytes: number | null;
+  /** PostgreSQL only: the parts of `totalBytes`. */
+  readonly tableBytes?: number;
+  readonly indexBytes?: number;
+  readonly toastBytes?: number;
+  /** PostgreSQL only (`pg_stat_user_tables`): dead and live rows and the last vacuum and analyze, ISO 8601 UTC or null. */
+  readonly deadRows?: number;
+  readonly liveRows?: number;
+  /** PostgreSQL only: rows inserted and deleted since the statistics of the server were last reset. */
+  readonly insertedRows?: number;
+  readonly deletedRows?: number;
+  readonly lastVacuum?: string | null;
+  readonly lastAutovacuum?: string | null;
+  readonly lastAnalyze?: string | null;
+  readonly lastAutoanalyze?: string | null;
+}
+
+/** What the database of a catalog tells about itself: its size and its tables; read from statistics views only. */
+export interface CatalogDatabase {
+  readonly engine: CatalogEngine;
+  /** The server or library version; null when unknown. */
+  readonly version: string | null;
+  /** PostgreSQL: the schema of the `ducklake_*` tables. */
+  readonly schema?: string;
+  /** The database (PostgreSQL), or the pages or blocks in the file (SQLite, DuckDB); null when not exposed. */
+  readonly sizeBytes: number | null;
+  /** SQLite free pages, DuckDB free blocks; null when not exposed. */
+  readonly freeBytes: number | null;
+  /** PostgreSQL: whether this session is encrypted; null when unreadable. */
+  readonly ssl?: boolean | null;
+  /** Whether the engine gave the size of each table (PostgreSQL; SQLite with `dbstat`). */
+  readonly sizesPerTable: boolean;
+  /** Largest first; by rows where the engine has no sizes. */
+  readonly tables: readonly CatalogDatabaseTable[];
+  /** The inlined data tables of the catalog with the table whose rows each holds. */
+  readonly inlined: readonly { readonly name: string; readonly tableId: number }[];
+  /** What could not be read, as the engine said it (a missing privilege, a view the server lacks). */
+  readonly unread: readonly string[];
+}
+
 /** The scope of a health read: the whole lake (neither field), one table, or the tables of one schema. */
 export interface HealthScopeRef {
   readonly tableId?: number;
@@ -672,6 +736,15 @@ export interface CatalogReader {
   storage(snapshot: SnapshotId, scope?: HealthScopeRef): Promise<StorageInfo>;
   /** Tables with data files below `SMALL_FILE_BYTES` at the snapshot, most small files first. */
   smallFiles(snapshot: SnapshotId, signal?: AbortSignal): Promise<SmallFileTable[]>;
+  /**
+   * The delete files of each table at the snapshot, as the Storage report counts them, by table id; a table without
+   * one has no entry. With `scope` only the tables of a schema or one table.
+   */
+  deleteFiles(
+    snapshot: SnapshotId,
+    scope?: HealthScopeRef,
+    signal?: AbortSignal,
+  ): Promise<Map<number, number>>;
   /**
    * File state of the whole lake, or of the tables in `scope`, after each snapshot up to `snapshot`, at most `limit`
    * points (older ones merge).
@@ -741,13 +814,15 @@ export interface CatalogReader {
   ): Promise<readonly ValueRange[] | undefined>;
   /**
    * Counts the rows that break each check and returns the first `sampleLimit`; `snapshot` is the newest. With
-   * `scope.tableId` only checks and rows that concern the table run.
+   * `scope.tableId` only checks and rows that concern the table run. With `at`, only the rows that the state of that
+   * snapshot uses count: files, tables, views, schemas and columns valid at it, and the files of its newest state.
    */
   consistency(
     scope: HealthScopeRef,
     snapshot: SnapshotId,
     sampleLimit: number,
     signal?: AbortSignal,
+    at?: SnapshotId,
   ): Promise<ConsistencyReport>;
   /** Snapshot numbering gaps, tables with small files and inlined rows, at most `limit` entries per list. */
   maintenanceFacts(scope: HealthScopeRef, limit: number, signal?: AbortSignal): Promise<MaintenanceFacts>;
@@ -794,5 +869,16 @@ export interface CatalogReader {
     tableId: number,
     signal?: AbortSignal,
   ): Promise<{ readonly id: number; readonly name: string }[]>;
+  /**
+   * Size and tables of the database that holds the catalog, from the statistics views and pragmas of `engine` only:
+   * nothing is changed and no data file is read.
+   */
+  catalogDatabase(engine: CatalogEngine, signal?: AbortSignal): Promise<CatalogDatabase>;
+  /**
+   * The newest change of each table that exists at `snapshot`: its versions, columns, comments, layout and files, read
+   * from the catalog. Snapshots that only maintained files (merge, rewrite, flush, expire) do not count; DuckLake
+   * records no reads.
+   */
+  lastTableChanges(snapshot: SnapshotId, signal?: AbortSignal): Promise<TableChange[]>;
   close(): Promise<void>;
 }

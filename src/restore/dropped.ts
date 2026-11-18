@@ -10,6 +10,7 @@ import { createLines, tableDdl } from '../ddl-script/table-ddl';
 import type { CreatedTable } from '../ddl-script/table-ddl';
 import { atVersion } from '../script';
 import { formatUtc } from '../snapshot';
+import { commitMessageLine } from '../sql/commit-message';
 import { NEW_ID, NOTHING_RUN, snapshotText } from './text';
 
 // Restore Dropped Object: a table, view or macro of a schema that a snapshot which still exists can read, created again
@@ -108,7 +109,16 @@ function definitionLines(input: DroppedRestore, check: CatalogCheck): string[] {
 /** The script of Restore Dropped Object, in one transaction; DuckDB's tokenizer checks it, nothing runs. */
 export function restoreDroppedScript(input: DroppedRestore, tokenize: Tokenize): Promise<string> {
   return checkedScript(
-    (check) => [...header(input), '', 'BEGIN TRANSACTION;', ...definitionLines(input, check), 'COMMIT;'],
+    (check) => [
+      ...header(input),
+      '',
+      'BEGIN TRANSACTION;',
+      commitMessageLine(
+        `Restore of the dropped ${input.object.kind} ${commentName(input.schemaName, input.name)}`,
+      ),
+      ...definitionLines(input, check),
+      'COMMIT;',
+    ],
     tokenize,
   );
 }

@@ -14,6 +14,12 @@ export function timeTravelNote(pinned: SnapshotId | undefined): string[] {
 export const atVersion = (snapshot: SnapshotId | undefined): string =>
   snapshot === undefined ? '' : ` AT (VERSION => ${snapshot})`;
 
+/**
+ * The row limit of every query that aantje opens in the SQL editor: a parameter whose inline default is the limit of
+ * Select Top 1000 Rows, so that the run asks for it and proposes 1000 (`LIMIT $limit{1000}`).
+ */
+export const LIMIT_CLAUSE = `LIMIT $limit{${PREVIEW_LIMIT}}`;
+
 function selectBody(
   schemaName: string,
   relationName: string,
@@ -27,7 +33,7 @@ function selectBody(
   return [
     `SELECT${list}`,
     `FROM ${qualifiedName(schemaName, relationName)}${atVersion(pinned)}`,
-    `LIMIT ${PREVIEW_LIMIT};`,
+    `${LIMIT_CLAUSE};`,
   ].join('\n');
 }
 

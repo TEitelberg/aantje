@@ -84,7 +84,7 @@ export function registerCatalogTools(server: McpServer, env: McpCatalogEnv): voi
     {
       title: 'Describe a table, view or macro',
       description:
-        'One table, view or macro of a connected lake at the snapshot that the explorer shows: columns with SQL types, comments, partitioning, sort order and tags of a table; the SQL of a view or macro; and its dependencies (what it reads or calls, what reads or calls it, at any depth, and names its SQL does not resolve).',
+        'One table, view or macro of a connected lake at the snapshot that the explorer shows: columns with SQL types, comments, partitioning, sort order and tags of a table; the SQL of a view or macro; the lineage of the columns of a view (the table and view columns each is built from, through any depth of views, and how: direct, derived, filter, join, group); and its dependencies (what it reads or calls, what reads or calls it, at any depth, and names its SQL does not resolve).',
       inputSchema: z.object({
         connection: CONNECTION,
         schema: SCHEMA,

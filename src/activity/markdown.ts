@@ -1,12 +1,10 @@
-import { capRows, code, kindsText, markdownTable, reportTitle } from '../markdown';
-import { LIST_ROWS, shortUtc } from '../shell/model';
+import { capRows, code, kindsText, markdownTable, reportHeadingLine } from '../markdown';
+import { shortUtc } from '../shell/model';
 import { boundsOf, fitRange } from '../shell/range-state';
 import { scopeSchema } from '../shell/scope';
-import { KIND_LABEL, POINT_KINDS, detailOf } from '../snapshot-changes/model';
+import { KIND_LABEL, POINT_KINDS } from '../snapshot-changes/model';
 import type { Model, PointKind } from '../snapshot-changes/model';
 import {
-  AUTHOR_EXAMPLE,
-  AUTHOR_HINT,
   NO_AUTHOR,
   authorLabel,
   choices,
@@ -67,7 +65,7 @@ function settingsTable(data: ActivityData, model: Model, summary: ActivitySummar
       ['Kinds of change', kindsText(kinds, POINT_KINDS, KIND_LABEL)],
       ['Message', text === '' ? 'all' : code(text)],
       ['Range', model.snapshots.length === 0 ? 'none' : `@${range.from} to @${range.to}`],
-      ['Snapshots listed', `${summary.commits.length} of ${data.snapshots.length}`],
+      ['Snapshots in view', `${summary.commits.length} of ${data.snapshots.length}`],
     ],
   );
 }
@@ -110,45 +108,21 @@ function tablesSection(summary: ActivitySummary): string[] {
   ];
 }
 
-function commitsSection(data: ActivityData, model: Model, summary: ActivitySummary): string[] {
-  const commits = capRows(
-    summary.commits.map((commit) => {
-      const detail = detailOf(model, data.latest, commit.id);
-      return [
-        `@${commit.id}`,
-        shortUtc(commit.time),
-        code(commit.author ?? ''),
-        code(commit.message ?? ''),
-        [
-          ...(detail?.tables.map((entry) => `${code(entry.label)} ${entry.actions.join(', ')}`) ?? []),
-          ...(detail?.others.map(code) ?? []),
-        ].join('; '),
-      ];
-    }),
-    LIST_ROWS,
-  );
-  if (commits.shown.length === 0) return [NO_SNAPSHOT];
-  return [
-    ...markdownTable(['Snapshot', 'Time (UTC)', 'Author', 'Message', 'Changes'], commits.shown),
-    ...commits.omitted,
-  ];
-}
-
-/** The Activity report as Markdown; without a view it shows everything that was read. Catalog text is code. */
+/**
+ * The Activity report as Markdown; without a view it shows everything that was read. Catalog text is code. Like the
+ * page, it lists no snapshot one by one: that is the Snapshot report's.
+ */
 export function activityMarkdown(data: ActivityData, view?: ActivityMarkdownView): string {
   const model = activityModelOf(data);
   const fitted = fitView(model, view);
   const { author, table, kinds, text, range } = fitted;
   const summary = summarizeActivity(model, { author, table: table?.key, kinds, text, range });
   return [
-    reportTitle('Activity of', data.connection, scopeSchema(data.scope)),
+    reportHeadingLine('Activity', data.connection, scopeSchema(data.scope)),
     '',
     ...settingsTable(data, model, summary, fitted),
     '',
     ...(data.more ? [activityOlderNote(data), ''] : []),
-    ...(summary.authors.some((row) => row.author === NO_AUTHOR)
-      ? [AUTHOR_HINT, '', code(AUTHOR_EXAMPLE), '']
-      : []),
     '## Commits per day',
     '',
     ...daysSection(summary),
@@ -160,10 +134,6 @@ export function activityMarkdown(data: ActivityData, view?: ActivityMarkdownView
     '## Most changed tables',
     '',
     ...tablesSection(summary),
-    '',
-    '## Snapshots',
-    '',
-    ...commitsSection(data, model, summary),
     '',
   ].join('\n');
 }

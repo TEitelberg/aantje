@@ -1,6 +1,6 @@
 import { MAINTENANCE_LABEL } from '../maintenance/labels';
-import { capRows, code, markdownTable, reportTitle } from '../markdown';
-import { count, files, formatUtc, groupedPlural, tableLabel } from '../shell/model';
+import { capRows, code, markdownTable, reportHeadingLine } from '../markdown';
+import { count, files, formatBytes, formatUtc, groupedPlural, tableLabel } from '../shell/model';
 import { expirableLine, expirableNote, scheduledLine } from '../shell/scheduled-text';
 import { lakeWide, scopeSchema } from '../shell/scope';
 import {
@@ -12,6 +12,7 @@ import {
   skippedMeasures,
 } from './model';
 import type { AdvisorData, Measured } from './model';
+import { UNPARTITIONED_NOTE } from './partitioning';
 import { levelText, recommendationsOf, riskText } from './recommend';
 import type { Recommendation } from './recommend';
 
@@ -86,7 +87,7 @@ export function advisorMarkdown(data: AdvisorData): string {
     ['Flush candidates', groupedPlural(data.flush.length, 'table', 'tables')],
   ];
   return [
-    reportTitle('Maintenance advisor of', data.connection, scopeSchema(data.scope)),
+    reportHeadingLine('Maintenance Advisor', data.connection, scopeSchema(data.scope)),
     '',
     'What maintenance would do, measured with the dry runs of DuckLake. Nothing was changed, and nothing is run by this report: the scripts open as documents.',
     '',
@@ -129,6 +130,23 @@ export function advisorMarkdown(data: AdvisorData): string {
       ? ['', `The lists of tables were cut at ${count(CANDIDATE_LIMIT)} per kind; more tables may qualify.`]
       : []),
     ...(data.inlinedFailed ? ['', INLINED_FAILED_NOTE] : []),
+    ...(data.unpartitioned
+      ? [
+          '',
+          '## Large tables without partitioning',
+          '',
+          UNPARTITIONED_NOTE,
+          '',
+          ...markdownTable(
+            ['Table', 'Size', 'Rows'],
+            data.unpartitioned.map((entry) => [
+              named(entry.table),
+              formatBytes(entry.sizeBytes),
+              count(entry.rows),
+            ]),
+          ),
+        ]
+      : []),
     '',
   ].join('\n');
 }

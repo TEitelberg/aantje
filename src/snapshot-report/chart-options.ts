@@ -1,7 +1,7 @@
 import type { SnapshotId } from '../catalog/model';
 import { tip } from '../shell/chart-option';
 import type { ChartOption } from '../shell/chart-option';
-import type { Palette } from '../shell/palette';
+import type { ReportPalette } from '../shell/house-colors';
 import { plural, tableLabel, whoText } from '../shell/model';
 import { colorOf } from '../snapshot-changes/colors';
 import { KIND_LABEL, POINT_KINDS } from '../snapshot-changes/model';
@@ -51,7 +51,7 @@ interface PointDatum {
 }
 
 /** The swimlane chart: a lane per table, a mark per changing snapshot, a line through lanes changed together. */
-export function snapshotReportOption(chart: SnapshotReportChart, palette: Palette): ChartOption {
+export function snapshotReportOption(chart: SnapshotReportChart, palette: ReportPalette): ChartOption {
   const { view, axis, contrast } = chart;
   const columnOf = new Map(view.columns.map((column, index) => [column.id, index]));
   const x = (snapshot: SnapshotId): number => {

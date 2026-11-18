@@ -4,11 +4,12 @@
 
 ## The Script as submenu
 
-The submenu **Script as** (group `2_script` of the context menu) has **SELECT**, **INSERT** (a table only), **INSERT with Data...** (a table or a view), **CREATE**, **ALTER** and **DROP**, and on an open connection and a schema **Generate Scripts...**. A node shows only the entries it has a script for. Each opens a new untitled SQL document. The commands (`aantje.scriptSelect`, `scriptInsert`, `scriptInsertData`, `scriptCreate`, `scriptAlter`, `scriptDrop`, `generateScripts`) are hidden from the Command Palette because they need a node.
+The submenu **Script as** (group `2_script` of the context menu) has **SELECT**, **INSERT** (a table only), **INSERT with Data...** (a table or a view), **CREATE**, **ALTER**, **Rename...** (a table, a view or a column of a table, see [Rename](#rename)) and **DROP**, and on an open connection and a schema **Generate Scripts...**. A node shows only the entries it has a script for. Each opens a new untitled SQL document. The commands (`aantje.scriptSelect`, `scriptInsert`, `scriptInsertData`, `scriptCreate`, `scriptAlter`, `scriptDrop`, `generateScripts`, `renameObject`) are hidden from the Command Palette because they need a node.
 
 - **The document belongs to the connection of the node**, as after **New Query** (`src/sql/editor.vscode.ts`). F5 and Ctrl+Enter run it there, and completion knows its catalog. Opening is not running: no session starts until the first run, and in a read-only connection even the run is refused ([SQL editor](sql-editor.md)).
 - **Script as CREATE** on a table or view opens the text of Copy DDL with the matching `DROP` as a comment above. For a table, partitioning, sort order and comments follow as commented statements, because DuckLake has no `CREATE TABLE` clause for them. The options of the table that DuckLake documents (see [Table options](#table-options)) are the exception: they are part of the statement as `WITH (...)`.
 - **Script as SELECT** on a table lists every top-level column at the shown snapshot, one per line. For a view, and for a table with no columns at that snapshot, it selects `*`: the catalog has no typed columns for a view, and this command must neither start DuckDB nor ask for view trust.
+- **The row limit asks.** Every query that a script opens with a row limit (SELECT of a table, view or column, New Query on a table or view, Open as SQL of Query at Snapshot, the History and changes of a table, the call of a table macro) ends in `LIMIT $limit{1000}`: a parameter whose inline default is the limit of Select Top 1000 Rows, so that its run asks for the limit and proposes 1000, or the last value of the document ([Parameters](sql-editor.md#parameters)). `LIMIT_CLAUSE` of `src/script.ts` writes it for all of them.
 - **Time travel.** With a pinned snapshot, SELECT gets `AT (VERSION => <n>)` and a comment naming the snapshot (also when the pinned one is the latest). INSERT, DROP and ALTER cannot time travel, because a statement that changes the lake acts on its newest state; they say so in a comment, and DROP writes its statements as comments then ([Script as DROP](#script-as-drop)).
 - **Names.** Comments hold a snapshot number only, never a catalog name. Every name goes through `quoteIdentifier` or `qualifiedName`, so a hostile name (quotes, line breaks, `--`, `;`) stays inside its identifier. Names are not prefixed with a catalog; run the script where the lake is the default catalog (`USE lake;`) or add the prefix.
 - **Closed connection.** A script that needs the reader fails with `The connection is closed. Connect again to script the <VERB>.` and opens nothing. Scripts that need no reader (DROP of a table, view or schema, column scripts other than SELECT, the ALTER of a view, schema templates) still work.
@@ -24,7 +25,7 @@ SELECT
   "amount",
   "created"
 FROM "sales"."orders" AT (VERSION => 5)
-LIMIT 1000;
+LIMIT $limit{1000};
 ```
 
 ## Table options
@@ -162,7 +163,7 @@ The template offers only what DuckLake 2.0 accepts, checked against a real lake:
 A macro is the only function kind DuckLake stores. It is SQL: a scalar macro is an expression, a table macro a query, and each can have several overloads with their own parameters. A macro node has all four verbs.
 
 - **CREATE and ALTER** write `CREATE OR REPLACE MACRO <schema>.<name>(<parameters>) AS <body>;` (`macroDdl`). CREATE has the drop as a comment above, ALTER a comment asking to edit it and the drop below. With a pinned snapshot they show the older definition and note that the statement acts on the newest state.
-- **SELECT** is a call: `SELECT <macro>(<arg1>, <arg2>);` or, for a table macro, `SELECT * FROM <macro>(<arg1>) LIMIT 1000;`. It uses the first overload, with a `<argN>` placeholder for each parameter without a default (parameter names are catalog text and never appear) and the other overloads as comments. A macro cannot be read at an older snapshot.
+- **SELECT** is a call: `SELECT <macro>(<arg1>, <arg2>);` or, for a table macro, `SELECT * FROM <macro>(<arg1>) LIMIT $limit{1000};`. It uses the first overload, with a `<argN>` placeholder for each parameter without a default (parameter names are catalog text and never appear) and the other overloads as comments. A macro cannot be read at an older snapshot.
 - **Parameters** are quoted names with the declared type as DuckDB names it, and a default as `:= <expression>`. The reader hands the default over as a SQL expression that returns the stored value with its type.
 - **The body is the stored one.** DuckDB normalises it when it stores the macro (`x + 1` becomes `(x + 1)`).
 - **Overloads are one statement.** `CREATE OR REPLACE` replaces the macro with all overloads, so the statement lists them all: `(x) AS ..., (x, y) AS ...`. Table macro queries are parenthesised when there are several. The statement always writes DuckDB overloads.
@@ -176,6 +177,36 @@ DROP MACRO TABLE "shop"."recent_events";
 ```
 
 The **Macros** folder is shown under every schema, also when empty (hint `No macros.`). Its SELECT lists a call of each macro (calls that need arguments as comments), its DROP a commented `DROP MACRO` each, and its CREATE a template with two examples that run as they are.
+
+### Execute Macro
+
+**Execute Macro...** (`aantje.executeMacro`) on a scalar or table macro asks for its parameters and opens the call in a new SQL document of the connection; nothing runs. You run it with Run Query: a table macro can call a function that changes the lake, such as a maintenance call. The code is in `src/macro-call.ts` (the call, pure) and `src/macro-call.vscode.ts` (the questions).
+
+1. A macro with several overloads first asks which one, by its parameter list (`(net, rate := 1.19)`).
+2. One input per parameter, in order. Macro parameters often have no declared type, so the input takes SQL: `42`, `'EUR'`, `DATE '2026-09-01'`. The hint under it says so and names the declared type and the default. A parameter without a default needs a value; for one with a default an empty input keeps the default.
+3. The call: parameters without a default by position, those with a default by name (`"rate" := 0.19`) and only when a value was typed. A table macro is `SELECT * FROM <macro>(...);`, a scalar one `SELECT <macro>(...);`, without a `LIMIT`. While the tree shows an older snapshot, a note says that the call runs on the newest state.
+
+```sql
+SELECT * FROM "gold"."top_customers"(10, "currency" := 'EUR');
+SELECT "gold"."net_amount"(100.0, "rate" := 0.19);
+```
+
+The values are your SQL and go into the call as you typed them; the names of the macro and its parameters are quoted, and no default or other text of the catalog is copied into it. The inputs are plain input boxes; the parameter dialog of the SQL editor can take their place once it exists.
+
+## Edit Comment
+
+**Edit Comment...** (`aantje.editComment`) on a table, a view and a column of a table asks for the comment and opens the `COMMENT ON` statement in a new SQL document of the connection, as every script does; nothing runs. The code is in `src/comments.ts` (the statements, pure) and `src/comments.vscode.ts` (the questions).
+
+```sql
+-- Sets a comment; NULL removes one. Run it in a read/write SQL session.
+COMMENT ON TABLE "gold"."fact_sales" IS 'One row per sales line; amounts in EUR.';
+```
+
+- **The input** is one line with the current comment, the one at the snapshot the tree shows. VS Code has no input of several lines, so a line break is written `\n` and a backslash `\\`; the current comment comes in that form and goes back as it was. An empty input removes the comment: `COMMENT ON ... IS NULL`. Escape opens nothing.
+- **Names and text.** Names are quoted identifiers and the comment a quoted literal (`commentStatement`), so a quote or a `;` in either stays inside it.
+- **Snapshots.** While the tree shows an older snapshot, a note says that the statements act on the newest state. DuckLake stores a comment as the tag `comment` (`ducklake_tag`, `ducklake_column_tag`) with the snapshots, so the tree at an older snapshot keeps showing the comment of then, and Schema History shows the change of a column comment.
+- **Not offered** on the columns of a view (DuckLake cannot comment them, duckdb/ducklake discussion #1077) and on a list element or map key or value. A field inside a struct column has the menu of a column, but DuckLake keeps comments on top-level columns only: Edit Comment says so and opens nothing.
+- **No direct run.** There is no setting to run the statement after a confirmation; it runs when you run the document.
 
 ## Generate Scripts
 
@@ -250,6 +281,53 @@ create-all.sql               every statement in the working order, with the head
 - **Inside the folder.** Every path is checked to stay below the chosen folder. Nothing is written through a symbolic link: when a path below the folder is one, or is a file where a folder belongs (or the other way round), the run stops before it writes anything.
 - **Existing files.** When files exist, one question for the whole run asks whether to overwrite them. Files that no selected object matches stay. The closing message lists the `.sql` files below the schema folders of the run that no object matches, so that a dropped object can be removed by hand.
 
+## Rename
+
+**Rename...** (`aantje.renameObject`) in the **Script as** submenu of a table, a view and a top-level column of a table writes the rename together with the changes of every view and macro that names the old name, because DuckLake keeps the SQL of views and macros as text: a rename alone breaks them silently. A field of a struct is renamed with Script as ALTER; the command says so.
+
+1. An input box asks for the new name with the old one filled in. It refuses an empty name, the old name in another case of A to Z (DuckDB compares names without it), and a name that the schema has for a table or view, or the table for a column, at the newest snapshot.
+2. aantje reads the catalog at the newest snapshot that the tree knows, because a rename acts on the newest state; with a pinned tree a comment says so. The views and macros are parsed with DuckDB, as in the [Dependencies](dependencies.md) report; nothing runs.
+3. The script opens in a new SQL document of the connection. It runs only when you run it.
+
+For `silver.orders` renamed to `order_lines`:
+
+```sql
+-- Rename the table "silver"."orders" to "order_lines", with the views and macros that name it, at snapshot 13. Nothing has run: read the statements, then run them in a read/write SQL session.
+-- One transaction: the rename and the changed views and macros are one snapshot. The names have no catalog prefix: run the script where the lake is the default catalog (USE lake;).
+BEGIN;
+ALTER TABLE "silver"."orders" RENAME TO "order_lines";
+
+-- used by "gold"."orders_of" (table macro)
+CREATE OR REPLACE MACRO "gold"."orders_of"("c") AS TABLE SELECT * FROM silver.order_lines WHERE (customer = c);
+
+-- used by "gold"."revenue" (view)
+CREATE OR REPLACE VIEW "gold"."revenue" AS SELECT o.customer, sum(o.amount) AS total FROM silver.order_lines AS o GROUP BY o.customer;
+COMMENT ON VIEW "gold"."revenue" IS 'Revenue by customer';
+
+COMMIT;
+```
+
+- **One transaction.** `BEGIN;` and `COMMIT;` around the rename and the changed views and macros make one snapshot of them, checked with DuckDB 2.0 on DuckLake. `CREATE OR REPLACE` comes in the order of the dependency graph, each after what it reads, because DuckDB binds a view when it creates it.
+- **Who is changed.** A table or view rename changes the views and macros that read it ([Dependencies](dependencies.md), at any depth for a column). A view that reads a view that reads the table needs no change.
+- **At DuckDB's tokens.** The SQL changes only where DuckDB's parse tree places a reference to the renamed object: the name after FROM (`shop.events`, `events`), the qualifier of a column (`events.id`, `shop.events.id`, `events.*`) and, for a column, the column (`amount`, `o.amount`, `"amount"`). The token there must spell the old name. A string (`'events'`), a comment, a column of another table and an object of the same name in another schema stay as they are. A quoted name stays quoted; a new name that is a plain word and no keyword of DuckDB's tokenizer goes in without quotes.
+- **The statements of Generate Scripts.** A changed view is `CREATE OR REPLACE VIEW` with its column list and its comment again (`COMMENT ON VIEW`), a macro `CREATE OR REPLACE MACRO` with all its overloads (`viewLines`, `macroLines` in `src/ddl-script/definitions.ts`). Their catalog text goes through the tokenizer check of [Generate Scripts](#generate-scripts); when one of them stays a comment, the rename and the others do too, so that running the script cannot rename without the changes.
+- **A column follows through the views.** `ALTER TABLE ... RENAME COLUMN a TO b`, then the views and macros that name `a`. A view column that carries the name of the column (`SELECT a`, `SELECT t.a`, `*`) is called `b` afterwards, so the views that name that column change too, at any depth; a view on `SELECT *` keeps its SQL and keeps working, and the script lists its column under `These columns of views get a new name with the rename`. An alias (`a AS amount`) keeps the name of the view column, and the rename stops there. The column lineage of the [Dependencies](dependencies.md#columns) report tells which view columns a column reaches.
+- **Checked before it is written.** Each changed text is parsed again and read with the names after the rename. It must read the same tables and views, have as many columns, and name nothing that two relations offer or that nothing has.
+
+What cannot be fixed safely is left as it is and listed at the top of the script, under `Left as they are; check them before you run the script:`, with the reason:
+
+| Reason                                                                                                  | Example                                                           |
+| ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| DuckDB cannot read its SQL (another dialect, a syntax error, too long), and its text holds the old name | A view in the Spark dialect                                       |
+| It looks up a table at run time, with the old name in a string                                          | `query_table('silver.orders')`                                    |
+| It names the column in USING, NATURAL, EXCLUDE, REPLACE or RENAME                                       | `JOIN customers USING (customer)`, `* EXCLUDE (amount)`           |
+| A name it has cannot be tied to a relation, or its columns cannot be told                               | A column of a table function, `*` over `range(3)`                 |
+| Its changed SQL would read something else or not bind                                                   | `WITH order_lines AS (...)` next to `FROM orders`                 |
+| A name in it would read the renamed object after the rename                                             | A view of `silver` that reads `main.order_lines` as `order_lines` |
+| The old name is not where DuckDB places the reference                                                   | A text that the tree and the tokens read differently              |
+
+**A table synced to Iceberg.** When a [sync to Iceberg](iceberg.md) holds the table, the script says per target what the next sync does: after a table rename it writes nothing for the rename (the lake reports it as renamed); the Iceberg table keeps its name, and later syncs write the rows of the renamed table into it, because a sync finds its table by the id. A sync that an older aantje recorded without the id finds the table by its name: it counts it as dropped, and a sync of the lake or the schema writes it as a new Iceberg table. After a column rename the next sync takes the change of the columns as an altered table: it drops the Iceberg table and writes it new, and its snapshot history in Iceberg starts again.
+
 ## The scripts by node kind
 
 The matrix is data: `SCRIPTS` in `src/script-templates.ts` maps the `contextValue` of a tree node to the generators of its verbs, and `scriptOf(verb, tree, ref)` returns `undefined` when a kind has no script. The conditions of the menu entries in `package.json` follow the same context values.
@@ -280,6 +358,7 @@ Rules behind the matrix:
 - **Lists are cut at twenty** objects and end with `-- N more are not listed.`
 - **One script on the connection**, not six entries: CREATE is one document with a block each for a schema, table, view and the two macros.
 - **Generate Scripts...** on a connection or a schema is not part of the matrix: it scripts the objects that exist, not a template ([Generate Scripts](#generate-scripts)).
+- **Rename...** on a table, a view or a column is not part of the matrix either: it scripts the rename with the views and macros that name the object ([Rename](#rename)).
 - **Catalog text in a statement.** Names go through `quoteIdentifier`. A few fragments are copied as they are: macro bodies, parameter defaults and types, defaults and unknown types of a column, and view queries. If such a fragment contains `;`, `--` or `/*`, the statement is written as a comment, so it cannot start a second statement.
 - **Script as CREATE for a column** is `ALTER TABLE ... ADD COLUMN ...` with the default and `NOT NULL` of a top-level column (a struct field gets its type only). DuckLake adds a column with a literal default only; for an expression such as `now()` the script adds the column and sets the default in a second statement.
 - **List elements and map keys and values** have the context value `column.member`: they have no name to create or drop, so only SELECT and ALTER are offered.

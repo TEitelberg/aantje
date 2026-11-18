@@ -78,6 +78,7 @@ const isData = isShape({
   flush: isArrayOf(isShape({ table: isTable, rows: isCount })),
   more: isOptional(isTrue),
   inlinedFailed: isOptional(isTrue),
+  unpartitioned: isOptional(isArrayOf(isShape({ table: isTable, sizeBytes: isCount, rows: isCount }))),
 });
 
 /** Guard for the messages the extension sends to the page. */
@@ -100,4 +101,5 @@ export const isAdvisorAction: (value: unknown) => value is AdvisorAction = actio
   showStorage: {},
   checkHealth: {},
   maintenanceScript: {},
+  suggestPartitioning: { table: isCount },
 });

@@ -24,8 +24,8 @@ const options = {
   sourcemap: true,
   minify: !watch,
   external: ['vscode', '@duckdb/node-bindings*', 'pg-native'],
-  // The CloudFormation template of the AWS lake goes into the bundle as text.
-  loader: { '.yaml': 'text' },
+  // The CloudFormation template of the AWS lake and the built-in SQL templates go into the bundle as text.
+  loader: { '.yaml': 'text', '.sql': 'text' },
   logLevel: 'info',
 };
 

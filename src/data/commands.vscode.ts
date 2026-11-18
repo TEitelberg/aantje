@@ -21,6 +21,7 @@ import { readTrusting } from './confirm';
 import type { S3CredentialStore } from './credentials';
 import { checkRelation, previewTable, readChanges } from './engine';
 import { exportToFile } from './export.vscode';
+import { summarizeRelation } from './summary';
 import { scriptInsertData } from './insert-data.vscode';
 import { changesKey, changesTitle, gridKey, gridTitle } from './relation';
 import { resolveTarget } from './resolve';
@@ -90,7 +91,17 @@ export function createDataActions(env: DataActionsEnv): DataActions {
     const data = await read(target, snapshot, `Reading ${name}...`, (access, signal) =>
       previewTable(access, relation.table, signal),
     );
-    env.grid.show(gridKey(relation, snapshot), gridTitle(relation, profile.name, snapshot, data.limit), data);
+    // The pane of the columns: SUMMARIZE of the whole relation at the same snapshot, in the same read-only engine.
+    const summarize = (cancel: AbortSignal) =>
+      read(target, snapshot, `Summarizing the columns of ${name}...`, (access, signal) =>
+        summarizeRelation(access, relation.table, AbortSignal.any([signal, cancel])),
+      );
+    env.grid.show(
+      gridKey(relation, snapshot),
+      gridTitle(relation, profile.name, snapshot, data.limit),
+      data,
+      summarize,
+    );
   };
 
   const showChanges: DataActions['showChanges'] = async (target, range) => {

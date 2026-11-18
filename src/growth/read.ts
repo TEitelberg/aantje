@@ -4,7 +4,6 @@ import { LAKE_SCOPE } from '../shell/scope';
 import type { ReportScope } from '../shell/scope';
 import { tablesChangedIn } from '../shell/schema-scope';
 import { readNewest, scopedWindow } from '../snapshot-changes/window';
-import { expiredAmong } from './model';
 import type { GrowthData } from './model';
 
 /**
@@ -34,7 +33,6 @@ export async function readGrowth(
   return {
     ...window,
     focus,
-    ...(scope.kind === 'schema' ? { expired: expiredAmong(newest.snapshots.map(({ id }) => id)) } : {}),
     tables,
     changes: scope.kind === 'lake' ? changes : changes.filter(({ tableId }) => own.has(tableId)),
     inlinedMore: inlinedMore === true,

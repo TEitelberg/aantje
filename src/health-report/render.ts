@@ -4,6 +4,7 @@ import { HEALTH_GROUPS } from '../health/model';
 import type { HealthFinding } from '../health/model';
 import { actionButton, cardGrid, empty, note, pageHeader, searchBox, truncation } from '../shell/blocks';
 import type { Header } from '../shell/blocks';
+import { reportHeading } from '../shell/report-heading';
 import { el } from '../shell/dom';
 import type { Severity } from '../shell/model';
 import type { PageContext } from '../shell/page';
@@ -20,11 +21,13 @@ import {
   groupLine,
   hasMaintenanceScript,
   healthCards,
+  healthObject,
   matchingFindings,
   healthScopeLabel,
   lakeSectionLabel,
   healthScriptOf,
   sections,
+  snapshotHealthHeading,
   verdict,
   verdictText,
 } from './model';
@@ -57,7 +60,7 @@ interface HeaderParts {
   readonly cancel: HTMLButtonElement;
 }
 
-/** The title, the run controls and the depth choice. */
+/** The title with the maintenance script, and the bar of the depth choice with Run (and Cancel). */
 export function headerParts(context: PageContext, view: HeaderView, on: HeaderHandlers): HeaderParts {
   const { data } = view;
   const running = data.status === 'running';
@@ -79,17 +82,25 @@ export function headerParts(context: PageContext, view: HeaderView, on: HeaderHa
     'Open one SQL document with the fix of every finding that maintenance can fix. Nothing runs; destructive calls start as a dry run.',
   );
   script.disabled = running || !hasMaintenanceScript(data.findings);
-  const snapshot = data.snapshot === undefined ? '' : ` · checked snapshot @${data.snapshot}`;
+  const checked = data.snapshot ?? data.at;
+  const snapshot =
+    checked === undefined
+      ? ''
+      : ` · checked snapshot @${checked}${data.at === undefined ? '' : ' (not the newest)'}`;
   const top = pageHeader(context, {
-    title: 'Health check',
+    title:
+      data.at === undefined
+        ? reportHeading('Health Check', healthObject(data.scope))
+        : snapshotHealthHeading(data.scope, data.at),
     subtitle: `${healthScopeLabel(data.scope)} · ${data.connection}${snapshot}`,
     view: view.filter,
-    actions: [run, script, ...(running ? [cancel] : [])],
+    actions: [script],
   });
-  return { top, depthBar: depthBar(view, on), run, cancel };
+  // Run sits with what it runs: after the depth and the number of files, Cancel beside it while it runs.
+  return { top, depthBar: depthBar(view, on, running ? [run, cancel] : [run]), run, cancel };
 }
 
-function depthBar(view: HeaderView, on: HeaderHandlers): HTMLElement {
+function depthBar(view: HeaderView, on: HeaderHandlers, runs: readonly HTMLElement[]): HTMLElement {
   const running = view.data.status === 'running';
   const bar = el('div', 'run');
   bar.setAttribute('role', 'group');
@@ -110,6 +121,7 @@ function depthBar(view: HeaderView, on: HeaderHandlers): HTMLElement {
     ),
   );
   if (view.depth === 'deep') bar.append(filesInput(view, on.onFiles));
+  bar.append(...runs);
   if (view.invalid) {
     bar.append(note(`Enter a whole number from 1 to ${MAX_DEEP_FILES.toLocaleString('en-US')}.`, 'warning'));
   }

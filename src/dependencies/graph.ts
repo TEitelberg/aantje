@@ -2,9 +2,12 @@ import { foldIdentifier } from '../catalog/ddl';
 import type { CatalogEntry, MacroInfo, SchemaInfo, ViewInfo } from '../catalog/model';
 import { LAKE } from '../data/attach';
 import { messageOf } from '../errors';
+import { lakeLineage } from './lake-lineage';
+import type { Lineage, ParsedView } from './lake-lineage';
 import type { SqlParser } from './parser';
 import { compareText } from '../order';
-import { extract, messageLine } from './references';
+import { messageLine, parsedStatement } from './references';
+import { statementReferences } from '../sql/parse-tree';
 import type { Reference } from '../sql/parse-tree';
 
 export const NODE_KINDS = ['table', 'view', 'scalarMacro', 'tableMacro'] as const;
@@ -73,6 +76,8 @@ export interface DependencyGraph {
   /** The views and macros in the catalog; `parsed` counts those within the limit. */
   readonly objects: number;
   readonly parsed: number;
+  /** The column lineage of the views, when the columns of the tables were read (`CatalogObjects.columns`). */
+  readonly lineage?: Lineage;
 }
 
 /** What the analysis reads from the catalog at a snapshot. */
@@ -82,6 +87,8 @@ export interface CatalogObjects {
   readonly entries: readonly CatalogEntry[];
   readonly views: readonly ViewInfo[];
   readonly macros: readonly MacroInfo[];
+  /** The top-level columns of every table by table id, in their order; with them the graph has the column lineage. */
+  readonly columns?: ReadonlyMap<number, readonly string[]>;
 }
 
 export interface BuildOptions {
@@ -104,6 +111,8 @@ interface Body {
   readonly sql: string;
   // A scalar macro holds an expression, parsed as the item of a SELECT.
   readonly expression: boolean;
+  // The column list of a view, which names its first columns.
+  readonly aliases: readonly string[];
 }
 
 // A scalar and a table macro can share a name.
@@ -132,7 +141,10 @@ function collectNodes(objects: CatalogObjects): {
     const view = kind === 'view' ? viewOf.get(id) : undefined;
     const node = { kind, id, schemaId, schema: schemaNames.get(schemaId) ?? '', name };
     nodes.push(node);
-    bodies.set(node, view ? [{ dialect: view.dialect, sql: view.sql, expression: false }] : []);
+    bodies.set(
+      node,
+      view ? [{ dialect: view.dialect, sql: view.sql, expression: false, aliases: view.columnAliases }] : [],
+    );
   }
   for (const macro of objects.macros) {
     const expression = macro.kind === 'scalar';
@@ -146,19 +158,20 @@ function collectNodes(objects: CatalogObjects): {
     nodes.push(node);
     bodies.set(
       node,
-      macro.implementations.map(({ dialect, sql }) => ({ dialect, sql, expression })),
+      macro.implementations.map(({ dialect, sql }) => ({ dialect, sql, expression, aliases: [] })),
     );
   }
   nodes.sort(compareNodes);
   return { nodes, bodies };
 }
 
-interface Names {
+/** The tables, views and macros of the graph by folded schema and name: what a name in SQL resolves to. */
+export interface Names {
   readonly relations: Map<string, Map<string, number>>;
   readonly macros: Map<string, Map<string, MacroSlots>>;
 }
 
-function indexNodes(nodes: readonly DependencyNode[]): Names {
+export function indexNodes(nodes: readonly DependencyNode[]): Names {
   const relations = new Map<string, Map<string, number>>();
   const macros = new Map<string, Map<string, MacroSlots>>();
   for (const [index, node] of nodes.entries()) {
@@ -201,18 +214,41 @@ function connect(scope: Scope, to: number, kind: DependencyEdge['kind']): void {
   scope.edges.set(`${from}|${to}|${kind}`, { from, to, kind });
 }
 
-// The schemas that a name without a schema is looked up in, in the order of DuckDB.
-function searched(scope: Scope, reference: Reference): string[] {
+// The schemas that a name without a schema is looked up in from the SQL of `node`, in the order of DuckDB.
+function searched(node: DependencyNode, reference: Reference): string[] {
   if (reference.schema !== '') return [reference.schema];
-  return scope.node.kind === 'view' ? [scope.node.schema, 'main'] : ['main'];
+  return node.kind === 'view' ? [node.schema, 'main'] : ['main'];
 }
 
-function find<T>(scope: Scope, table: Map<string, Map<string, T>>, reference: Reference): T | undefined {
-  for (const schema of searched(scope, reference)) {
+function find<T>(
+  node: DependencyNode,
+  table: Map<string, Map<string, T>>,
+  reference: Reference,
+): T | undefined {
+  for (const schema of searched(node, reference)) {
     const found = table.get(foldIdentifier(schema))?.get(foldIdentifier(reference.name));
     if (found !== undefined) return found;
   }
   return undefined;
+}
+
+/** The table or view that a name after FROM in the SQL of `node` stands for; undefined when the lake has none. */
+export function relationOf(names: Names, node: DependencyNode, reference: Reference): number | undefined {
+  if (SYSTEM_SCHEMAS.has(foldIdentifier(reference.schema))) return undefined;
+  return OTHER_CATALOGS.has(foldIdentifier(reference.catalog))
+    ? undefined
+    : find(node, names.relations, reference);
+}
+
+/** The macro that a call in the SQL of `node` stands for; undefined when the lake has none. */
+export function macroOf(
+  names: Names,
+  node: DependencyNode,
+  reference: Reference & { readonly kind: keyof MacroSlots },
+): number | undefined {
+  return OTHER_CATALOGS.has(foldIdentifier(reference.catalog))
+    ? undefined
+    : find(node, names.macros, reference)?.[reference.kind];
 }
 
 // A name without a schema that only the schema of this macro has.
@@ -228,7 +264,8 @@ function ownOnly(scope: Scope, reference: Reference): boolean {
 }
 
 function miss(scope: Scope, reference: Reference): void {
-  const schema = reference.kind === 'relation' ? (searched(scope, reference)[0] ?? '') : reference.schema;
+  const schema =
+    reference.kind === 'relation' ? (searched(scope.node, reference)[0] ?? '') : reference.schema;
   scope.broken.set(
     `${scope.from}|${reference.kind}|${foldIdentifier(schema)}|${foldIdentifier(reference.name)}`,
     {
@@ -243,7 +280,7 @@ function miss(scope: Scope, reference: Reference): void {
 function resolveRelation(scope: Scope, reference: Reference): void {
   if (SYSTEM_SCHEMAS.has(foldIdentifier(reference.schema))) return;
   const catalog = foldIdentifier(reference.catalog);
-  const found = OTHER_CATALOGS.has(catalog) ? undefined : find(scope, scope.names.relations, reference);
+  const found = relationOf(scope.names, scope.node, reference);
   if (found !== undefined) {
     connect(scope, found, 'reads');
   } else if (catalog !== '' && catalog !== LAKE) {
@@ -267,9 +304,7 @@ function resolveRelation(scope: Scope, reference: Reference): void {
 
 function resolveMacro(scope: Scope, reference: Reference & { readonly kind: keyof MacroSlots }): void {
   const catalog = foldIdentifier(reference.catalog);
-  const found = OTHER_CATALOGS.has(catalog)
-    ? undefined
-    : find(scope, scope.names.macros, reference)?.[reference.kind];
+  const found = macroOf(scope.names, scope.node, reference);
   if (found !== undefined) {
     connect(scope, found, 'calls');
   } else if (!OTHER_CATALOGS.has(catalog) && ownOnly(scope, reference)) {
@@ -288,29 +323,36 @@ function resolve(scope: Scope, reference: Reference): void {
   else resolveMacro(scope, { ...reference, kind: reference.kind });
 }
 
+/** The parsed statement of a body; undefined when it was not read. */
 async function analyseBody(
   scope: Scope,
   parser: SqlParser,
   body: Body,
   signal: AbortSignal | undefined,
-): Promise<void> {
+): Promise<unknown> {
   if (body.dialect !== 'duckdb') return complain(scope, 'dialect', body.dialect);
   if (body.sql.length > MAX_SQL_LENGTH) return complain(scope, 'tooLong', `${body.sql.length} characters`);
   try {
-    const extraction = extract(await parser.serialize(body.expression ? `SELECT (${body.sql}\n)` : body.sql));
-    if ('reason' in extraction) return complain(scope, extraction.reason, extraction.detail);
+    const parsed = parsedStatement(
+      await parser.serialize(body.expression ? `SELECT (${body.sql}\n)` : body.sql),
+    );
+    if ('reason' in parsed) return complain(scope, parsed.reason, parsed.detail);
+    const extraction = statementReferences(parsed.statement);
     for (const reference of extraction.references) resolve(scope, reference);
     for (const name of extraction.dynamic) complain(scope, 'dynamic', name);
+    return parsed.statement;
   } catch (error) {
     // One text that DuckDB or the analysis cannot handle must not take the report of the lake down with it.
     signal?.throwIfAborted();
     complain(scope, 'unsupported', messageLine(messageOf(error)));
+    return undefined;
   }
 }
 
 /**
  * The graph of tables, views and macros; DuckDB parses (never runs) every view and macro to find what it names.
- * Names resolve as in DuckDB: a view looks in its own schema, then `main`; a macro in `main` only.
+ * Names resolve as in DuckDB: a view looks in its own schema, then `main`; a macro in `main` only. With the columns of
+ * the tables, the graph also has the column lineage of the views (`lake-lineage.ts`), from the same parse.
  */
 export async function buildGraph(
   objects: CatalogObjects,
@@ -319,13 +361,15 @@ export async function buildGraph(
 ): Promise<DependencyGraph> {
   const { nodes, bodies } = collectNodes(objects);
   const found: Findings = { edges: new Map(), broken: new Map(), unresolved: new Map() };
+  const names = indexNodes(nodes);
   const shared = {
     ...found,
-    names: indexNodes(nodes),
+    names,
     lakeSchemas: new Set(objects.schemas.map(({ name }) => foldIdentifier(name))),
     builtin: await parser.functions(),
   };
   const limit = options.limit ?? OBJECT_LIMIT;
+  const views = new Map<number, ParsedView>();
   let parsed = 0;
   let total = 0;
   for (const [from, node] of nodes.entries()) {
@@ -336,9 +380,14 @@ export async function buildGraph(
     options.signal?.throwIfAborted();
     parsed++;
     const scope: Scope = { ...shared, from, node };
-    for (const body of texts) await analyseBody(scope, parser, body, options.signal);
+    for (const body of texts) {
+      const statement = await analyseBody(scope, parser, body, options.signal);
+      if (statement !== undefined && node.kind === 'view' && objects.columns) {
+        views.set(from, { statement, aliases: body.aliases });
+      }
+    }
   }
-  return {
+  const graph = {
     nodes,
     edges: [...found.edges.values()],
     broken: [...found.broken.values()],
@@ -346,4 +395,24 @@ export async function buildGraph(
     objects: total,
     parsed,
   };
+  if (!objects.columns) return graph;
+  const lineage = await lakeLineage(
+    {
+      nodes,
+      edges: graph.edges,
+      views,
+      tables: objects.columns,
+      relation: (node, reference) => {
+        const owner = nodes[node];
+        return owner && relationOf(names, owner, reference);
+      },
+      macro: (node, reference) => {
+        const owner = nodes[node];
+        return owner && macroOf(names, owner, reference);
+      },
+    },
+    parser,
+    options.signal,
+  );
+  return { ...graph, lineage };
 }

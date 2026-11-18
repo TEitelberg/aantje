@@ -13,12 +13,6 @@ export type ActivityData = ScopedWindow;
 export const NO_AUTHOR = '';
 const NO_AUTHOR_LABEL = '(no author)';
 
-/** Shown for snapshots without an author; the usual case, not an error. */
-export const AUTHOR_HINT =
-  'Most writers record no author and no message, so these snapshots have none; that is normal. A writer records them with set_commit_message inside the transaction that writes (a call outside a transaction sets nothing). Use the name the lake is attached as instead of lake:';
-export const AUTHOR_EXAMPLE =
-  "BEGIN; CALL ducklake_set_commit_message('lake', 'me', 'Nightly import'); INSERT INTO ...; COMMIT;";
-
 // Most authors in the table and tables in the chart; the filters reach the others.
 const MAX_AUTHORS = 50;
 const TOP_TABLES = 20;
@@ -72,7 +66,7 @@ export interface TableRow {
 }
 
 export interface ActivitySummary {
-  /** Newest first. */
+  /** The snapshots the filters leave, newest first; the key figures count them and show the latest. */
   readonly commits: readonly Commit[];
   /** Oldest first, days without a commit left out. */
   readonly days: readonly Day[];

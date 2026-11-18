@@ -1,21 +1,46 @@
 import * as vscode from 'vscode';
+import { findEntryNode } from '../actions';
 import type { Register } from '../command.vscode';
 import type { ConnectionProfile } from '../connections/profile';
 import type { DataAccessFactory } from '../data/resolve';
 import { openReport } from '../shell/host.vscode';
 import type { ReportHostEnv } from '../shell/host.vscode';
-import { scopeKey, scopeOfNode, scopeSuffix } from '../shell/scope';
+import { reportHeading } from '../shell/report-heading';
+import { scopeKey, scopeOfNode, scopeSchema } from '../shell/scope';
 import { performTableAction } from '../shell/table-actions.vscode';
 import type { TableActionEnv } from '../shell/table-actions.vscode';
 import { planAdvisorAction } from './actions';
 import type { AdvisorPlan } from './actions';
 import { advisorKind } from './kind';
-import type { AdvisorData, AdvisorScope } from './model';
+import type { AdvisorData, AdvisorScope, AdvisorTable } from './model';
+import { largeUnpartitioned } from './partitioning';
 import type { AdvisorAction } from './protocol';
 import { readAdvisor } from './read';
 import { advisorScriptOf } from './script';
 
 const COMMAND = 'aantje.showAdvisor';
+
+/** Suggest Partitioning... on the node of the table, at the snapshot that the tree shows. */
+async function suggestPartitioning(
+  env: Pick<TableActionEnv, 'tree'>,
+  connectionId: string,
+  table: AdvisorTable,
+): Promise<void> {
+  const node = await findEntryNode(env.tree, connectionId, {
+    kind: 'table',
+    id: table.id,
+    name: table.name,
+    schemaId: table.schemaId,
+    schemaName: table.schema,
+  });
+  if (node) {
+    await vscode.commands.executeCommand('aantje.suggestPartitioning', node);
+  } else {
+    void vscode.window.showInformationMessage(
+      `The tree does not show "${table.schema}.${table.name}". It may not exist at the snapshot that the tree shows.`,
+    );
+  }
+}
 const GOAL = 'show its maintenance advice';
 
 interface AdvisorCommandEnv extends ReportHostEnv, TableActionEnv {
@@ -47,15 +72,18 @@ export function registerAdvisorCommand(env: AdvisorCommandEnv): vscode.Disposabl
       keyOf: (profile, { scope }) => scopeKey(profile.id, scope),
       open: (reader, profile, { scope }) => ({
         progress: `Measuring the maintenance of "${profile.name}"...`,
-        read: async (signal) =>
-          readAdvisor(
+        read: async (signal) => {
+          const data = await readAdvisor(
             { reader, access: await env.dataAccess(profile, undefined) },
             profile.name,
             new Date(),
             signal,
             scope,
-          ),
-        title: () => `Maintenance Advisor · ${profile.name}${scopeSuffix(scope)}`,
+          );
+          const unpartitioned = await largeUnpartitioned(reader, scope, data.snapshot, signal);
+          return unpartitioned.length === 0 ? data : { ...data, unpartitioned };
+        },
+        title: () => `${reportHeading('Maintenance Advisor', scopeSchema(scope))} · ${profile.name}`,
       }),
       planAction: planAdvisorAction,
       perform: async (plan, profile, data) => {
@@ -68,6 +96,9 @@ export function registerAdvisorCommand(env: AdvisorCommandEnv): vscode.Disposabl
             return;
           case 'checkHealth':
             await env.checkHealth(profile.id, data.scope.kind === 'schema' ? data.scope.id : undefined);
+            return;
+          case 'suggestPartitioning':
+            await suggestPartitioning(env, profile.id, plan.table);
             return;
           default:
             await performTableAction(env, profile.id, plan, data.snapshot);
